@@ -126,6 +126,8 @@ impl_instance!(0, 1, 2, 3, 4, 5, 6, 7);
 
 const I2C_COUNT: usize = 8;
 static I2C_WAKERS: [AtomicWaker; I2C_COUNT] = [const { AtomicWaker::new() }; I2C_COUNT];
+/// Ten bit address start with first byte 0b11110XXX
+pub const TEN_BIT_PREFIX: u8 = 0b11110 << 3;
 
 /// I2C interrupt handler.
 pub struct InterruptHandler<T: Instance> {

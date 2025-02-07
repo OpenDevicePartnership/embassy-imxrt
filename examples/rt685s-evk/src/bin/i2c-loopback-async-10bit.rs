@@ -11,7 +11,7 @@ use embassy_imxrt::i2c::{self, Async};
 use embassy_imxrt::{bind_interrupts, peripherals};
 use embedded_hal_async::i2c::I2c;
 
-const ADDR: u16 = 0x0200;
+const ADDR: u16 = 0x0123;
 const MASTER_BUFLEN: usize = 8;
 // slave buffer has to be 1 bigger than master buffer because master does not
 // handle end of read properly
@@ -39,7 +39,7 @@ async fn slave_service(mut slave: I2cSlave<'static, Async>) {
                 info!("Probe, nothing to do");
             }
             Command::Read => {
-                info!("Read");
+                info!("Read. Repeated start detected");
                 loop {
                     match slave.respond_to_read(&t_buf).await.unwrap() {
                         Response::Complete(n) => {
@@ -55,10 +55,15 @@ async fn slave_service(mut slave: I2cSlave<'static, Async>) {
                 loop {
                     match slave.respond_to_write(&mut r_buf).await.unwrap() {
                         Response::Complete(n) => {
-                            info!("Response complete write with {} bytes", n);
+                            if n == 1 {
+                                info!("10 bit address received");
+                            } else {
+                                // 1st byte of n bytes contain lower 8 bits of a 10 bit address
+                                info!("Response complete write with {} bytes", n - 1);
+                            }
                             break;
                         }
-                        Response::Pending(n) => info!("Response to write got {} bytes, more bytes pending", n),
+                        Response::Pending(n) => info!("Response to write got {} bytes, more bytes pending", n - 1),
                     }
                 }
             }
@@ -68,7 +73,7 @@ async fn slave_service(mut slave: I2cSlave<'static, Async>) {
 
 #[embassy_executor::task]
 async fn master_service(mut master: I2cMaster<'static, Async>) {
-    const ADDR: u16 = 0x0200;
+    const ADDR: u16 = 0x0123;
 
     let mut w_buf = [0xAA; MASTER_BUFLEN];
     let mut r_buf = [0xAA; MASTER_BUFLEN];
@@ -80,11 +85,11 @@ async fn master_service(mut master: I2cMaster<'static, Async>) {
 
     let mut i: usize = 0;
     loop {
-        if i % 300 < 100 {
+        if i % 30 < 10 {
             let w_end = i % w_buf.len();
             info!("i2cm write {} bytes", w_end);
             master.write(ADDR, &w_buf[0..w_end]).await.unwrap();
-        } else if i % 300 < 200 {
+        } else if i % 30 < 20 {
             let r_end = i % (r_buf.len() - 1) + 2;
             info!("i2cm read {} bytes", r_end);
             master.read(ADDR, &mut r_buf[0..r_end]).await.unwrap();
@@ -98,6 +103,11 @@ async fn master_service(mut master: I2cMaster<'static, Async>) {
                 .unwrap();
         }
         i += 1;
+
+        if i == 60 {
+            info!("i2c 10 bit loopback test end");
+            break;
+        }
     }
 }
 

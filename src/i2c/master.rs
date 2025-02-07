@@ -8,13 +8,10 @@ use embassy_hal_internal::into_ref;
 
 use super::{
     Async, Blocking, Error, Info, Instance, InterruptHandler, MasterDma, Mode, Result, SclPin, SdaPin, TransferError,
-    I2C_WAKERS,
+    I2C_WAKERS, TEN_BIT_PREFIX,
 };
 use crate::interrupts::interrupt::typelevel::Interrupt;
 use crate::{dma, interrupt, Peripheral};
-
-/// Ten bit addresses start with 11110
-const TEN_BIT_PREFIX: u8 = 0b11110 << 3;
 
 /// Bus speed (nominal SCL, no clock stretching)
 pub enum Speed {
@@ -211,6 +208,14 @@ impl<'a> I2cMaster<'a, Blocking> {
 
             self.poll_ready()?;
             self.check_for_bus_errors()?;
+        }
+
+        if is_read && !i2cregs.stat().read().mststate().is_receive_ready() {
+            return Err(TransferError::ReadFail.into());
+        }
+
+        if !is_read && !i2cregs.stat().read().mststate().is_transmit_ready() {
+            return Err(TransferError::WriteFail.into());
         }
 
         Ok(())

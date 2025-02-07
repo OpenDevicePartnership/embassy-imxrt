@@ -8,7 +8,7 @@ use embassy_hal_internal::{into_ref, Peripheral};
 
 use super::{
     Async, Blocking, Info, Instance, InterruptHandler, Mode, Result, SclPin, SdaPin, SlaveDma, TransferError,
-    I2C_WAKERS,
+    I2C_WAKERS, TEN_BIT_PREFIX,
 };
 use crate::interrupts::interrupt::typelevel::Interrupt;
 use crate::pac::i2c0::stat::Slvstate;
@@ -21,6 +21,13 @@ pub enum Address {
     SevenBit(u8),
     /// 10-bit address
     TenBit(u16),
+}
+
+/// Address errors
+#[derive(Copy, Clone, Debug)]
+pub enum AddressError {
+    /// Invalid address conversion
+    InvalidConversion,
 }
 
 impl Address {
@@ -46,8 +53,8 @@ impl Address {
     #[must_use]
     pub fn read(&self) -> [u8; 2] {
         match self {
-            Self::SevenBit(addr) => [*addr << 1 | 1, 0],
-            Self::TenBit(addr) => [((*addr >> 7) as u8) | 0b11110, (*addr & 0xFF) as u8 | 1],
+            Self::SevenBit(addr) => [(addr << 1) | 1, 0],
+            Self::TenBit(addr) => [(((addr >> 8) as u8) << 1) | TEN_BIT_PREFIX | 1, (addr & 0xFF) as u8],
         }
     }
 
@@ -55,17 +62,19 @@ impl Address {
     #[must_use]
     pub fn write(&self) -> [u8; 2] {
         match self {
-            Self::SevenBit(addr) => [*addr << 1, 0],
-            Self::TenBit(addr) => [((*addr >> 7) as u8) | 0b11110, (*addr & 0xFF) as u8],
+            Self::SevenBit(addr) => [addr << 1, 0],
+            Self::TenBit(addr) => [(((addr >> 8) as u8) << 1) | TEN_BIT_PREFIX, (addr & 0xFF) as u8],
         }
     }
 }
 
-impl From<Address> for u8 {
-    fn from(value: Address) -> Self {
+impl TryFrom<Address> for u8 {
+    type Error = AddressError;
+
+    fn try_from(value: Address) -> core::result::Result<Self, Self::Error> {
         match value {
-            Address::SevenBit(addr) => addr,
-            Address::TenBit(addr) => (addr & 0xFF) as u8,
+            Address::SevenBit(addr) => Ok(addr),
+            Address::TenBit(_) => Err(AddressError::InvalidConversion),
         }
     }
 }
@@ -151,18 +160,19 @@ impl<'a, M: Mode> I2cSlave<'a, M> {
                     // SAFETY: unsafe only required due to use of unnamed "bits" field
                     unsafe{w.slvadr().bits(addr)}.sadisable().enabled());
             }
-            Address::TenBit(addr) => {
-                // Configure the first part of the 10-bit address
-                let addr_high = ((addr >> 7) as u8) | 0b11110;
+            Address::TenBit(_addr) => {
+                // 10 bit address have first byte between 0b1111_0000 and 0b1111_0110 as per spec
+                // using slvadr(0) and slvqual0 to check, per UM11147 24.6.15
+                i2c.slvqual0().write(|w| w.qualmode0().extend());
                 i2c.slvadr(0).modify(|_, w|
                     // SAFETY: unsafe only required due to use of unnamed "bits" field
-                    unsafe{w.slvadr().bits(addr_high)}.sadisable().enabled());
+                    unsafe{w.slvadr().bits(0b1111_0000)}.sadisable().enabled());
 
-                // Configure the second part of the 10-bit address
-                let addr_low = (addr & 0xFF) as u8;
-                i2c.slvadr(1).modify(|_, w|
+                i2c.slvqual0().write(|w|
                     // SAFETY: unsafe only required due to use of unnamed "bits" field
-                    unsafe{w.slvadr().bits(addr_low)}.sadisable().enabled());
+                    unsafe { w.bits(0b1111_0110) });
+
+                i2c.cfg().write(|w| w.slven().enabled());
             }
         }
 
