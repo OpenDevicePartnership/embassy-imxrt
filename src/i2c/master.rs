@@ -132,7 +132,19 @@ impl<'a> I2cMaster<'a, Blocking> {
         Ok(this)
     }
 
-    fn start(&mut self, address: u8, is_read: bool) -> Result<()> {
+    fn start(&mut self, address: u16, is_read: bool) -> Result<()> {
+        // check if the address is 10-bit
+        let is_10bit = address > 0x7F;
+
+        // start with the correct address
+        if is_10bit {
+            self.start_10bit(address, is_read)
+        } else {
+            self.start_7bit(address as u8, is_read)
+        }
+    }
+
+    fn start_7bit(&mut self, address: u8, is_read: bool) -> Result<()> {
         let i2cregs = self.info.regs;
 
         self.poll_ready()?;
@@ -229,15 +241,7 @@ impl<'a> I2cMaster<'a, Blocking> {
             return Err(TransferError::OtherBusError.into());
         }
 
-        // check if the address is 10-bit
-        let is_10bit = address > 0x7F;
-
-        // start with the correct address
-        if is_10bit {
-            self.start_10bit(address, true)?;
-        } else {
-            self.start(address as u8, true)?;
-        }
+        self.start(address, true)?;
 
         let read_len = read.len();
 
@@ -266,15 +270,7 @@ impl<'a> I2cMaster<'a, Blocking> {
         // Procedure from 24.3.1.1 pg 545
         let i2cregs = self.info.regs;
 
-        // check if the address is 10-bit
-        let is_10bit = address > 0x7F;
-
-        // start with the correct address
-        if is_10bit {
-            self.start_10bit(address, false)?;
-        } else {
-            self.start(address as u8, false)?;
-        }
+        self.start(address, false)?;
 
         for byte in write {
             i2cregs.mstdat().write(|w|
@@ -338,7 +334,19 @@ impl<'a> I2cMaster<'a, Async> {
         Ok(this)
     }
 
-    async fn start(&mut self, address: u8, is_read: bool) -> Result<()> {
+    async fn start(&mut self, address: u16, is_read: bool) -> Result<()> {
+        // check if the address is 10-bit
+        let is_10bit = address > 0x7F;
+
+        // start with the correct address
+        if is_10bit {
+            self.start_10bit(address, is_read).await
+        } else {
+            self.start_7bit(address as u8, is_read).await
+        }
+    }
+
+    async fn start_7bit(&mut self, address: u8, is_read: bool) -> Result<()> {
         let i2cregs = self.info.regs;
 
         self.wait_on(
@@ -546,15 +554,7 @@ impl<'a> I2cMaster<'a, Async> {
             return Err(TransferError::OtherBusError.into());
         }
 
-        // check if the address is 10-bit
-        let is_10bit = address > 0x7F;
-
-        // start with the correct address
-        if is_10bit {
-            self.start_10bit(address, true).await?;
-        } else {
-            self.start(address as u8, true).await?;
-        }
+        self.start(address, true).await?;
 
         let transfer = dma::transfer::Transfer::new_read(
             self.dma_ch.as_mut().unwrap(),
@@ -636,15 +636,7 @@ impl<'a> I2cMaster<'a, Async> {
         // Procedure from 24.3.1.1 pg 545
         let i2cregs = self.info.regs;
 
-        // check if the address is 10-bit
-        let is_10bit = address > 0x7F;
-
-        // start with the correct address
-        if is_10bit {
-            self.start_10bit(address, false).await?;
-        } else {
-            self.start(address as u8, false).await?;
-        }
+        self.start(address, false).await?;
 
         if write.is_empty() {
             return Ok(());
