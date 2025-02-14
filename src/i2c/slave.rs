@@ -285,6 +285,23 @@ impl I2cSlave<'_, Blocking> {
         //Block until we know it is read or write
         self.poll()?;
 
+        if let Some(info) = self.ten_bit_info {
+            // For 10 bit address, the first byte received is the second byte of the address
+            if i2c.slvdat().read().data().bits() == info.second_byte {
+                i2c.slvctl().write(|w| w.slvcontinue().continue_());
+                self.poll()?;
+            }
+
+            // Check for a restart
+            if i2c.stat().read().slvstate().is_slave_address() {
+                // Check if first byte of 10 bit address is received again with read bit set
+                if i2c.slvdat().read().data().bits() == info.first_byte | 1 {
+                    i2c.slvctl().write(|w| w.slvcontinue().continue_());
+                    self.poll()?;
+                }
+            }
+        }
+
         // We are already deselected, so it must be an 0 byte write transaction
         if i2c.stat().read().slvdesel().is_deselected() {
             // Clear the deselected bit
