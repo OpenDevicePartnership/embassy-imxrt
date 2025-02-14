@@ -97,10 +97,10 @@ struct TenBitAddressInfo {
 }
 
 impl TenBitAddressInfo {
-    fn new(first_byte: u8, second_byte: u8) -> Self {
+    fn new(address: u16) -> Self {
         Self {
-            first_byte,
-            second_byte,
+            first_byte: (((address >> 8) as u8) << 1) | TEN_BIT_PREFIX,
+            second_byte: (address & 0xFF) as u8,
         }
     }
 }
@@ -181,10 +181,7 @@ impl<'a, M: Mode> I2cSlave<'a, M> {
             }
             Address::TenBit(addr) => {
                 // Save the 10 bit address to use later
-                ten_bit_info = Some(TenBitAddressInfo::new(
-                    ((addr >> 8) as u8) << 1 | TEN_BIT_PREFIX,
-                    (addr & 0xFF) as u8,
-                ));
+                ten_bit_info = Some(TenBitAddressInfo::new(addr));
 
                 // address 0 match = addr first byte, per UM11147 24.7.4
                 i2c.slvadr(0).modify(|_, w|
@@ -279,6 +276,29 @@ impl I2cSlave<'_, Blocking> {
 
         //Block until we know it is read or write
         self.poll()?;
+
+        if let Some(ten_bit_address) = self.ten_bit_info {
+            // For 10 bit address, the first byte received is the second byte of the address
+            if i2c.slvdat().read().data().bits() == ten_bit_address.second_byte {
+                i2c.slvctl().write(|w| w.slvcontinue().continue_());
+                self.poll()?;
+            } else {
+                // If the second byte of the 10 bit address is not received, then we have issues.
+                return Err(TransferError::OtherBusError.into());
+            }
+
+            // Check for a restart
+            if !i2c.stat().read().slvdesel().is_deselected() && i2c.stat().read().slvstate().is_slave_address() {
+                // Check if first byte of 10 bit address is received again with read bit set
+                if i2c.slvdat().read().data().bits() == ten_bit_address.first_byte | 1 {
+                    i2c.slvctl().write(|w| w.slvcontinue().continue_());
+                    self.poll()?;
+                } else {
+                    // If the first byte of the 10 bit address is not received again, then we have issues.
+                    return Err(TransferError::OtherBusError.into());
+                }
+            }
+        }
 
         // We are already deselected, so it must be an 0 byte write transaction
         if i2c.stat().read().slvdesel().is_deselected() {
@@ -414,19 +434,25 @@ impl I2cSlave<'_, Async> {
         // Poll for HW to transitioning from addressed to receive/transmit
         self.poll_sw_action().await;
 
-        if let Some(info) = self.ten_bit_info {
+        if let Some(ten_bit_address) = self.ten_bit_info {
             // For 10 bit address, the first byte received is the second byte of the address
-            if i2c.slvdat().read().data().bits() == info.second_byte {
+            if i2c.slvdat().read().data().bits() == ten_bit_address.second_byte {
                 i2c.slvctl().write(|w| w.slvcontinue().continue_());
                 self.poll_sw_action().await;
+            } else {
+                // If the second byte of the 10 bit address is not received, then we have issues.
+                return Err(TransferError::OtherBusError.into());
             }
 
             // Check for a restart
-            if i2c.stat().read().slvstate().is_slave_address() {
+            if !i2c.stat().read().slvdesel().is_deselected() && i2c.stat().read().slvstate().is_slave_address() {
                 // Check if first byte of 10 bit address is received again with read bit set
-                if i2c.slvdat().read().data().bits() == info.first_byte | 1 {
+                if i2c.slvdat().read().data().bits() == ten_bit_address.first_byte | 1 {
                     i2c.slvctl().write(|w| w.slvcontinue().continue_());
                     self.poll_sw_action().await;
+                } else {
+                    // If the first byte of the 10 bit address is not received again, then we have issues.
+                    return Err(TransferError::OtherBusError.into());
                 }
             }
         }
