@@ -580,6 +580,7 @@ impl CaptureTimer<Blocking> {
     pub fn new_blocking<T: Instance>(_inst: T, clk: impl ConfigurableClock) -> Self {
         let info = T::info();
         let module = info.module;
+        T::interrupt_enable();
         Self {
             id: COUNT_CHANNEL + module * CHANNEL_PER_MODULE + info.channel,
             event_clock_counts: 0,
