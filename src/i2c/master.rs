@@ -9,7 +9,7 @@ use embassy_hal_internal::into_ref;
 
 use super::{
     Async, Blocking, Error, Info, Instance, InterruptHandler, MasterDma, Mode, Result, SclPin, SdaPin, TransferError,
-    I2C_WAKERS, TEN_BIT_PREFIX,
+    I2C_WAKERS, MAX_I2C_CHUNK_SIZE, TEN_BIT_PREFIX,
 };
 use crate::interrupt::typelevel::Interrupt;
 use crate::{dma, interrupt, Peripheral};
@@ -832,19 +832,27 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A
 
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I2c<A> for I2cMaster<'_, Async> {
     async fn read(&mut self, address: A, read: &mut [u8]) -> Result<()> {
-        self.read_no_stop(address.into(), read).await?;
+        for chunk in read.chunks_mut(MAX_I2C_CHUNK_SIZE) {
+            self.read_no_stop(address.into(), chunk).await?;
+        }
         self.stop().await
     }
 
     async fn write(&mut self, address: A, write: &[u8]) -> Result<()> {
-        self.write_no_stop(address.into(), write).await?;
+        for chunk in write.chunks(MAX_I2C_CHUNK_SIZE) {
+            self.write_no_stop(address.into(), chunk).await?;
+        }
         self.stop().await
     }
 
     async fn write_read(&mut self, address: A, write: &[u8], read: &mut [u8]) -> Result<()> {
         let address = address.into();
-        self.write_no_stop(address, write).await?;
-        self.read_no_stop(address, read).await?;
+        for chunk in write.chunks(MAX_I2C_CHUNK_SIZE) {
+            self.write_no_stop(address, chunk).await?;
+        }
+        for chunk in read.chunks_mut(MAX_I2C_CHUNK_SIZE) {
+            self.read_no_stop(address, chunk).await?;
+        }
         self.stop().await
     }
 
