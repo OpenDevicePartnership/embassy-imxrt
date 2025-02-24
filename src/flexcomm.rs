@@ -5,7 +5,9 @@ use paste::paste;
 
 use crate::clocks::{enable_and_reset, SysconPeripheral};
 use crate::pac;
-use crate::peripherals::{FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7};
+use crate::peripherals::{
+    FLEXCOMM0, FLEXCOMM1, FLEXCOMM14, FLEXCOMM15, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7,
+};
 
 /// clock selection option
 #[derive(Copy, Clone, Debug)]
@@ -22,8 +24,17 @@ pub enum Clock {
     /// MASTER
     Master,
 
-    /// `FCn_FRG`
-    FcnFrg,
+    /// FCn_FRG with Main clock source
+    FcnFrgMain,
+
+    /// FCn_FRG with Pll clock source
+    FcnFrgPll,
+
+    /// FCn_FRG with Sfro clock source
+    FcnFrgSfro,
+
+    /// FCn_FRG with Ffro clock source
+    FcnFrgFfro,
 
     /// disabled
     None,
@@ -70,17 +81,20 @@ macro_rules! impl_flexcomm {
 			    Clock::Ffro => w.sel().ffro_clk(),
 			    Clock::AudioPll => w.sel().audio_pll_clk(),
 			    Clock::Master => w.sel().master_clk(),
-			    Clock::FcnFrg => w.sel().fcn_frg_clk(),
-			    Clock::None => w.sel().none(),
-			});
+			    Clock::FcnFrgMain => w.sel().fcn_frg_clk(),
+			    Clock::FcnFrgPll => w.sel().fcn_frg_clk(),
+			    Clock::FcnFrgSfro => w.sel().fcn_frg_clk(),
+			    Clock::FcnFrgFfro => w.sel().fcn_frg_clk(),
+			    Clock::None => w.sel().none(), // no clock? throw an error?
+            });
 			clkctl1.flexcomm($idx).frgclksel().write(|w| match clk {
-			    Clock::Sfro => w.sel().sfro_clk(),
-			    Clock::Ffro => w.sel().ffro_clk(),
-			    Clock::AudioPll => w.sel().frg_pll_clk(),
-			    Clock::Master => w.sel().main_clk(),
-			    Clock::FcnFrg => w.sel().frg_pll_clk(),
-			    Clock::None => w.sel().none(),
+			    Clock::FcnFrgMain => w.sel().main_clk(),
+			    Clock::FcnFrgPll => w.sel().frg_pll_clk(),
+			    Clock::FcnFrgSfro => w.sel().sfro_clk(),
+			    Clock::FcnFrgFfro => w.sel().ffro_clk(),
+                _ => w.sel().none(),    // not using frg ...
 			});
+            // todo: add support for frg div/mult
 			clkctl1
 			    .flexcomm($idx)
 			    .frgctl()
@@ -97,6 +111,88 @@ macro_rules! impl_flexcomm {
 }
 
 impl_flexcomm!(0, 1, 2, 3, 4, 5, 6, 7);
+
+// Add special case FLEXCOMM14
+impl sealed::Sealed for crate::peripherals::FLEXCOMM14 {}
+
+impl FlexcommLowLevel for crate::peripherals::FLEXCOMM14 {
+    fn reg() -> &'static crate::pac::flexcomm0::RegisterBlock {
+        // SAFETY: safe from single executor, enforce
+        // via peripheral reference lifetime tracking
+        unsafe { &*crate::pac::Flexcomm14::ptr() }
+    }
+
+    fn enable(clk: Clock) {
+        // SAFETY: safe from single executor
+        let clkctl1 = unsafe { crate::pac::Clkctl1::steal() };
+
+        clkctl1.fc14fclksel().write(|w| match clk {
+            Clock::Sfro => w.sel().sfro_clk(),
+            Clock::Ffro => w.sel().ffro_clk(),
+            Clock::AudioPll => w.sel().audio_pll_clk(),
+            Clock::Master => w.sel().master_clk(),
+            Clock::FcnFrgMain => w.sel().fcn_frg_clk(),
+            Clock::FcnFrgPll => w.sel().fcn_frg_clk(),
+            Clock::FcnFrgSfro => w.sel().fcn_frg_clk(),
+            Clock::FcnFrgFfro => w.sel().fcn_frg_clk(),
+            Clock::None => w.sel().none(), // no clock? throw an error?
+        });
+        clkctl1.frg14clksel().write(|w| match clk {
+            Clock::FcnFrgMain => w.sel().main_clk(),
+            Clock::FcnFrgPll => w.sel().frg_pll_clk(),
+            Clock::FcnFrgSfro => w.sel().sfro_clk(),
+            Clock::FcnFrgFfro => w.sel().ffro_clk(),
+            _ => w.sel().none(), // not using frg ...
+        });
+        // todo: add support for frg div/mult
+        clkctl1.frg14ctl().write(|w|
+                // SAFETY: unsafe only used for .bits() call
+                unsafe { w.mult().bits(0) });
+
+        enable_and_reset::<FLEXCOMM14>();
+    }
+}
+
+// Add special case FLEXCOMM15
+impl sealed::Sealed for crate::peripherals::FLEXCOMM15 {}
+
+impl FlexcommLowLevel for crate::peripherals::FLEXCOMM15 {
+    fn reg() -> &'static crate::pac::flexcomm0::RegisterBlock {
+        // SAFETY: safe from single executor, enforce
+        // via peripheral reference lifetime tracking
+        unsafe { &*crate::pac::Flexcomm15::ptr() }
+    }
+
+    fn enable(clk: Clock) {
+        // SAFETY: safe from single executor
+        let clkctl1 = unsafe { crate::pac::Clkctl1::steal() };
+
+        clkctl1.fc15fclksel().write(|w| match clk {
+            Clock::Sfro => w.sel().sfro_clk(),
+            Clock::Ffro => w.sel().ffro_clk(),
+            Clock::AudioPll => w.sel().audio_pll_clk(),
+            Clock::Master => w.sel().master_clk(),
+            Clock::FcnFrgMain => w.sel().fcn_frg_clk(),
+            Clock::FcnFrgPll => w.sel().fcn_frg_clk(),
+            Clock::FcnFrgSfro => w.sel().fcn_frg_clk(),
+            Clock::FcnFrgFfro => w.sel().fcn_frg_clk(),
+            Clock::None => w.sel().none(), // no clock? throw an error?
+        });
+        clkctl1.frg15clksel().write(|w| match clk {
+            Clock::FcnFrgMain => w.sel().main_clk(),
+            Clock::FcnFrgPll => w.sel().frg_pll_clk(),
+            Clock::FcnFrgSfro => w.sel().sfro_clk(),
+            Clock::FcnFrgFfro => w.sel().ffro_clk(),
+            _ => w.sel().none(), // not using frg ...
+        });
+        // todo: add support for frg div/mult
+        clkctl1.frg15ctl().write(|w|
+                // SAFETY: unsafe only used for .bits() call
+                unsafe { w.mult().bits(0) });
+
+        enable_and_reset::<FLEXCOMM15>();
+    }
+}
 
 macro_rules! declare_into_mode {
     ($mode:ident) => {
@@ -130,13 +226,15 @@ macro_rules! impl_into_mode {
 declare_into_mode!(usart);
 impl_into_mode!(usart, FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7);
 
-// REVISIT: Add support for FLEXCOMM14
 declare_into_mode!(spi);
-impl_into_mode!(spi, FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7);
+impl_into_mode!(
+    spi, FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7, FLEXCOMM14
+);
 
-// REVISIT: Add support for FLEXCOMM15
 declare_into_mode!(i2c);
-impl_into_mode!(i2c, FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7);
+impl_into_mode!(
+    i2c, FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7, FLEXCOMM15
+);
 
 declare_into_mode!(i2s_transmit);
 impl_into_mode!(
@@ -163,7 +261,3 @@ impl_into_mode!(
     FLEXCOMM6,
     FLEXCOMM7
 );
-
-// TODO: in follow up flexcomm PR, implement special FC14 + FC15 support
-//impl_flexcomm!(14, FLEXCOMM14, Flexcomm14, I2c14, Spi14, I2s14);
-//impl_flexcomm!(15, FLEXCOMM15, Flexcomm15, I2c15, Sp157, I2s15);
