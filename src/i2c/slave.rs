@@ -8,7 +8,7 @@ use embassy_hal_internal::{into_ref, Peripheral};
 
 use super::{
     Async, Blocking, Info, Instance, InterruptHandler, Mode, Result, SclPin, SdaPin, SlaveDma, TransferError,
-    I2C_WAKERS,
+    I2C_WAKERS, TEN_BIT_PREFIX,
 };
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::i2c0::stat::Slvstate;
@@ -16,34 +16,75 @@ use crate::{dma, interrupt};
 
 /// I2C address type
 #[derive(Copy, Clone, Debug)]
-pub struct Address(u8);
+pub enum Address {
+    /// 7-bit address
+    SevenBit(u8),
+    /// 10-bit address
+    TenBit(u16),
+}
+
+/// Address errors
+#[derive(Copy, Clone, Debug)]
+pub enum AddressError {
+    /// Invalid address conversion
+    InvalidConversion,
+}
 
 impl Address {
-    /// Construct an address type
+    /// Construct a 7-bit address type
     #[must_use]
     pub const fn new(addr: u8) -> Option<Self> {
         match addr {
-            0x08..=0x77 => Some(Self(addr)),
+            0x08..=0x77 => Some(Self::SevenBit(addr)),
+            _ => None,
+        }
+    }
+
+    /// Construct a 10-bit address type
+    #[must_use]
+    pub const fn new_10bit(addr: u16) -> Option<Self> {
+        match addr {
+            0x080..=0x3FF => Some(Self::TenBit(addr)),
             _ => None,
         }
     }
 
     /// interpret address as a read command
     #[must_use]
-    pub fn read(&self) -> u8 {
-        (self.0 << 1) | 1
+    pub fn read(&self) -> [u8; 2] {
+        match self {
+            Self::SevenBit(addr) => [(addr << 1) | 1, 0],
+            Self::TenBit(addr) => [(((addr >> 8) as u8) << 1) | TEN_BIT_PREFIX | 1, (addr & 0xFF) as u8],
+        }
     }
 
     /// interpret address as a write command
     #[must_use]
-    pub fn write(&self) -> u8 {
-        self.0 << 1
+    pub fn write(&self) -> [u8; 2] {
+        match self {
+            Self::SevenBit(addr) => [addr << 1, 0],
+            Self::TenBit(addr) => [(((addr >> 8) as u8) << 1) | TEN_BIT_PREFIX, (addr & 0xFF) as u8],
+        }
     }
 }
 
-impl From<Address> for u8 {
+impl TryFrom<Address> for u8 {
+    type Error = AddressError;
+
+    fn try_from(value: Address) -> core::result::Result<Self, Self::Error> {
+        match value {
+            Address::SevenBit(addr) => Ok(addr),
+            Address::TenBit(_) => Err(AddressError::InvalidConversion),
+        }
+    }
+}
+
+impl From<Address> for u16 {
     fn from(value: Address) -> Self {
-        value.0
+        match value {
+            Address::SevenBit(addr) => addr as u16,
+            Address::TenBit(addr) => addr,
+        }
     }
 }
 
@@ -111,11 +152,29 @@ impl<'a, M: Mode> I2cSlave<'a, M> {
             // SAFETY: only unsafe due to .bits usage
             unsafe { w.divval().bits(0) });
 
-        // address 0 match = addr, per UM11147 24.3.2.1
-        i2c.slvadr(0).modify(|_, w|
-            // note: shift is omitted as performed via w.slvadr() 
-            // SAFETY: unsafe only required due to use of unnamed "bits" field
-            unsafe {w.slvadr().bits(address.0)}.sadisable().enabled());
+        match address {
+            Address::SevenBit(addr) => {
+                // address 0 match = addr, per UM11147 24.3.2.1
+                i2c.slvadr(0).modify(|_, w|
+                    // note: shift is omitted as performed via w.slvadr() 
+                    // SAFETY: unsafe only required due to use of unnamed "bits" field
+                    unsafe{w.slvadr().bits(addr)}.sadisable().enabled());
+            }
+            Address::TenBit(_addr) => {
+                // 10 bit address have first byte between 0b1111_0000 and 0b1111_0110 as per spec
+                // using slvadr(0) and slvqual0 to check, per UM11147 24.6.15
+                i2c.slvqual0().write(|w| w.qualmode0().extend());
+                i2c.slvadr(0).modify(|_, w|
+                    // SAFETY: unsafe only required due to use of unnamed "bits" field
+                    unsafe{w.slvadr().bits(0b1111_0000)}.sadisable().enabled());
+
+                i2c.slvqual0().write(|w|
+                    // SAFETY: unsafe only required due to use of unnamed "bits" field
+                    unsafe { w.bits(0b1111_0110) });
+
+                i2c.cfg().write(|w| w.slven().enabled());
+            }
+        }
 
         // SLVEN = 1, per UM11147 24.3.2.1
         i2c.cfg().write(|w| w.slven().enabled());
