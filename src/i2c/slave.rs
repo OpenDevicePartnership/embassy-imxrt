@@ -8,7 +8,7 @@ use embassy_hal_internal::{into_ref, Peripheral};
 
 use super::{
     Async, Blocking, Info, Instance, InterruptHandler, Mode, Result, SclPin, SdaPin, SlaveDma, TransferError,
-    I2C_WAKERS,
+    I2C_WAKERS, MAX_I2C_CHUNK_SIZE,
 };
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::i2c0::stat::Slvstate;
@@ -64,7 +64,7 @@ pub enum Response {
     /// I2C transaction complete with this amount of bytes
     Complete(usize),
 
-    /// I2C transaction pending wutg this amount of bytes completed so far
+    /// I2C transaction pending with this amount of bytes completed so far
     Pending(usize),
 }
 
@@ -353,6 +353,24 @@ impl I2cSlave<'_, Async> {
 
     /// Respond to write command from master
     pub async fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<Response> {
+        let mut xfer_count = 0;
+        for chunk in buf.chunks_mut(MAX_I2C_CHUNK_SIZE) {
+            let result = self.respond_to_write_inner(chunk).await?;
+            match result {
+                Response::Complete(count) => {
+                    xfer_count += count;
+                    return Ok(Response::Complete(xfer_count));
+                }
+                Response::Pending(count) => {
+                    xfer_count += count;
+                }
+            }
+        }
+        Ok(Response::Complete(xfer_count))
+    }
+
+    /// Function to handle the actual write transaction in chunks
+    pub async fn respond_to_write_inner(&mut self, buf: &mut [u8]) -> Result<Response> {
         let i2c = self.info.regs;
         let buf_len = buf.len();
 
@@ -430,8 +448,26 @@ impl I2cSlave<'_, Async> {
 
     /// Respond to read command from master
     /// User must provide enough data to complete the transaction or else
-    ///    we will get stuck in this function
+    /// we will get stuck in this function
     pub async fn respond_to_read(&mut self, buf: &[u8]) -> Result<Response> {
+        let mut xfer_count = 0;
+        for chunk in buf.chunks(MAX_I2C_CHUNK_SIZE + 1) {
+            let result = self.respond_to_read_inner(chunk).await?;
+            match result {
+                Response::Complete(count) => {
+                    xfer_count += count;
+                    return Ok(Response::Complete(xfer_count));
+                }
+                Response::Pending(count) => {
+                    xfer_count += count;
+                }
+            }
+        }
+        Ok(Response::Complete(xfer_count))
+    }
+
+    /// Function to handle the actual read transaction in chunks
+    pub async fn respond_to_read_inner(&mut self, buf: &[u8]) -> Result<Response> {
         let i2c = self.info.regs;
 
         // Verify that we are ready for transmit
