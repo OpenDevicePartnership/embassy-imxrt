@@ -384,15 +384,11 @@ impl<'d> Espi<'d> {
                 .memmx()
                 .variant(config.caps.allow_128b_payload)
                 .flashmx()
-                .variant(config.caps.flash_payload_size);
-
-            if config.caps.saf_erase_size.is_none() {
-                w.saf().clear_bit();
-            } else {
-                w.saf().set_bit().safera().variant(config.caps.saf_erase_size.unwrap());
-            }
-
-            w
+                .variant(config.caps.flash_payload_size)
+                .saf()
+                .variant(config.caps.saf_erase_size.is_some())
+                .safera()
+                .variant(config.caps.saf_erase_size.unwrap_or(Safera::Min2kb))
         });
 
         // Enable power save
@@ -416,14 +412,11 @@ impl<'d> Espi<'d> {
                 .bits((config.base0_addr >> 16) as u16)
         });
 
-        instance.info.regs.mctrl().modify(|_, w| {
-            // Conditionally enable 60MHz clock
-            if config.use_60mhz {
-                w.use60mhz().set_bit()
-            } else {
-                w.use60mhz().clear_bit()
-            }
-        });
+        instance
+            .info
+            .regs
+            .mctrl()
+            .modify(|_, w| w.use60mhz().variant(config.use_60mhz));
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
