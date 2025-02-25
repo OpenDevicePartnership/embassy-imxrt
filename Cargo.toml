@@ -12,19 +12,18 @@ documentation = "https://docs.embassy.dev/embassy-imxrt"
 [package.metadata.embassy_docs]
 src_base = "https://github.com/embassy-rs/embassy/blob/embassy-imxrt-v$VERSION/embassy-imxrt/src/"
 src_base_git = "https://github.com/embassy-rs/embassy/blob/$COMMIT/embassy-imxrt/src/"
-features = ["defmt", "unstable-pac", "time-driver"]
-flavors = [{ name = "imxrt685s", target = "thumbv8m.main-none-eabihf" }]
+features = ["time", "defmt", "unstable-pac", "time-driver"]
+flavors = [
+    { regex_feature = "mimxrt6.*", target = "thumbv8m.main-none-eabihf" }
+]
 
 [package.metadata.docs.rs]
-features = ["defmt", "unstable-pac", "time-driver"]
+features = ["time", "defmt", "unstable-pac", "time-driver"]
 
 [features]
 default = ["rt"]
 
-## Enable the rt feature of
-## [`rp-pac`](https://docs.rs/crates/rp-pac). This brings in the
-## [`cortex-m-rt`](https://docs.rs/cortex-m-rt) crate, which adds
-## startup code and minimal runtime initialization.
+## Cortex-M runtime (enabled by default)
 rt = [
     "mimxrt685s-pac?/rt",
     "mimxrt633s-pac?/rt",
@@ -32,20 +31,17 @@ rt = [
 
 ## Enable [defmt support](https://docs.rs/defmt) and enables `defmt`
 ## debug-log messages and formatting in embassy drivers.
-defmt = ["dep:defmt", "mimxrt685s-pac/defmt"]
+defmt = ["dep:defmt", "embassy-hal-internal/defmt", "embassy-sync/defmt", "mimxrt685s-pac?/defmt", "mimxrt633s-pac?/defmt"]
+
 ## Enable features requiring `embassy-time`
 time = ["dep:embassy-time"]
+
 ## Enable custom embassy time-driver implementation, using 1kHz RTC
 time-driver = [
     "dep:embassy-time-driver",
     "embassy-time-driver?/tick-hz-1_000",
     "dep:embassy-time-queue-utils",
 ]
-
-#! ### Chip selection features
-## MIMXRT685S
-mimxrt685s = ["mimxrt685s-pac", "_mimxrt685s"]
-mimxrt633s = ["mimxrt633s-pac", "_mimxrt633s"]
 
 ## Reexport the PAC for the currently enabled chip at `embassy_imxrt::pac` (unstable)
 unstable-pac = []
@@ -58,6 +54,12 @@ _mimxrt633s = ["_espi"]
 
 # Peripherals
 _espi = []
+
+#! ### Chip selection features
+## MIMXRT685S
+mimxrt685s = ["mimxrt685s-pac", "_mimxrt685s"]
+## MIMXRT633S
+mimxrt633s = ["mimxrt633s-pac", "_mimxrt633s"]
 
 [dependencies]
 embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
@@ -95,8 +97,8 @@ document-features = "0.2.7"
 paste = "1.0"
 
 # PACs
-mimxrt685s-pac = { version = "0.3.0", optional = true, features = ["rt", "critical-section", "defmt"] }
-mimxrt633s-pac = { version = "0.3.0", optional = true, features = ["rt", "critical-section", "defmt"] }
+mimxrt685s-pac = { version = "0.3.0", optional = true, features = ["rt", "critical-section"] }
+mimxrt633s-pac = { version = "0.3.0", optional = true, features = ["rt", "critical-section"] }
 
 [dev-dependencies]
 embassy-executor = { git = "https://github.com/embassy-rs/embassy" }
