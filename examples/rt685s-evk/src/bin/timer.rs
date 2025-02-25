@@ -51,11 +51,19 @@ async fn main(_spawner: Spawner) {
 
         // pass the input mux number, Input pin and Input pin edge user is interested in
         // Input mux details can be found in NXP user manual section 8.6.8 and Pin Function Table in section 7.5.3
-        let event_time_ms = cap_async_tmr
+        let event_time_us = cap_async_tmr
             .capture_event_time_us(TriggerInput::TrigIn9, p.PIO1_7, CaptureChEdge::Falling)
             .await;
 
-        info!("Capture timer expired in = {} ms", event_time_ms);
+        info!("Capture timer expired in = {} us", event_time_us);
+
+        let sfro = ClockConfig::crystal().sfro;
+        let mut cap_async_tmr = CaptureTimer::new_async(p.CTIMER4_CAPTURE_CHANNEL0, sfro);
+        let event_time_us = cap_async_tmr
+            .capture_cycle_time_us(TriggerInput::TrigIn1, p.PIO0_5, CaptureChEdge::Rising)
+            .await;
+
+        info!("Capture timer expired, time between two capture = {} us", event_time_us);
     }
 
     loop {

@@ -435,10 +435,8 @@ impl<M: Mode> CaptureTimer<M> {
     /// Captured clock = (Capture value - previous counter value)
     fn get_event_capture_time_us(&self) -> u32 {
         let time_float = (self.event_clock_counts as f32 / self.clk_freq as f32) * 1000000.0;
-        let time_int = time_float as u32 as f32;
-        let interger_part = time_int as u32;
-        let decimal_part = ((time_float - time_int) * 1000000.0) as u32;
-        interger_part + decimal_part
+        let integer_part = time_float as u32;
+        integer_part
     }
 
     fn reset_and_enable(&self) {
@@ -532,6 +530,49 @@ impl CaptureTimer<Async> {
         })
         .await
     }
+
+    /// Trigger capture twice, return time us between these two capture
+    /// TODO: https://github.com/OpenDevicePartnership/embassy-imxrt/issues/229
+    pub async fn capture_cycle_time_us(
+        &mut self,
+        event_input: TriggerInput,
+        event_pin: impl CaptureEvent,
+        edge: CaptureChEdge,
+    ) -> u32 {
+        let reg = self.info.regs;
+
+        self.start(event_input, event_pin, edge);
+        let mut timer_hist = 0;
+        let mut first_captured = false;
+
+        // Implementation of waiting for the interrupt
+        poll_fn(|cx| {
+            WAKERS[self.id].register(cx.waker());
+
+            if self.info.input_event_captured() {
+                // First time capture, store data into timer hist and reenable interrupt
+                if first_captured == false {
+                    timer_hist = reg.cr(self.info.channel).read().bits();
+                    first_captured = true;
+                    self.info.cap_timer_interrupt_enable();
+                    Poll::Pending
+                } else {
+                    // Second time capture, and minus timer hist to calculate event_clock_counts
+                    let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                    if curr_event_clock_count < timer_hist {
+                        self.event_clock_counts = (u32::MAX - timer_hist) + curr_event_clock_count + 1_u32;
+                    } else {
+                        self.event_clock_counts = curr_event_clock_count - timer_hist;
+                    }
+                    self.info.cap_timer_interrupt_disable();
+                    Poll::Ready(self.get_event_capture_time_us())
+                }
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
+    }
 }
 
 impl CaptureTimer<Blocking> {
@@ -539,6 +580,7 @@ impl CaptureTimer<Blocking> {
     pub fn new_blocking<T: Instance>(_inst: T, clk: impl ConfigurableClock) -> Self {
         let info = T::info();
         let module = info.module;
+        T::interrupt_enable();
         Self {
             id: COUNT_CHANNEL + module * CHANNEL_PER_MODULE + info.channel,
             event_clock_counts: 0,
@@ -571,6 +613,40 @@ impl CaptureTimer<Blocking> {
                     self.event_clock_counts = curr_event_clock_count - prev_event_clock_count;
                 }
                 return self.get_event_capture_time_us();
+            }
+        }
+    }
+    /// Trigger capture twice, return time us between these two capture
+    pub fn capture_cycle_time_us(
+        &mut self,
+        event_input: TriggerInput,
+        event_pin: impl CaptureEvent,
+        edge: CaptureChEdge,
+    ) -> u32 {
+        let reg = self.info.regs;
+
+        self.start(event_input, event_pin, edge);
+        let mut timer_hist = 0;
+        let mut first_captured = false;
+
+        loop {
+            if self.info.input_event_captured() {
+                // First time capture, store data into timer hist and reenable interrupt
+                if first_captured == false {
+                    timer_hist = reg.cr(self.info.channel).read().bits();
+                    first_captured = true;
+                    self.info.cap_timer_interrupt_enable();
+                } else {
+                    // Second time capture, and minus timer hist to calculate event_clock_counts
+                    let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                    if curr_event_clock_count < timer_hist {
+                        self.event_clock_counts = (u32::MAX - timer_hist) + curr_event_clock_count + 1_u32;
+                    } else {
+                        self.event_clock_counts = curr_event_clock_count - timer_hist;
+                    }
+                    self.info.cap_timer_interrupt_disable();
+                    return self.get_event_capture_time_us();
+                }
             }
         }
     }
@@ -812,3 +888,5 @@ macro_rules! impl_pin {
 // Capture event pins
 // We can add all the GPIO pins here which can be used as capture event inputs
 impl_pin!(PIO1_7, F4, Enabled);
+impl_pin!(PIO0_4, F4, Enabled);
+impl_pin!(PIO0_5, F4, Enabled);
