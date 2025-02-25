@@ -97,10 +97,10 @@ struct TenBitAddressInfo {
 }
 
 impl TenBitAddressInfo {
-    fn new(first_byte: u8, second_byte: u8) -> Self {
+    fn new(address: u16) -> Self {
         Self {
-            first_byte,
-            second_byte,
+            first_byte: (((address >> 8) as u8) << 1) | TEN_BIT_PREFIX,
+            second_byte: (address & 0xFF) as u8,
         }
     }
 }
@@ -192,10 +192,7 @@ impl<'a, M: Mode> I2cSlave<'a, M> {
                         unsafe { w.slvqual0().bits(0b111_1011) });
 
                 // Save the 10 bit address to use later
-                ten_bit_info = Some(TenBitAddressInfo::new(
-                    ((addr >> 8) as u8) << 1 | TEN_BIT_PREFIX,
-                    (addr & 0xFF) as u8,
-                ));
+                ten_bit_info = Some(TenBitAddressInfo::new(addr));
             }
         }
 
@@ -285,19 +282,22 @@ impl I2cSlave<'_, Blocking> {
         //Block until we know it is read or write
         self.poll()?;
 
-        if let Some(info) = self.ten_bit_info {
+        if let Some(ten_bit_address) = self.ten_bit_info {
             // For 10 bit address, the first byte received is the second byte of the address
-            if i2c.slvdat().read().data().bits() == info.second_byte {
+            if i2c.slvdat().read().data().bits() == ten_bit_address.second_byte {
                 i2c.slvctl().write(|w| w.slvcontinue().continue_());
                 self.poll()?;
             }
 
             // Check for a restart
-            if i2c.stat().read().slvstate().is_slave_address() {
+            if !i2c.stat().read().slvdesel().is_deselected() && i2c.stat().read().slvstate().is_slave_address() {
                 // Check if first byte of 10 bit address is received again with read bit set
-                if i2c.slvdat().read().data().bits() == info.first_byte | 1 {
+                if i2c.slvdat().read().data().bits() == ten_bit_address.first_byte | 1 {
                     i2c.slvctl().write(|w| w.slvcontinue().continue_());
                     self.poll()?;
+                } else {
+                    // If the first byte of the 10 bit address is not received again, then we have issues.
+                    return Err(TransferError::OtherBusError.into());
                 }
             }
         }
@@ -436,19 +436,22 @@ impl I2cSlave<'_, Async> {
         // Poll for HW to transitioning from addressed to receive/transmit
         self.poll_sw_action().await;
 
-        if let Some(info) = self.ten_bit_info {
+        if let Some(ten_bit_address) = self.ten_bit_info {
             // For 10 bit address, the first byte received is the second byte of the address
-            if i2c.slvdat().read().data().bits() == info.second_byte {
+            if i2c.slvdat().read().data().bits() == ten_bit_address.second_byte {
                 i2c.slvctl().write(|w| w.slvcontinue().continue_());
                 self.poll_sw_action().await;
             }
 
             // Check for a restart
-            if i2c.stat().read().slvstate().is_slave_address() {
+            if !i2c.stat().read().slvdesel().is_deselected() && i2c.stat().read().slvstate().is_slave_address() {
                 // Check if first byte of 10 bit address is received again with read bit set
-                if i2c.slvdat().read().data().bits() == info.first_byte | 1 {
+                if i2c.slvdat().read().data().bits() == ten_bit_address.first_byte | 1 {
                     i2c.slvctl().write(|w| w.slvcontinue().continue_());
                     self.poll_sw_action().await;
+                } else {
+                    // If the first byte of the 10 bit address is not received again, then we have issues.
+                    return Err(TransferError::OtherBusError.into());
                 }
             }
         }
