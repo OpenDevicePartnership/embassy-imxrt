@@ -397,45 +397,7 @@ impl<'a> I2cMaster<'a, Async> {
 
         i2cregs.mstctl().write(|w| w.mststart().set_bit());
 
-        let res = self
-            .wait_on(
-                |me| {
-                    let stat = me.info.regs.stat().read();
-
-                    if stat.mstpending().is_pending() {
-                        if is_read && stat.mststate().is_receive_ready()
-                            || !is_read && stat.mststate().is_transmit_ready()
-                        {
-                            Poll::Ready(Ok::<(), Error>(()))
-                        } else if stat.mststate().is_nack_address() {
-                            Poll::Ready(Err(TransferError::AddressNack.into()))
-                        } else if is_read && !stat.mststate().is_receive_ready() {
-                            Poll::Ready(Err(TransferError::ReadFail.into()))
-                        } else if !is_read && !stat.mststate().is_transmit_ready() {
-                            Poll::Ready(Err(TransferError::WriteFail.into()))
-                        } else {
-                            Poll::<Result<()>>::Pending
-                        }
-                    } else if stat.mstarbloss().is_arbitration_loss() {
-                        Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
-                    } else if stat.mstststperr().is_error() {
-                        Poll::Ready(Err(TransferError::StartStopError.into()))
-                    } else {
-                        Poll::<Result<()>>::Pending
-                    }
-                },
-                |me| {
-                    me.info.regs.intenset().write(|w| {
-                        w.mstpendingen()
-                            .set_bit()
-                            .mstarblossen()
-                            .set_bit()
-                            .mstststperren()
-                            .set_bit()
-                    });
-                },
-            )
-            .await;
+        let res = self.poll_for_ready(is_read).await;
 
         // Defuse the sentinel if future is not dropped
         on_drop.defuse();
@@ -477,6 +439,16 @@ impl<'a> I2cMaster<'a, Async> {
         )
         .await?;
 
+        // Sentinel to perform corrective action if future is dropped
+        let on_drop = OnDrop::new(|| {
+            // Disable and re-enable master mode to clear out stalled HW state
+            // if we failed to complete sending of the address
+            // In practice, this seems to be only way to recover. Engaging with
+            // NXP to see if there is better way to handle this.
+            i2cregs.cfg().write(|w| w.msten().disabled());
+            i2cregs.cfg().write(|w| w.msten().enabled());
+        });
+
         // The first byte of a 10-bit address is 11110XXX,
         // where XXX are the 2 most significant bits of the 10-bit address
         // followed by the read/write bit
@@ -484,64 +456,16 @@ impl<'a> I2cMaster<'a, Async> {
         i2cregs.mstdat().write(|w| unsafe { w.data().bits(addr_high) });
         i2cregs.mstctl().write(|w| w.mststart().set_bit());
 
-        self.wait_on(
-            |me| {
-                let stat = me.info.regs.stat().read();
-
-                if stat.mstpending().is_pending() {
-                    Poll::Ready(Ok::<(), Error>(()))
-                } else if stat.mstarbloss().is_arbitration_loss() {
-                    Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
-                } else if stat.mstststperr().is_error() {
-                    Poll::Ready(Err(TransferError::StartStopError.into()))
-                } else {
-                    Poll::Pending
-                }
-            },
-            |me| {
-                me.info.regs.intenset().write(|w| {
-                    w.mstpendingen()
-                        .set_bit()
-                        .mstarblossen()
-                        .set_bit()
-                        .mstststperren()
-                        .set_bit()
-                });
-            },
-        )
-        .await?;
+        // 10-bit address mode requires the two address bytes to be sent as a write operation
+        self.poll_for_ready(false).await?;
 
         // Send the second part of the 10-bit address
         let addr_low = (address & 0xFF) as u8;
         i2cregs.mstdat().write(|w| unsafe { w.data().bits(addr_low) });
         i2cregs.mstctl().write(|w| w.mstcontinue().set_bit());
 
-        self.wait_on(
-            |me| {
-                let stat = me.info.regs.stat().read();
-
-                if stat.mstpending().is_pending() {
-                    Poll::Ready(Ok::<(), Error>(()))
-                } else if stat.mstarbloss().is_arbitration_loss() {
-                    Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
-                } else if stat.mstststperr().is_error() {
-                    Poll::Ready(Err(TransferError::StartStopError.into()))
-                } else {
-                    Poll::Pending
-                }
-            },
-            |me| {
-                me.info.regs.intenset().write(|w| {
-                    w.mstpendingen()
-                        .set_bit()
-                        .mstarblossen()
-                        .set_bit()
-                        .mstststperren()
-                        .set_bit()
-                });
-            },
-        )
-        .await?;
+        // 10-bit address mode requires the two address bytes to be sent as a write operation
+        self.poll_for_ready(false).await?;
 
         // If this is a read operation, send a repeated start with the read bit set
         if is_read {
@@ -549,33 +473,10 @@ impl<'a> I2cMaster<'a, Async> {
             i2cregs.mstdat().write(|w| unsafe { w.data().bits(addr_high_read) });
             i2cregs.mstctl().write(|w| w.mststart().set_bit());
 
-            self.wait_on(
-                |me| {
-                    let stat = me.info.regs.stat().read();
-
-                    if stat.mstpending().is_pending() {
-                        Poll::Ready(Ok::<(), Error>(()))
-                    } else if stat.mstarbloss().is_arbitration_loss() {
-                        Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
-                    } else if stat.mstststperr().is_error() {
-                        Poll::Ready(Err(TransferError::StartStopError.into()))
-                    } else {
-                        Poll::Pending
-                    }
-                },
-                |me| {
-                    me.info.regs.intenset().write(|w| {
-                        w.mstpendingen()
-                            .set_bit()
-                            .mstarblossen()
-                            .set_bit()
-                            .mstststperren()
-                            .set_bit()
-                    });
-                },
-            )
-            .await?;
+            self.poll_for_ready(is_read).await?;
         }
+        // Defuse the sentinel if future is not dropped
+        on_drop.defuse();
         Ok(())
     }
 
@@ -807,6 +708,47 @@ impl<'a> I2cMaster<'a, Async> {
 
             r
         })
+        .await
+    }
+
+    /// During i2c start, poll for ready state and check for errors
+    async fn poll_for_ready(&mut self, is_read: bool) -> Result<()> {
+        self.wait_on(
+            |me| {
+                let stat = me.info.regs.stat().read();
+
+                if stat.mstpending().is_pending() {
+                    if is_read && stat.mststate().is_receive_ready() || !is_read && stat.mststate().is_transmit_ready()
+                    {
+                        Poll::Ready(Ok::<(), Error>(()))
+                    } else if stat.mststate().is_nack_address() {
+                        Poll::Ready(Err(TransferError::AddressNack.into()))
+                    } else if is_read && !stat.mststate().is_receive_ready() {
+                        Poll::Ready(Err(TransferError::ReadFail.into()))
+                    } else if !is_read && !stat.mststate().is_transmit_ready() {
+                        Poll::Ready(Err(TransferError::WriteFail.into()))
+                    } else {
+                        Poll::<Result<()>>::Pending
+                    }
+                } else if stat.mstarbloss().is_arbitration_loss() {
+                    Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
+                } else if stat.mstststperr().is_error() {
+                    Poll::Ready(Err(TransferError::StartStopError.into()))
+                } else {
+                    Poll::<Result<()>>::Pending
+                }
+            },
+            |me| {
+                me.info.regs.intenset().write(|w| {
+                    w.mstpendingen()
+                        .set_bit()
+                        .mstarblossen()
+                        .set_bit()
+                        .mstststperren()
+                        .set_bit()
+                });
+            },
+        )
         .await
     }
 }
