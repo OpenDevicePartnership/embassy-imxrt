@@ -331,7 +331,7 @@ impl<'a> I2cMaster<'a, Async> {
         T::into_i2c();
 
         let ch = dma::Dma::reserve_channel(dma_ch);
-        let this = Self::new_inner::<T>(fc, scl, sda, speed, Some(ch))?;
+        let this = Self::new_inner::<T>(fc, scl, sda, speed, ch)?;
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
@@ -490,14 +490,155 @@ impl<'a> I2cMaster<'a, Async> {
 
         self.start(address, true).await?;
 
-        // Read one byte less using DMA and then read the last byte manually
-        let (dma_read, last_byte) = read.split_at_mut(read.len() - 1);
+        if self.dma_ch.is_some() {
+            // Do a DMA recv
+            // Read one byte less using DMA and then read the last byte manually
+            let (dma_read, last_byte) = read.split_at_mut(read.len() - 1);
 
-        if !dma_read.is_empty() {
-            let transfer = dma::transfer::Transfer::new_read(
+            if !dma_read.is_empty() {
+                let transfer = dma::transfer::Transfer::new_read(
+                    self.dma_ch.as_mut().unwrap(),
+                    i2cregs.mstdat().as_ptr() as *mut u8,
+                    dma_read,
+                    Default::default(),
+                );
+
+                // According to sections 24.7.7.1 and 24.7.7.2, we should
+                // first program the DMA channel for carrying out a transfer
+                // and only then set MSTDMA bit.
+                //
+                // Additionally, at this point we know the slave has
+                // acknowledged the address.
+                i2cregs.mstctl().write(|w| w.mstdma().enabled());
+
+                let res = select(
+                    transfer,
+                    poll_fn(|cx| {
+                        I2C_WAKERS[self.info.index].register(cx.waker());
+
+                        i2cregs.intenset().write(|w| {
+                            w.mstpendingen()
+                                .set_bit()
+                                .mstarblossen()
+                                .set_bit()
+                                .mstststperren()
+                                .set_bit()
+                        });
+
+                        let stat = i2cregs.stat().read();
+
+                        if stat.mstarbloss().is_arbitration_loss() {
+                            Poll::Ready(Err::<(), Error>(TransferError::ArbitrationLoss.into()))
+                        } else if stat.mstststperr().is_error() {
+                            Poll::Ready(Err::<(), Error>(TransferError::StartStopError.into()))
+                        } else {
+                            Poll::Pending
+                        }
+                    }),
+                )
+                .await;
+
+                i2cregs.mstctl().write(|w| w.mstdma().disabled());
+
+                if let Either::Second(e) = res {
+                    e?;
+                }
+            }
+
+            self.wait_on(
+                |me| {
+                    let stat = me.info.regs.stat().read();
+
+                    if stat.mstpending().is_pending() {
+                        Poll::Ready(Ok::<(), Error>(()))
+                    } else if stat.mstarbloss().is_arbitration_loss() {
+                        Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
+                    } else if stat.mstststperr().is_error() {
+                        Poll::Ready(Err(TransferError::StartStopError.into()))
+                    } else {
+                        Poll::Pending
+                    }
+                },
+                |me| {
+                    me.info.regs.intenset().write(|w| {
+                        w.mstpendingen()
+                            .set_bit()
+                            .mstarblossen()
+                            .set_bit()
+                            .mstststperren()
+                            .set_bit()
+                    });
+                },
+            )
+            .await?;
+
+            // Read the last byte
+            last_byte[0] = i2cregs.mstdat().read().data().bits();
+        } else {
+            // No DMA recv, we must manually recv one byte at a time.
+            let read_len = read.len();
+
+            for (i, r) in read.iter_mut().enumerate() {
+                self.wait_on(
+                    |me| {
+                        let stat = me.info.regs.stat().read();
+
+                        if stat.mstpending().is_pending() {
+                            Poll::Ready(Ok::<(), Error>(()))
+                        } else if stat.mstarbloss().is_arbitration_loss() {
+                            Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
+                        } else if stat.mstststperr().is_error() {
+                            Poll::Ready(Err(TransferError::StartStopError.into()))
+                        } else {
+                            Poll::Pending
+                        }
+                    },
+                    |me| {
+                        me.info.regs.intenset().write(|w| {
+                            w.mstpendingen()
+                                .set_bit()
+                                .mstarblossen()
+                                .set_bit()
+                                .mstststperren()
+                                .set_bit()
+                        });
+                    },
+                )
+                .await?;
+
+                // check transmission continuity
+                if !i2cregs.stat().read().mststate().is_receive_ready() {
+                    return Err(TransferError::ReadFail.into());
+                }
+
+                self.check_for_bus_errors()?;
+
+                *r = i2cregs.mstdat().read().data().bits();
+
+                // continue after ACK until last byte
+                if i < read_len - 1 {
+                    i2cregs.mstctl().write(|w| w.mstcontinue().set_bit());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn write_no_stop(&mut self, address: u16, write: &[u8]) -> Result<()> {
+        // Procedure from 24.3.1.1 pg 545
+        let i2cregs = self.info.regs;
+
+        self.start(address, false).await?;
+
+        if write.is_empty() {
+            return Ok(());
+        }
+
+        if self.dma_ch.is_some() {
+            let transfer = dma::transfer::Transfer::new_write(
                 self.dma_ch.as_mut().unwrap(),
+                write,
                 i2cregs.mstdat().as_ptr() as *mut u8,
-                dma_read,
                 Default::default(),
             );
 
@@ -541,125 +682,72 @@ impl<'a> I2cMaster<'a, Async> {
             if let Either::Second(e) = res {
                 e?;
             }
+
+            self.wait_on(
+                |me| {
+                    let stat = me.info.regs.stat().read();
+
+                    if stat.mstpending().is_pending() {
+                        Poll::Ready(Ok::<(), Error>(()))
+                    } else if stat.mstarbloss().is_arbitration_loss() {
+                        Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
+                    } else if stat.mstststperr().is_error() {
+                        Poll::Ready(Err(TransferError::StartStopError.into()))
+                    } else {
+                        Poll::Pending
+                    }
+                },
+                |me| {
+                    me.info.regs.intenset().write(|w| {
+                        w.mstpendingen()
+                            .set_bit()
+                            .mstarblossen()
+                            .set_bit()
+                            .mstststperren()
+                            .set_bit()
+                    });
+                },
+            )
+            .await
+        } else {
+            for byte in write.iter() {
+                i2cregs.mstdat().write(|w|
+                    // SAFETY: unsafe only due to .bits usage
+                    unsafe { w.data().bits(*byte) });
+
+                i2cregs.mstctl().write(|w| w.mstcontinue().set_bit());
+
+                self.wait_on(
+                    |me| {
+                        let stat = me.info.regs.stat().read();
+
+                        if stat.mstpending().is_pending() {
+                            Poll::Ready(Ok::<(), Error>(()))
+                        } else if stat.mstarbloss().is_arbitration_loss() {
+                            Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
+                        } else if stat.mstststperr().is_error() {
+                            Poll::Ready(Err(TransferError::StartStopError.into()))
+                        } else {
+                            Poll::Pending
+                        }
+                    },
+                    |me| {
+                        me.info.regs.intenset().write(|w| {
+                            w.mstpendingen()
+                                .set_bit()
+                                .mstarblossen()
+                                .set_bit()
+                                .mstststperren()
+                                .set_bit()
+                        });
+                    },
+                )
+                .await?;
+
+                self.check_for_bus_errors()?;
+            }
+            Ok(())
         }
-
-        self.wait_on(
-            |me| {
-                let stat = me.info.regs.stat().read();
-
-                if stat.mstpending().is_pending() {
-                    Poll::Ready(Ok::<(), Error>(()))
-                } else if stat.mstarbloss().is_arbitration_loss() {
-                    Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
-                } else if stat.mstststperr().is_error() {
-                    Poll::Ready(Err(TransferError::StartStopError.into()))
-                } else {
-                    Poll::Pending
-                }
-            },
-            |me| {
-                me.info.regs.intenset().write(|w| {
-                    w.mstpendingen()
-                        .set_bit()
-                        .mstarblossen()
-                        .set_bit()
-                        .mstststperren()
-                        .set_bit()
-                });
-            },
-        )
-        .await?;
-
-        // Read the last byte
-        last_byte[0] = i2cregs.mstdat().read().data().bits();
-
-        Ok(())
-    }
-
-    async fn write_no_stop(&mut self, address: u16, write: &[u8]) -> Result<()> {
-        // Procedure from 24.3.1.1 pg 545
-        let i2cregs = self.info.regs;
-
-        self.start(address, false).await?;
-
-        if write.is_empty() {
-            return Ok(());
-        }
-
-        let transfer = dma::transfer::Transfer::new_write(
-            self.dma_ch.as_mut().unwrap(),
-            write,
-            i2cregs.mstdat().as_ptr() as *mut u8,
-            Default::default(),
-        );
-
-        // According to sections 24.7.7.1 and 24.7.7.2, we should
-        // first program the DMA channel for carrying out a transfer
-        // and only then set MSTDMA bit.
-        //
-        // Additionally, at this point we know the slave has
-        // acknowledged the address.
-        i2cregs.mstctl().write(|w| w.mstdma().enabled());
-
-        let res = select(
-            transfer,
-            poll_fn(|cx| {
-                I2C_WAKERS[self.info.index].register(cx.waker());
-
-                i2cregs.intenset().write(|w| {
-                    w.mstpendingen()
-                        .set_bit()
-                        .mstarblossen()
-                        .set_bit()
-                        .mstststperren()
-                        .set_bit()
-                });
-
-                let stat = i2cregs.stat().read();
-
-                if stat.mstarbloss().is_arbitration_loss() {
-                    Poll::Ready(Err::<(), Error>(TransferError::ArbitrationLoss.into()))
-                } else if stat.mstststperr().is_error() {
-                    Poll::Ready(Err::<(), Error>(TransferError::StartStopError.into()))
-                } else {
-                    Poll::Pending
-                }
-            }),
-        )
-        .await;
-
-        i2cregs.mstctl().write(|w| w.mstdma().disabled());
-
-        if let Either::Second(e) = res {
-            e?;
-        }
-
-        self.wait_on(
-            |me| {
-                let stat = me.info.regs.stat().read();
-
-                if stat.mstpending().is_pending() {
-                    Poll::Ready(Ok::<(), Error>(()))
-                } else if stat.mstarbloss().is_arbitration_loss() {
-                    Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
-                } else if stat.mstststperr().is_error() {
-                    Poll::Ready(Err(TransferError::StartStopError.into()))
-                } else {
-                    Poll::Pending
-                }
-            },
-            |me| {
-                me.info.regs.intenset().write(|w| {
-                    w.mstpendingen()
-                        .set_bit()
-                        .mstarblossen()
-                        .set_bit()
-                        .mstststperren()
-                        .set_bit()
-                });
-            },
-        )
-        .await
     }
 
     async fn stop(&mut self) -> Result<()> {
