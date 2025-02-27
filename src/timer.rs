@@ -1,14 +1,17 @@
 //! Timer module for the NXP RT6xx family of microcontrollers
 use core::future::poll_fn;
+use core::marker::PhantomData;
 use core::task::Poll;
 
 use embassy_hal_internal::interrupt::InterruptExt;
 use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 
-use crate::clocks::{enable_and_reset, ConfigurableClock};
+use crate::clocks::{enable_and_reset, ClockConfig, ConfigurableClock};
 use crate::iopctl::{DriveMode, DriveStrength, Inverter, IopctlPin as Pin, Pull, SlewRate};
+use crate::pac::clkctl1::ct32bitfclksel::Sel;
 use crate::pac::Clkctl1;
+use crate::pwm::{CentiPercent, Hertz, MicroSeconds};
 use crate::{interrupt, peripherals, Peripheral};
 
 const COUNT_CHANNEL: usize = 20;
@@ -16,11 +19,31 @@ const CAPTURE_CHANNEL: usize = 20;
 const TOTAL_CHANNELS: usize = COUNT_CHANNEL + CAPTURE_CHANNEL;
 const CHANNEL_PER_MODULE: usize = 4;
 
-enum TimerChannelNum {
+/// Enum representing timer channels
+#[derive(Copy, Clone, Debug)]
+pub enum TimerChannelNum {
+    /// Timer channel 0
     Channel0,
+    /// Timer channel 1
     Channel1,
+    /// Timer channel 2
     Channel2,
+    /// Timer channel 3
     Channel3,
+}
+
+/// Timer Errors
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Error {
+    /// PWM cannot be enabled with provided period
+    InvalidPwmPeriod,
+
+    /// PWM output with min precision cannot enabled with provided period and clock rate
+    PwmPrecisionNotSupported,
+
+    /// Pwm length channel and output channel does not belong to same CTimer
+    PwmChannelMismatch,
 }
 
 /// Enum representing the logical capture channel input.
@@ -323,6 +346,62 @@ impl Info {
             TimerChannelNum::Channel1 => reg.mcr().read().mr1i().bit_is_clear(),
             TimerChannelNum::Channel2 => reg.mcr().read().mr2i().bit_is_clear(),
             TimerChannelNum::Channel3 => reg.mcr().read().mr3i().bit_is_clear(),
+        }
+    }
+
+    fn pwm_get_clock_freq(&self) -> u32 {
+        // SAFETY: This has no safety impact as we are getting a singleton register instance here and its dropped it the end of the function
+        let reg = unsafe { Clkctl1::steal() };
+
+        let clksel = reg.ct32bitfclksel(self.channel).read().sel().variant();
+        let mut freq: u32 = 0;
+
+        if let Some(clk) = clksel {
+            match clk {
+                Sel::MainClk => {
+                    freq = ClockConfig::crystal().main_clk.get_clock_rate().unwrap();
+                }
+                Sel::SfroClk => {
+                    freq = ClockConfig::crystal().sfro.get_clock_rate().unwrap();
+                }
+                Sel::FfroClk => {
+                    freq = ClockConfig::crystal().ffro.get_clock_rate().unwrap();
+                }
+                Sel::Lposc => {
+                    freq = ClockConfig::crystal().lposc.get_clock_rate().unwrap();
+                }
+                //TODO: Add get clock frequency for clock sources audio pll, mclk_in
+                _ => {
+                    freq = 0;
+                }
+            }
+        }
+        freq
+    }
+
+    fn pwm_configure(&self, period: u32) {
+        let reg = self.regs;
+        let len_channel = self.channel;
+
+        // Use length channel to set PWM cycle length
+        reg.mr(len_channel).write(|w|
+            //SAFETY: No safety impact as we are writing match register here
+            unsafe { w.match_().bits(period) });
+
+        // Set MRnR bit to enable timer reset for register setting PWM length
+        match TIMER_CHANNELS_ARR[len_channel] {
+            TimerChannelNum::Channel0 => {
+                reg.mcr().modify(|_, w| w.mr0r().set_bit());
+            }
+            TimerChannelNum::Channel1 => {
+                reg.mcr().modify(|_, w| w.mr1r().set_bit());
+            }
+            TimerChannelNum::Channel2 => {
+                reg.mcr().modify(|_, w| w.mr2r().set_bit());
+            }
+            TimerChannelNum::Channel3 => {
+                reg.mcr().modify(|_, w| w.mr3r().set_bit());
+            }
         }
     }
 }
@@ -694,6 +773,267 @@ impl<M: Mode> Drop for CaptureTimer<M> {
     }
 }
 
+/// Basic PWM Object, Consumes `CTimer` peripheral hardware instances for match channel and PWM length channel on construction
+pub struct CTimerPwm<'p> {
+    _lifetime: PhantomData<&'p ()>,
+    _periodchannel: &'p CTimerPwmPeriodChannel<'p>,
+    period: MicroSeconds,
+    count_max: u32,
+    info: Info,
+}
+
+/// Basic PWM Length channel Object, Consumes `CTimer` peripheral hardware instances for match channel and PWM length channel on construction
+pub struct CTimerPwmPeriodChannel<'p> {
+    _lifetime: PhantomData<&'p ()>,
+    period: MicroSeconds,
+    count_max: u32,
+    info: Info,
+}
+
+impl embedded_hal_02::Pwm for CTimerPwm<'_> {
+    type Channel = ();
+    type Time = MicroSeconds;
+    type Duty = CentiPercent;
+
+    fn disable(&mut self, _: ()) {
+        self.channel_disable_pwm(TIMER_CHANNELS_ARR[self.info.channel], self.info.regs);
+    }
+
+    fn enable(&mut self, _: ()) {
+        let reg = self.info.regs;
+
+        self.set_duty((), CentiPercent(0, 0));
+        // Enable PWM mode for channel
+        self.channel_enable_pwm(TIMER_CHANNELS_ARR[self.info.channel], self.info.regs);
+
+        // Reset and enable timer
+        if reg.tcr().read().cen().is_disabled() {
+            reg.tcr().write(|w| w.crst().set_bit());
+            reg.tcr().write(|w| w.crst().clear_bit());
+            reg.tcr().write(|w| w.cen().set_bit());
+        }
+
+        self.channel_start_pwm(TIMER_CHANNELS_ARR[self.info.channel], self.info.regs);
+    }
+
+    fn get_period(&self) -> Self::Time {
+        self.period
+    }
+
+    fn get_duty(&self, _: ()) -> Self::Duty {
+        let reg = self.info.regs;
+        let scaled = reg.mr(self.info.channel).read().bits();
+
+        CentiPercent::from_scaled(self.count_max - scaled, self.count_max)
+    }
+
+    fn get_max_duty(&self) -> Self::Duty {
+        CentiPercent::MAX
+    }
+
+    fn set_duty(&mut self, _: (), duty: Self::Duty) {
+        let scaled = duty.as_scaled(self.count_max);
+        let reg = self.info.regs;
+
+        // PWM output is low at the beginning of PWM cycle
+        // PWM output is set to high when timer count reaches match register value
+        // For active high PWM, set match register such that output is high for PWM cycle length*dutycycle
+        reg.mr(self.info.channel).write(|w|
+            //SAFETY: No safety impact as we are writing match register here
+            unsafe { w.match_().bits(self.count_max - scaled)});
+    }
+
+    fn set_period<P>(&mut self, period: P)
+    where
+        P: Into<Self::Time>,
+    {
+        let clock_rate = Hertz(self.info.pwm_get_clock_freq());
+
+        let requested_pwm_rate: Hertz = period.into().into();
+
+        // period cannot be faster than supplied PWM clock source
+        assert!(requested_pwm_rate.0 > 0);
+        assert!(requested_pwm_rate.0 <= clock_rate.0 / 10_000);
+
+        // record current duty cycles
+        let duty_cycles = TIMER_CHANNELS_ARR.map(|_ch| self.get_duty(()));
+
+        // update scale factor
+        self.count_max = clock_rate.0 / requested_pwm_rate.0;
+
+        // Set period through match register
+        self.info.pwm_configure(self.count_max);
+
+        // update duty cycle match registers according to new scale factor
+        (0..TIMER_CHANNELS_ARR.len()).for_each(|i| {
+            self.set_duty((), duty_cycles[i]);
+        });
+    }
+}
+
+/// shorthand for -> Result<T>
+pub type Result<T> = core::result::Result<T, Error>;
+
+impl<'p> CTimerPwm<'p> {
+    /// Take the `CTimer` instance supplied and use it as a simple PWM driver. Function returns constructed Pwm instance.
+    pub fn new<T: Instance>(
+        _match_channel: impl Peripheral<P = T> + 'p,
+        period_channel: &'p CTimerPwmPeriodChannel,
+        matchoutput_pin: impl CTimerMatchOutput,
+    ) -> Result<Self> {
+        let channel_info = T::info();
+
+        // Assert if length channel and PWM channel does not belong to same CTimer
+        if channel_info.module != period_channel.info.module {
+            return Err(Error::PwmChannelMismatch);
+        }
+
+        // Configure match output pin
+        matchoutput_pin.configure_for_ctimer_match_output();
+
+        Ok(Self {
+            _lifetime: PhantomData,
+            _periodchannel: period_channel,
+            period: period_channel.period,
+            count_max: period_channel.count_max,
+            info: channel_info,
+        })
+    }
+
+    fn channel_enable_pwm(&self, channelnum: TimerChannelNum, reg: &'static crate::pac::ctimer0::RegisterBlock) {
+        // To enable PWM:
+        // 1. Disable interrupt, stop and reset when match register matches the value in TC
+        // 2. Clear external mask register bits
+        // 3. Clear interrupt flag
+
+        match channelnum {
+            TimerChannelNum::Channel0 => {
+                reg.mcr().modify(|_, w| w.mr0r().clear_bit());
+                reg.mcr().modify(|_, w| w.mr0s().clear_bit());
+                reg.mcr().modify(|_, w| w.mr0i().clear_bit());
+
+                reg.emr().modify(|_, w| w.em0().clear_bit());
+                reg.emr().modify(|_, w| w.emc0().clear());
+
+                reg.ir().modify(|_, w| w.mr0int().clear_bit());
+            }
+            TimerChannelNum::Channel1 => {
+                reg.mcr().modify(|_, w| w.mr1r().clear_bit());
+                reg.mcr().modify(|_, w| w.mr1s().clear_bit());
+                reg.mcr().modify(|_, w| w.mr1i().clear_bit());
+
+                reg.emr().modify(|_, w| w.em1().clear_bit());
+                reg.emr().modify(|_, w| w.emc1().clear());
+
+                reg.ir().modify(|_, w| w.mr1int().clear_bit());
+            }
+            TimerChannelNum::Channel2 => {
+                reg.mcr().modify(|_, w| w.mr2r().clear_bit());
+                reg.mcr().modify(|_, w| w.mr2s().clear_bit());
+                reg.mcr().modify(|_, w| w.mr2i().clear_bit());
+                reg.mcr().modify(|_, w| w.mr2rl().clear_bit());
+
+                reg.emr().modify(|_, w| w.em2().clear_bit());
+                reg.emr().modify(|_, w| w.emc2().clear());
+
+                reg.ir().modify(|_, w| w.mr2int().clear_bit());
+            }
+            TimerChannelNum::Channel3 => {
+                reg.mcr().modify(|_, w| w.mr3r().clear_bit());
+                reg.mcr().modify(|_, w| w.mr3s().clear_bit());
+                reg.mcr().modify(|_, w| w.mr3i().clear_bit());
+
+                reg.emr().modify(|_, w| w.em3().clear_bit());
+                reg.emr().modify(|_, w| w.emc3().clear());
+
+                reg.ir().modify(|_, w| w.mr3int().clear_bit());
+            }
+        }
+    }
+
+    fn channel_disable_pwm(&self, channelnum: TimerChannelNum, reg: &'static crate::pac::ctimer0::RegisterBlock) {
+        // To disable PWM:
+        // Clear PWM enable bit in PWM control register
+
+        match channelnum {
+            TimerChannelNum::Channel0 => {
+                reg.pwmc().modify(|_, w| w.pwmen0().match_());
+            }
+            TimerChannelNum::Channel1 => {
+                reg.pwmc().modify(|_, w| w.pwmen1().match_());
+            }
+            TimerChannelNum::Channel2 => {
+                reg.pwmc().modify(|_, w| w.pwmen2().match_());
+            }
+            TimerChannelNum::Channel3 => {
+                reg.pwmc().modify(|_, w| w.pwmen3().match_());
+            }
+        }
+    }
+
+    fn channel_start_pwm(&self, channelnum: TimerChannelNum, reg: &'static crate::pac::ctimer0::RegisterBlock) {
+        // To start PWM output on a channel:
+        // 1. Set PWM enable bit in PWM control register
+        // 2. Clear interrupt flag
+        // 3. Enable interrupt generation when match register matches the value in TC
+        match channelnum {
+            TimerChannelNum::Channel0 => {
+                reg.pwmc().modify(|_, w| w.pwmen0().pwm());
+                reg.ir().modify(|_, w| w.mr0int().clear_bit());
+                reg.mcr().modify(|_, w| w.mr0i().set_bit());
+            }
+            TimerChannelNum::Channel1 => {
+                reg.pwmc().modify(|_, w| w.pwmen1().pwm());
+                reg.ir().modify(|_, w| w.mr1int().clear_bit());
+                reg.mcr().modify(|_, w| w.mr1i().set_bit());
+            }
+            TimerChannelNum::Channel2 => {
+                reg.pwmc().modify(|_, w| w.pwmen2().pwm());
+                reg.ir().modify(|_, w| w.mr2int().clear_bit());
+                reg.mcr().modify(|_, w| w.mr2i().set_bit());
+            }
+            TimerChannelNum::Channel3 => {
+                reg.pwmc().modify(|_, w| w.pwmen3().pwm());
+                reg.ir().modify(|_, w| w.mr3int().clear_bit());
+                reg.mcr().modify(|_, w| w.mr3i().set_bit());
+            }
+        }
+    }
+}
+
+impl<'p> CTimerPwmPeriodChannel<'p> {
+    /// Take the `CTimer` instance supplied and use it as a simple PWM driver. Function returns constructed Pwm instance.
+    pub fn new<T: Instance>(_length_channel: impl Peripheral<P = T> + 'p, period: MicroSeconds) -> Result<Self> {
+        let channel_info = T::info();
+
+        let clock_rate = Hertz(channel_info.pwm_get_clock_freq());
+
+        let requested_pwm_rate: Hertz = period.into();
+
+        // we cannot clock faster than the supplied clock rate
+        if period.0 == 0 {
+            return Err(Error::InvalidPwmPeriod);
+        }
+        // assure precision is possible (10_000 ticks within PWM minimum)
+        if requested_pwm_rate.0 > clock_rate.0 / 10_000 {
+            return Err(Error::PwmPrecisionNotSupported);
+        }
+
+        // 10_000 clocks per period to achieve the desired precision.
+        let factor = clock_rate.0 / requested_pwm_rate.0;
+
+        // Set PWM period
+        channel_info.pwm_configure(factor);
+
+        Ok(Self {
+            _lifetime: PhantomData,
+            period,
+            count_max: factor,
+            info: channel_info,
+        })
+    }
+}
+
 /// Initializes the timer modules and returns a `CTimerManager` in the initialized state.
 pub fn init() {
     // SAFETY: This has no safety impact as we are getting a singleton register instance here and its dropped it the end of the function
@@ -812,3 +1152,36 @@ macro_rules! impl_pin {
 // Capture event pins
 // We can add all the GPIO pins here which can be used as capture event inputs
 impl_pin!(PIO1_7, F4, Enabled);
+
+/// A trait for pins that can be used as capture event inputs.
+pub trait CTimerMatchOutput: Pin + crate::Peripheral {
+    /// Configures the pin as a capture event input.
+    fn configure_for_ctimer_match_output(&self);
+}
+macro_rules! impl_pin {
+    ($piom_n:ident, $fn:ident, $invert:ident) => {
+        impl CTimerMatchOutput for crate::peripherals::$piom_n {
+            fn configure_for_ctimer_match_output(&self) {
+                self.set_function(crate::iopctl::Function::$fn);
+                self.set_drive_mode(DriveMode::PushPull);
+                self.set_pull(Pull::None);
+                self.set_slew_rate(SlewRate::Slow);
+                self.set_drive_strength(DriveStrength::Normal);
+                self.disable_analog_multiplex();
+                self.enable_input_buffer();
+                self.set_input_inverter(Inverter::$invert);
+            }
+        }
+    };
+}
+
+// CTimer Match output pins
+// We can add all the GPIO pins here which can be used as CTimer Match output pins
+impl_pin!(PIO0_20, F4, Enabled);
+impl_pin!(PIO0_6, F4, Enabled);
+impl_pin!(PIO0_31, F4, Enabled);
+impl_pin!(PIO2_6, F4, Enabled);
+impl_pin!(PIO2_8, F4, Enabled);
+impl_pin!(PIO3_8, F4, Enabled);
+impl_pin!(PIO3_9, F4, Enabled);
+impl_pin!(PIO3_10, F4, Enabled);

@@ -22,7 +22,12 @@
 //
 // CTimer[n] based PWM
 // ---
-// todo!()
+// RT6xx series has 4 Ctimer instances. Each Ctimer has 4 external match outputs.
+// PWM output can be configured on Ctimer MATn2:0 output pins
+// One additional match register determines PWM cycle length.
+// When match occurs in any of the other match registers, PWM out is set to high.
+// The timer is reset by the match register that is configured to set the PWM cycle length.
+// When the timer is reset to zero, all currently HIGH match outputs configured as PWM outputs are cleared
 
 /// include the traits that are implemented + exposed via this implementation
 use embassy_hal_internal::{Peripheral, PeripheralRef};
