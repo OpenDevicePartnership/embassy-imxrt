@@ -124,24 +124,6 @@ impl<'d> Channel<'d> {
         let xfercount = (mem_len / xferwidth) - 1;
         let channel = self.info.ch_num;
 
-        // Configure the channel descriptor
-        // NOTE: the DMA controller expects the memory buffer end address but peripheral address is actual
-        // SAFETY: unsafe due to use of a mutable static (DESCRIPTORS.list)
-        unsafe {
-            DESCRIPTORS.list[channel].reserved = 0;
-            if dir == Direction::MemoryToPeripheral {
-                DESCRIPTORS.list[channel].dst_data_end_addr = dstbase as u32;
-            } else {
-                DESCRIPTORS.list[channel].dst_data_end_addr = dstbase as u32 + (xfercount * xferwidth) as u32;
-            }
-            if dir == Direction::PeripheralToMemory {
-                DESCRIPTORS.list[channel].src_data_end_addr = srcbase as u32;
-            } else {
-                DESCRIPTORS.list[channel].src_data_end_addr = srcbase as u32 + (xfercount * xferwidth) as u32;
-            }
-            DESCRIPTORS.list[channel].nxt_desc_link_addr = 0;
-        }
-
         // Configure for transfer type, no hardware triggering (we'll trigger via software), high priority
         // SAFETY: unsafe due to .bits usage
         self.info.regs.channel(channel).cfg().write(|w| unsafe {
@@ -164,8 +146,19 @@ impl<'d> Channel<'d> {
         // SAFETY: unsafe due to .bits usage
         self.info.regs.channel(channel).xfercfg().write(|w| unsafe {
             w.cfgvalid().set_bit();
-            w.clrtrig().set_bit();
-            w.reload().clear_bit();
+
+            if options.is_continuous {
+                w.reload().enabled();
+                w.clrtrig().clear_bit();
+            } else {
+                w.reload().disabled();
+                w.clrtrig().set_bit();
+            }
+            if options.is_sw_trig {
+                w.swtrig().set_bit();
+            } else {
+                w.swtrig().clear_bit();
+            }
             w.setinta().set_bit();
             w.width().bits(options.width.into());
             if dir == Direction::PeripheralToMemory {
@@ -180,6 +173,35 @@ impl<'d> Channel<'d> {
             }
             w.xfercount().bits(xfercount as u16)
         });
+
+        // Configure the channel descriptor
+        // NOTE: the DMA controller expects the memory buffer end address but peripheral address is actual
+        // SAFETY: unsafe due to use of a mutable static (DESCRIPTORS.list)
+        unsafe {
+            if options.is_continuous {
+                let xfer_cfg = self.info.regs.channel(channel).xfercfg().read();
+                DESCRIPTORS.list[channel].reserved_reloadcfg = xfer_cfg.bits();
+            } else {
+                DESCRIPTORS.list[channel].reserved_reloadcfg = 0;
+            }
+
+            if dir == Direction::MemoryToPeripheral {
+                DESCRIPTORS.list[channel].dst_data_end_addr = dstbase as u32;
+            } else {
+                DESCRIPTORS.list[channel].dst_data_end_addr = dstbase as u32 + (xfercount * xferwidth) as u32;
+            }
+
+            if dir == Direction::PeripheralToMemory {
+                DESCRIPTORS.list[channel].src_data_end_addr = srcbase as u32;
+            } else {
+                DESCRIPTORS.list[channel].src_data_end_addr = srcbase as u32 + (xfercount * xferwidth) as u32;
+            }
+            if options.is_continuous {
+                DESCRIPTORS.list[channel].nxt_desc_link_addr = &DESCRIPTORS.list[channel] as *const _ as u32;
+            } else {
+                DESCRIPTORS.list[channel].nxt_desc_link_addr = 0;
+            }
+        }
     }
 
     /// Enable the DMA channel (only after configuring)
@@ -190,6 +212,40 @@ impl<'d> Channel<'d> {
             .regs
             .enableset0()
             .modify(|_, w| unsafe { w.ena().bits(1 << channel) });
+    }
+
+    #[cfg(feature = "defmt")]
+    /// Log the DMA channel transfer configuration
+    pub fn log_channel(&self) {
+        // Log DMA Channel Config Register
+        let channel = self.info.ch_num;
+        let dma_channel_cfg = self.info.regs.channel(channel).cfg().read();
+        defmt::info!(
+            "DMA Channel {} Config Register: 0x{=u32:x}",
+            channel,
+            dma_channel_cfg.bits()
+        );
+        // Log Interrupt Enable Set Register
+        let intenset0 = self.info.regs.intenset0().read();
+        defmt::info!("Interrupt Enable Set Register: 0x{=u32:x}", intenset0.bits());
+
+        // Log DMA Xfer Config Register
+        let xfer_cfg = self.info.regs.channel(channel).xfercfg().read();
+        defmt::info!(
+            "DMA Channel {} Xfer Config Register: 0x{=u32:x}",
+            channel,
+            xfer_cfg.bits()
+        );
+        // Log DMA Enable Set Register after enabling
+        let enableset0 = self.info.regs.enableset0().read();
+        defmt::info!("DMA Enable Set Register:0x{=u32:x}", enableset0.bits());
+        // Log DMA Xfer Config Register after triggering
+        let xfer_cfg_after = self.info.regs.channel(channel).xfercfg().read();
+        defmt::info!(
+            "DMA Channel {} Xfer Config Register (After Trigger): 0x{=u32:x}",
+            channel,
+            xfer_cfg_after.bits()
+        );
     }
 
     /// Disable the DMA channel
