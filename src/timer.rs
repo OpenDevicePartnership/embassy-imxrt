@@ -139,12 +139,13 @@ impl sealed::Sealed for Async {}
 impl Mode for Async {}
 
 /// A timer that captures events based on a specified edge and calls a user-defined callback.
-pub struct CaptureTimer<M: Mode> {
+pub struct CaptureTimer<M: Mode, P: CaptureEvent> {
     id: usize,
     event_clock_counts: u32,
     clk_freq: u32,
     _phantom: core::marker::PhantomData<M>,
     info: Info,
+    event_pin: P,
 }
 
 /// A timer that counts down to zero and calls a user-defined callback.
@@ -510,15 +511,13 @@ impl From<TriggerInput> for crate::pac::inputmux::ct32bit_cap::ct32bit_cap_sel::
     }
 }
 
-impl<M: Mode> CaptureTimer<M> {
+impl<M: Mode, P: CaptureEvent> CaptureTimer<M, P> {
     /// Returns the captured clock count
     /// Captured clock = (Capture value - previous counter value)
     fn get_event_capture_time_us(&self) -> u32 {
         let time_float = (self.event_clock_counts as f32 / self.clk_freq as f32) * 1000000.0;
-        let time_int = time_float as u32 as f32;
-        let interger_part = time_int as u32;
-        let decimal_part = ((time_float - time_int) * 1000000.0) as u32;
-        interger_part + decimal_part
+        let integer_part = time_float as u32;
+        integer_part
     }
 
     fn reset_and_enable(&self) {
@@ -531,7 +530,7 @@ impl<M: Mode> CaptureTimer<M> {
     }
 
     /// Start the capture timer
-    fn start(&mut self, event_input: TriggerInput, event_pin: impl CaptureEvent, edge: CaptureChEdge) {
+    fn start(&mut self, edge: CaptureChEdge) {
         let module = self.info.module;
         let channel = self.info.channel;
 
@@ -539,14 +538,14 @@ impl<M: Mode> CaptureTimer<M> {
 
         let inputmux = self.info.inputmux;
 
-        event_pin.configure_for_event_capture();
+        self.event_pin.configure_for_event_capture();
 
         self.info.cap_timer_interrupt_enable();
 
         inputmux
             .ct32bit_cap(module)
             .ct32bit_cap_sel(channel)
-            .modify(|_, w| w.capn_sel().variant(event_input.into()));
+            .modify(|_, w| w.capn_sel().variant(self.event_pin.get_trigger_input().into()));
 
         self.reset_and_enable();
     }
@@ -563,9 +562,9 @@ impl<M: Mode> CaptureTimer<M> {
     }
 }
 
-impl CaptureTimer<Async> {
+impl<P: CaptureEvent> CaptureTimer<Async, P> {
     /// Creates a new `CaptureTimer` in asynchronous mode.
-    pub fn new_async<T: Instance>(_inst: T, clk: impl ConfigurableClock) -> Self {
+    pub fn new_async<T: Instance>(_inst: T, pin: P, clk: impl ConfigurableClock) -> Self {
         let info = T::info();
         let module = info.module;
         T::interrupt_enable();
@@ -575,21 +574,16 @@ impl CaptureTimer<Async> {
             clk_freq: clk.get_clock_rate().unwrap(),
             _phantom: core::marker::PhantomData,
             info,
+            event_pin: pin,
         }
     }
 
     /// Waits asynchronously for the capture timer to record an event timestamp.
     /// This API can capture time till the counter has not crossed the original position after rollover
     /// Once the counter crosses the original position, the captured time is not accurate
-    pub async fn capture_event_time_us(
-        &mut self,
-        event_input: TriggerInput,
-        event_pin: impl CaptureEvent,
-        edge: CaptureChEdge,
-    ) -> u32 {
+    pub async fn capture_event_time_us(&mut self, edge: CaptureChEdge) -> u32 {
         let reg = self.info.regs;
-
-        self.start(event_input, event_pin, edge);
+        self.start(edge);
 
         self.event_clock_counts = reg.tc().read().bits(); // Take the initial count
 
@@ -612,32 +606,66 @@ impl CaptureTimer<Async> {
         })
         .await
     }
+
+    /// Trigger capture twice, return time us between these two capture
+    /// TODO: https://github.com/OpenDevicePartnership/embassy-imxrt/issues/229
+    pub async fn capture_cycle_time_us(&mut self, edge: CaptureChEdge) -> u32 {
+        let reg = self.info.regs;
+        self.start(edge);
+        let mut timer_hist = 0;
+        let mut first_captured = false;
+
+        // Implementation of waiting for the interrupt
+        poll_fn(|cx| {
+            WAKERS[self.id].register(cx.waker());
+
+            if self.info.input_event_captured() {
+                // First time capture, store data into timer hist and reenable interrupt
+                if first_captured == false {
+                    timer_hist = reg.cr(self.info.channel).read().bits();
+                    first_captured = true;
+                    self.info.cap_timer_interrupt_enable();
+                    Poll::Pending
+                } else {
+                    // Second time capture, and minus timer hist to calculate event_clock_counts
+                    let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                    if curr_event_clock_count < timer_hist {
+                        self.event_clock_counts = (u32::MAX - timer_hist) + curr_event_clock_count + 1_u32;
+                    } else {
+                        self.event_clock_counts = curr_event_clock_count - timer_hist;
+                    }
+                    self.info.cap_timer_interrupt_disable();
+                    Poll::Ready(self.get_event_capture_time_us())
+                }
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
+    }
 }
 
-impl CaptureTimer<Blocking> {
+impl<P: CaptureEvent> CaptureTimer<Blocking, P> {
     /// Creates a new `CaptureTimer` in blocking mode.
-    pub fn new_blocking<T: Instance>(_inst: T, clk: impl ConfigurableClock) -> Self {
+    pub fn new_blocking<T: Instance>(_inst: T, pin: P, clk: impl ConfigurableClock) -> Self {
         let info = T::info();
         let module = info.module;
+        T::interrupt_enable();
         Self {
             id: COUNT_CHANNEL + module * CHANNEL_PER_MODULE + info.channel,
             event_clock_counts: 0,
             clk_freq: clk.get_clock_rate().unwrap(),
             _phantom: core::marker::PhantomData,
             info,
+            event_pin: pin,
         }
     }
     /// Waits synchronously for the capture timer
     /// This API can capture time till the counter has not crossed the original position after rollover
     /// Once the counter crosses the original position, the captured time is not accurate
-    pub fn capture_event_time_us(
-        &mut self,
-        event_input: TriggerInput,
-        event_pin: impl CaptureEvent,
-        edge: CaptureChEdge,
-    ) -> u32 {
+    pub fn capture_event_time_us(&mut self, edge: CaptureChEdge) -> u32 {
         let reg = self.info.regs;
-        self.start(event_input, event_pin, edge);
+        self.start(edge);
 
         self.event_clock_counts = reg.tc().read().bits(); // Take the initial count
 
@@ -651,6 +679,34 @@ impl CaptureTimer<Blocking> {
                     self.event_clock_counts = curr_event_clock_count - prev_event_clock_count;
                 }
                 return self.get_event_capture_time_us();
+            }
+        }
+    }
+    /// Trigger capture twice, return time us between these two capture
+    pub fn capture_cycle_time_us(&mut self, edge: CaptureChEdge) -> u32 {
+        let reg = self.info.regs;
+        self.start(edge);
+        let mut timer_hist = 0;
+        let mut first_captured = false;
+
+        loop {
+            if self.info.input_event_captured() {
+                // First time capture, store data into timer hist and reenable interrupt
+                if first_captured == false {
+                    timer_hist = reg.cr(self.info.channel).read().bits();
+                    first_captured = true;
+                    self.info.cap_timer_interrupt_enable();
+                } else {
+                    // Second time capture, and minus timer hist to calculate event_clock_counts
+                    let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                    if curr_event_clock_count < timer_hist {
+                        self.event_clock_counts = (u32::MAX - timer_hist) + curr_event_clock_count + 1_u32;
+                    } else {
+                        self.event_clock_counts = curr_event_clock_count - timer_hist;
+                    }
+                    self.info.cap_timer_interrupt_disable();
+                    return self.get_event_capture_time_us();
+                }
             }
         }
     }
@@ -766,7 +822,7 @@ impl<M: Mode> Drop for CountingTimer<M> {
     }
 }
 
-impl<M: Mode> Drop for CaptureTimer<M> {
+impl<M: Mode, P: CaptureEvent> Drop for CaptureTimer<M, P> {
     fn drop(&mut self) {
         self.info.cap_timer_interrupt_disable();
         self.info.cap_timer_disable_falling_edge_event();
@@ -1119,9 +1175,11 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for CtimerInterrup
 pub trait CaptureEvent: Pin + crate::Peripheral {
     /// Configures the pin as a capture event input.
     fn configure_for_event_capture(&self);
+    /// Get trigger input of event pin
+    fn get_trigger_input(&self) -> TriggerInput;
 }
 macro_rules! impl_pin {
-    ($piom_n:ident, $fn:ident, $invert:ident) => {
+    ($piom_n:ident, $fn:ident, $invert:ident, $trig:ident) => {
         impl CaptureEvent for crate::peripherals::$piom_n {
             fn configure_for_event_capture(&self) {
                 self.set_function(crate::iopctl::Function::$fn);
@@ -1133,13 +1191,37 @@ macro_rules! impl_pin {
                 self.enable_input_buffer();
                 self.set_input_inverter(Inverter::$invert);
             }
+
+            fn get_trigger_input(&self) -> TriggerInput {
+                TriggerInput::$trig
+            }
         }
     };
 }
 
 // Capture event pins
 // We can add all the GPIO pins here which can be used as capture event inputs
-impl_pin!(PIO1_7, F4, Enabled);
+// NXP user manual section 8.6.8 and Pin Function Table in section 7.5.3
+impl_pin!(PIO0_4, F4, Enabled, TrigIn0);
+impl_pin!(PIO0_5, F4, Enabled, TrigIn1);
+impl_pin!(PIO0_11, F4, Enabled, TrigIn2);
+impl_pin!(PIO0_12, F4, Enabled, TrigIn3);
+impl_pin!(PIO0_18, F4, Enabled, TrigIn4);
+impl_pin!(PIO0_19, F4, Enabled, TrigIn5);
+impl_pin!(PIO0_20, F5, Enabled, TrigIn11);
+impl_pin!(PIO0_25, F4, Enabled, TrigIn6);
+impl_pin!(PIO0_26, F4, Enabled, TrigIn7);
+impl_pin!(PIO1_0, F4, Enabled, TrigIn8);
+impl_pin!(PIO1_7, F4, Enabled, TrigIn9);
+impl_pin!(PIO1_8, F3, Enabled, TrigIn12);
+impl_pin!(PIO1_10, F4, Enabled, TrigIn10);
+impl_pin!(PIO1_23, F4, Enabled, TrigIn8);
+impl_pin!(PIO1_29, F4, Enabled, TrigIn13);
+impl_pin!(PIO2_14, F4, Enabled, TrigIn1);
+impl_pin!(PIO2_21, F4, Enabled, TrigIn14);
+impl_pin!(PIO2_31, F4, Enabled, TrigIn15);
+impl_pin!(PIO3_12, F4, Enabled, TrigIn0);
+impl_pin!(PIO3_13, F4, Enabled, TrigIn1);
 
 /// A trait for pins that can be used as CTimer match outputs
 pub trait CTimerMatchOutput: Pin + crate::Peripheral {
