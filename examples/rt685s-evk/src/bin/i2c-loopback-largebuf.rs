@@ -12,11 +12,8 @@ use embassy_imxrt::{bind_interrupts, peripherals};
 use embedded_hal_async::i2c::I2c;
 
 const ADDR: u8 = 0x20;
-const MAX_I2C_CHUNK_SIZE: usize = 512;
-const MASTER_BUFLEN: usize = 2000;
-// slave buffer has to be 1 bigger than master buffer for each chunk
-//because master does not handle end of read properly
-const SLAVE_BUFLEN: usize = MASTER_BUFLEN + (MASTER_BUFLEN / MAX_I2C_CHUNK_SIZE) + 1;
+const MAX_I2C_CHUNK_SIZE: usize = 1024;
+const BUFLEN: usize = 2500;
 const SLAVE_ADDR: Option<Address> = Address::new(ADDR);
 
 bind_interrupts!(struct Irqs {
@@ -26,8 +23,8 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::task]
 async fn slave_service(mut slave: I2cSlave<'static, Async>) {
-    let mut r_buf = [0xAA; SLAVE_BUFLEN];
-    let mut t_buf = [0xAA; SLAVE_BUFLEN];
+    let mut r_buf = [0xAA; BUFLEN];
+    let mut t_buf = [0xAA; BUFLEN];
 
     // Initialize write buffer with increment numbers
     for (i, e) in t_buf.iter_mut().enumerate() {
@@ -48,7 +45,7 @@ async fn slave_service(mut slave: I2cSlave<'static, Async>) {
             Command::Read => {
                 info!("Read");
                 loop {
-                    let end = (t_offset + MAX_I2C_CHUNK_SIZE + 1).min(t_buf.len());
+                    let end = (t_offset + MAX_I2C_CHUNK_SIZE).min(t_buf.len());
                     let t_chunk = &t_buf[t_offset..end];
                     match slave.respond_to_read(t_chunk).await.unwrap() {
                         Response::Complete(n) => {
@@ -93,8 +90,8 @@ async fn slave_service(mut slave: I2cSlave<'static, Async>) {
 async fn master_service(mut master: I2cMaster<'static, Async>) {
     const ADDR: u8 = 0x20;
 
-    let mut w_buf = [0xAA; MASTER_BUFLEN];
-    let mut r_buf = [0xAA; MASTER_BUFLEN];
+    let mut w_buf = [0xAA; BUFLEN];
+    let mut r_buf = [0xAA; BUFLEN];
 
     // Initialize write buffer with increment numbers
     for (i, e) in w_buf.iter_mut().enumerate() {
@@ -108,6 +105,14 @@ async fn master_service(mut master: I2cMaster<'static, Async>) {
     let r_end = r_buf.len();
     info!("i2cm read {} bytes", r_end);
     master.read(ADDR, &mut r_buf[0..r_end]).await.unwrap();
+
+    let tend = w_buf.len();
+    let r_end = r_buf.len();
+    info!("i2cm write {} bytes, read {} bytes", tend, r_end);
+    master
+        .write_read(ADDR, &w_buf[0..tend], &mut r_buf[0..r_end])
+        .await
+        .unwrap();
 }
 
 #[embassy_executor::main]

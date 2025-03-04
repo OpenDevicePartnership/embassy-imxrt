@@ -600,7 +600,7 @@ impl I2cSlave<'_, Async> {
     /// we will get stuck in this function
     pub async fn respond_to_read(&mut self, buf: &[u8]) -> Result<Response> {
         let mut xfer_count = 0;
-        for chunk in buf.chunks(MAX_I2C_CHUNK_SIZE + 1) {
+        for chunk in buf.chunks(MAX_I2C_CHUNK_SIZE) {
             let result = self.respond_to_read_inner(chunk).await?;
             match result {
                 Response::Complete(count) => {

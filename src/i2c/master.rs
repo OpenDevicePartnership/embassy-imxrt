@@ -761,6 +761,30 @@ impl<'a> I2cMaster<'a, Async> {
         )
         .await
     }
+
+    async fn write_chunks(&mut self, address: u16, write: &[u8]) -> Result<()> {
+        // write of 0 size is allowed according to i2c spec
+        if write.is_empty() {
+            self.write_no_stop(address, write).await?;
+        }
+
+        for chunk in write.chunks(MAX_I2C_CHUNK_SIZE) {
+            self.write_no_stop(address, chunk).await?;
+        }
+        Ok(())
+    }
+
+    async fn read_chunks(&mut self, address: u16, read: &mut [u8]) -> Result<()> {
+        // read of 0 size is not allowed according to i2c spec
+        if read.is_empty() {
+            return Err(TransferError::OtherBusError.into());
+        }
+
+        for chunk in read.chunks_mut(MAX_I2C_CHUNK_SIZE) {
+            self.read_no_stop(address, chunk).await?;
+        }
+        Ok(())
+    }
 }
 
 /// Error Types for I2C communication
@@ -832,27 +856,19 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A
 
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I2c<A> for I2cMaster<'_, Async> {
     async fn read(&mut self, address: A, read: &mut [u8]) -> Result<()> {
-        for chunk in read.chunks_mut(MAX_I2C_CHUNK_SIZE) {
-            self.read_no_stop(address.into(), chunk).await?;
-        }
+        self.read_chunks(address.into(), read).await?;
         self.stop().await
     }
 
     async fn write(&mut self, address: A, write: &[u8]) -> Result<()> {
-        for chunk in write.chunks(MAX_I2C_CHUNK_SIZE) {
-            self.write_no_stop(address.into(), chunk).await?;
-        }
+        self.write_chunks(address.into(), write).await?;
         self.stop().await
     }
 
     async fn write_read(&mut self, address: A, write: &[u8], read: &mut [u8]) -> Result<()> {
         let address = address.into();
-        for chunk in write.chunks(MAX_I2C_CHUNK_SIZE) {
-            self.write_no_stop(address, chunk).await?;
-        }
-        for chunk in read.chunks_mut(MAX_I2C_CHUNK_SIZE) {
-            self.read_no_stop(address, chunk).await?;
-        }
+        self.write_chunks(address, write).await?;
+        self.read_chunks(address, read).await?;
         self.stop().await
     }
 
