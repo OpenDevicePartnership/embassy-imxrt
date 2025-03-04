@@ -363,6 +363,8 @@ embassy_hal_internal::peripherals!(
     PIO7_29,
     PIO7_30,
     PIO7_31,
+    PIOFC15_SCL,
+    PIOFC15_SDA,
     PMC_PMIC,
     PIMCTL,
     POWERQUAD,
