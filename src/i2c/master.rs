@@ -9,7 +9,7 @@ use embassy_hal_internal::into_ref;
 
 use super::{
     Async, Blocking, Error, Info, Instance, InterruptHandler, MasterDma, Mode, Result, SclPin, SdaPin, TransferError,
-    I2C_WAKERS, TEN_BIT_PREFIX,
+    I2C_WAKERS, MAX_I2C_CHUNK_SIZE, TEN_BIT_PREFIX,
 };
 use crate::interrupt::typelevel::Interrupt;
 use crate::{dma, interrupt, Peripheral};
@@ -157,7 +157,7 @@ impl<'a> I2cMaster<'a, Blocking> {
 
         i2cregs.mstdat().write(|w|
             // SAFETY: only unsafe due to .bits usage
-            unsafe { w.data().bits(address << 1 | u8::from(is_read)) });
+            unsafe { w.data().bits((address << 1) | u8::from(is_read)) });
 
         i2cregs.mstctl().write(|w| w.mststart().set_bit());
 
@@ -393,7 +393,7 @@ impl<'a> I2cMaster<'a, Async> {
 
         i2cregs.mstdat().write(|w|
             // SAFETY: only unsafe due to .bits usage
-            unsafe { w.data().bits(address << 1 | u8::from(is_read)) });
+            unsafe { w.data().bits((address << 1) | u8::from(is_read)) });
 
         i2cregs.mstctl().write(|w| w.mststart().set_bit());
 
@@ -849,6 +849,31 @@ impl<'a> I2cMaster<'a, Async> {
         )
         .await
     }
+
+    async fn write_chunks(&mut self, address: u16, write: &[u8]) -> Result<()> {
+        // write of 0 size is allowed according to i2c spec
+        if write.is_empty() {
+            self.write_no_stop(address, write).await?;
+            return Ok(());
+        }
+
+        for chunk in write.chunks(MAX_I2C_CHUNK_SIZE) {
+            self.write_no_stop(address, chunk).await?;
+        }
+        Ok(())
+    }
+
+    async fn read_chunks(&mut self, address: u16, read: &mut [u8]) -> Result<()> {
+        // read of 0 size is not allowed according to i2c spec
+        if read.is_empty() {
+            return Err(TransferError::OtherBusError.into());
+        }
+
+        for chunk in read.chunks_mut(MAX_I2C_CHUNK_SIZE) {
+            self.read_no_stop(address, chunk).await?;
+        }
+        Ok(())
+    }
 }
 
 /// Error Types for I2C communication
@@ -920,19 +945,19 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A
 
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I2c<A> for I2cMaster<'_, Async> {
     async fn read(&mut self, address: A, read: &mut [u8]) -> Result<()> {
-        self.read_no_stop(address.into(), read).await?;
+        self.read_chunks(address.into(), read).await?;
         self.stop().await
     }
 
     async fn write(&mut self, address: A, write: &[u8]) -> Result<()> {
-        self.write_no_stop(address.into(), write).await?;
+        self.write_chunks(address.into(), write).await?;
         self.stop().await
     }
 
     async fn write_read(&mut self, address: A, write: &[u8], read: &mut [u8]) -> Result<()> {
         let address = address.into();
-        self.write_no_stop(address, write).await?;
-        self.read_no_stop(address, read).await?;
+        self.write_chunks(address, write).await?;
+        self.read_chunks(address, read).await?;
         self.stop().await
     }
 
