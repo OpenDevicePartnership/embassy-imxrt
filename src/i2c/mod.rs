@@ -127,6 +127,9 @@ impl_instance!(0, 1, 2, 3, 4, 5, 6, 7);
 const I2C_COUNT: usize = 8;
 static I2C_WAKERS: [AtomicWaker; I2C_COUNT] = [const { AtomicWaker::new() }; I2C_COUNT];
 
+/// Maximum I2C chunk size for DMA transfers
+pub const MAX_I2C_CHUNK_SIZE: usize = 1024;
+
 /// Ten bit addresses start with first byte 0b11110XXX
 pub const TEN_BIT_PREFIX: u8 = 0b11110 << 3;
 
