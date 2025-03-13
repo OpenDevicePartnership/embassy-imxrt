@@ -64,7 +64,7 @@ jobs:
       fail-fast: false
       matrix:
         commit: ${{ fromJSON(needs.commit_list.outputs.commits) }}
-        workdir: [ ".", "examples/rt685s-evk"]
+        workdir: [ ".", "examples/rt685s-evk", "examples/rt633", "examples/rt685s-evk-ram" ]
 
     steps:
       - uses: actions/checkout@v4
@@ -96,7 +96,7 @@ jobs:
         # Get early warning of new lints which are regularly introduced in beta channels.
         toolchain: [stable, beta]
         commit: ${{ fromJSON(needs.commit_list.outputs.commits) }}
-        workdir: [ ".", "examples/rt685s-evk"]
+        workdir: [ ".", "examples/rt685s-evk", "examples/rt633", "examples/rt685s-evk-ram" ]
 
     steps:
       - uses: actions/checkout@v4
