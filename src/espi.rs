@@ -278,6 +278,104 @@ pub struct PortEvent {
     pub direction: bool,
 }
 
+/// Wire Change Event
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct WireChangeEvent {
+    slp_s3n: bool,
+    slp_s4n: bool,
+    slp_s5n: bool,
+    sus_stat: bool,
+    pltrstn: bool,
+    oob_rst_warn: bool,
+    host_rst_warn: bool,
+    sus_warnn: bool,
+    sus_pwrdn_ackn: bool,
+    slp_an: bool,
+    slp_lann: bool,
+    slp_wlann: bool,
+    p2e: u8,
+    host_c10n: bool,
+}
+
+impl WireChangeEvent {
+    /// Set when power to non-critical systems should be shut off in
+    /// S3 (Suspend to RAM).
+    pub fn is_s3_sleep_control(&self) -> bool {
+        self.slp_s3n
+    }
+
+    /// Set when power to non-critical systems should be shut off in
+    /// S4 (Suspend to Disk).
+    pub fn is_s4_sleep_control(&self) -> bool {
+        self.slp_s4n
+    }
+
+    /// Set when power to non-critical systems should be shut off in
+    /// S5 (Soft Off).
+    pub fn is_s5_sleep_control(&self) -> bool {
+        self.slp_s5n
+    }
+
+    /// Set when the system will be entering a low power state soon.
+    pub fn is_suspend_status(&self) -> bool {
+        self.sus_stat
+    }
+
+    /// Command to indicate Platform Reset assertion and de-assertion.
+    pub fn is_platform_reset(&self) -> bool {
+        self.pltrstn
+    }
+
+    /// Sent by controller just begore the OOB processor is about to
+    /// enter reset.
+    pub fn is_oob_reset_warn(&self) -> bool {
+        self.oob_rst_warn
+    }
+
+    /// Sent by controller just before the Host is about to enter
+    /// reset.
+    pub fn is_host_reset_warn(&self) -> bool {
+        self.host_rst_warn
+    }
+
+    /// Suspend about to happen.
+    pub fn is_suspend_warn(&self) -> bool {
+        self.sus_warnn
+    }
+
+    /// Host indicates that suspend power well can be shut down
+    /// safely.
+    pub fn is_suspend_power_down_ack(&self) -> bool {
+        self.sus_pwrdn_ackn
+    }
+
+    /// Used when in Sx sleep but Management Engine is on.
+    pub fn is_sleep_a(&self) -> bool {
+        self.slp_an
+    }
+
+    /// Wired LAN can be powered down.
+    pub fn is_sleep_lan(&self) -> bool {
+        self.slp_lann
+    }
+
+    /// Wireless LAN can be powered down.
+    pub fn is_sleep_wlan(&self) -> bool {
+        self.slp_wlann
+    }
+
+    /// PCH to EC byte
+    pub fn p2e(&self) -> u8 {
+        self.p2e
+    }
+
+    /// Asserted when Host has entered deep power down state C10 or
+    /// deeper.
+    pub fn is_host_c10(&self) -> bool {
+        self.host_c10n
+    }
+}
+
 /// eSPI events.
 pub enum Event {
     /// Port 0 has pending events
@@ -299,7 +397,25 @@ pub enum Event {
     Port80,
 
     /// Change in virtual wires
-    WireChange,
+    WireChange(WireChangeEvent),
+}
+
+/// eSPI Boot Status.
+pub enum BootStatus {
+    /// Success
+    Success,
+
+    /// Failure
+    Failure,
+}
+
+impl From<BootStatus> for bool {
+    fn from(status: BootStatus) -> bool {
+        match status {
+            BootStatus::Success => true,
+            _ => false,
+        }
+    }
 }
 
 /// eSPI driver.
@@ -542,7 +658,25 @@ impl<'d> Espi<'d> {
                     Poll::Ready(Ok(Event::Port80))
                 } else if me.info.regs.mstat().read().wire_chg().bit_is_set() {
                     me.info.regs.mstat().write(|w| w.wire_chg().clear_bit_by_one());
-                    Poll::Ready(Ok(Event::WireChange))
+
+                    let event = WireChangeEvent {
+                        slp_s3n: me.info.regs.wirero().read().slp_s3n().bit_is_set(),
+                        slp_s4n: me.info.regs.wirero().read().slp_s4n().bit_is_set(),
+                        slp_s5n: me.info.regs.wirero().read().slp_s5n().bit_is_set(),
+                        sus_stat: me.info.regs.wirero().read().sus_stat().bit_is_set(),
+                        pltrstn: me.info.regs.wirero().read().pltrstn().bit_is_set(),
+                        oob_rst_warn: me.info.regs.wirero().read().oob_rst_warn().bit_is_set(),
+                        host_rst_warn: me.info.regs.wirero().read().host_rst_warn().bit_is_set(),
+                        sus_warnn: me.info.regs.wirero().read().sus_warnn().bit_is_set(),
+                        sus_pwrdn_ackn: me.info.regs.wirero().read().sus_pwrdn_ackn().bit_is_set(),
+                        slp_an: me.info.regs.wirero().read().slp_an().bit_is_set(),
+                        slp_lann: me.info.regs.wirero().read().slp_lann().bit_is_set(),
+                        slp_wlann: me.info.regs.wirero().read().slp_wlann().bit_is_set(),
+                        p2e: me.info.regs.wirero().read().p2e().bits(),
+                        host_c10n: me.info.regs.wirero().read().host_c10n().bit_is_set(),
+                    };
+
+                    Poll::Ready(Ok(Event::WireChange(event)))
                 } else if me.info.regs.mstat().read().crcerr().bit_is_set() {
                     me.info.regs.mstat().write(|w| w.crcerr().clear_bit_by_one());
                     Poll::Ready(Err(Error::Crc))
@@ -615,6 +749,113 @@ impl<'d> Espi<'d> {
             },
         )
         .await
+    }
+
+    /// Acknowledge OOB Reset.
+    ///
+    /// Active High.
+    pub fn oob_reset_ack(&mut self) {
+        self.info.regs.wirewo().write(|w| w.oob_rst_ack().set_bit());
+        self.block_for_vwire_done();
+    }
+
+    /// Generate WAKE# event to wake Host up from Sx on any
+    /// event. Also a general purpose event to wake on Lid switch or
+    /// AC insertion.
+    ///
+    /// If the event occurs while Host is in S0, an SCI is generated
+    /// instead.
+    ///
+    /// Active Low.
+    pub fn wake(&mut self) {
+        self.info.regs.wirewo().write(|w| w.waken_scin().clear_bit());
+        self.block_for_vwire_done();
+    }
+
+    /// Generate PME# event to wake the Host from Sx through PCI PME#.
+    ///
+    /// Active Low.
+    pub fn pme(&mut self) {
+        self.info.regs.wirewo().write(|w| w.pmen().clear_bit());
+        self.block_for_vwire_done();
+    }
+
+    /// Generate SCI event resulting in ACPI method being invoked by
+    /// the OS.
+    ///
+    /// Active Low.
+    pub fn sci(&mut self) {
+        self.info.regs.wirewo().write(|w| w.scin().clear_bit());
+        self.block_for_vwire_done();
+    }
+
+    /// Generate SMI event resulting in SMI code being invoked by the
+    /// BIOS.
+    ///
+    /// Active Low.
+    pub fn smi(&mut self) {
+        self.info.regs.wirewo().write(|w| w.smin().clear_bit());
+        self.block_for_vwire_done();
+    }
+
+    /// Generate RCIN event.
+    ///
+    /// Active Low.
+    pub fn rcin(&mut self) {
+        self.info.regs.wirewo().write(|w| w.rcinn().clear_bit());
+        self.block_for_vwire_done();
+    }
+
+    /// Acknowledge Host Reset. Used in response to HOST_RST_WARN.
+    ///
+    /// Active High
+    pub fn host_reset_ack(&mut self) {
+        self.info.regs.wirewo().write(|w| w.host_rst_ack().set_bit());
+        self.block_for_vwire_done();
+    }
+
+    /// Acknowledge Suspend Warn.
+    ///
+    /// Active Low.
+    pub fn suspend_ack(&mut self) {
+        self.info.regs.wirewo().write(|w| w.susackn().clear_bit());
+        self.block_for_vwire_done();
+    }
+
+    /// EC to PCH byte.
+    pub fn e2p(&mut self, data: u8) {
+        self.info.regs.wirewo().write(|w| unsafe { w.e2p().bits(data) });
+        self.block_for_vwire_done();
+    }
+
+    /// Sent when EC or BMC has completed its boot process as an
+    /// indication to eSPI controller to continue with G3 to S0 exit.
+    ///
+    /// Active High.
+    pub fn boot_done(&mut self) {
+        self.info.regs.wirewo().write(|w| w.boot_done().set_bit());
+        self.block_for_vwire_done();
+    }
+
+    /// If boot ended in success, set to `true`.
+    ///
+    /// Active High.
+    pub fn boot_status(&mut self, status: BootStatus) {
+        self.info.regs.wirewo().write(|w| w.boot_errn().variant(status.into()));
+        self.block_for_vwire_done();
+    }
+
+    /// To be called when Host goes into G3.
+    ///
+    /// Active High.
+    pub fn dsw_pwrok_reset(&mut self) {
+        self.info.regs.wirewo().write(|w| w.dsw_pwrok_rst().set_bit());
+        self.block_for_vwire_done();
+    }
+
+    fn block_for_vwire_done(&self) {
+        // No interrupt event available, must busy loop
+        while self.info.regs.wirewo().read().done().bit_is_clear() {}
     }
 
     /// Calls `f` to check if we are ready or not.

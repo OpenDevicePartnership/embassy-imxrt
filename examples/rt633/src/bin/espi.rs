@@ -9,7 +9,7 @@ use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_imxrt::bind_interrupts;
 use embassy_imxrt::espi::{
-    Base, Capabilities, Config, Direction, Espi, Event, InterruptHandler, Len, Maxspd, PortConfig,
+    Base, BootStatus, Capabilities, Config, Direction, Espi, Event, InterruptHandler, Len, Maxspd, PortConfig,
 };
 use embassy_imxrt::peripherals::ESPI;
 use {defmt_rtt as _, panic_probe as _};
@@ -77,6 +77,10 @@ async fn main(_spawner: Spawner) {
 
     data.fill(0);
 
+    // Boot success
+    espi.boot_status(BootStatus::Success);
+    espi.boot_done();
+
     loop {
         let event = espi.wait_for_event().await;
 
@@ -85,8 +89,20 @@ async fn main(_spawner: Spawner) {
                 info!("Port 0: Contents: {:08x}", &data[..64]);
                 espi.complete_port(0).await;
             }
-            Ok(Event::WireChange) => {
-                info!("Wire Change!");
+            Ok(Event::WireChange(event)) => {
+                info!("Wire Change! {}", event);
+
+                if event.is_host_reset_warn() {
+                    espi.host_reset_ack();
+                }
+
+                if event.is_suspend_warn() {
+                    espi.suspend_ack();
+                }
+
+                if event.is_oob_reset_warn() {
+                    espi.oob_reset_ack();
+                }
             }
             Err(_) => {
                 error!("Failed");

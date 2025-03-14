@@ -896,7 +896,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
                 reg.emr().modify(|_, w| w.em0().clear_bit());
                 reg.emr().modify(|_, w| w.emc0().set_());
 
-                reg.ir().modify(|_, w| w.mr0int().set_bit());
+                reg.ir().modify(|_, w| w.mr0int().clear_bit_by_one());
 
                 reg.pwmc().modify(|_, w| w.pwmen0().pwm());
             }
@@ -909,7 +909,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
                 reg.emr().modify(|_, w| w.emc1().set_());
 
                 // Write 1 to IR bit to clear interrupt
-                reg.ir().modify(|_, w| w.mr1int().set_bit());
+                reg.ir().modify(|_, w| w.mr1int().clear_bit_by_one());
 
                 reg.pwmc().modify(|_, w| w.pwmen1().pwm());
             }
@@ -921,7 +921,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
                 reg.emr().modify(|_, w| w.em2().clear_bit());
                 reg.emr().modify(|_, w| w.emc2().set_());
 
-                reg.ir().modify(|_, w| w.mr2int().set_bit());
+                reg.ir().modify(|_, w| w.mr2int().clear_bit_by_one());
 
                 reg.pwmc().modify(|_, w| w.pwmen2().pwm());
             }
@@ -933,7 +933,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
                 reg.emr().modify(|_, w| w.em3().clear_bit());
                 reg.emr().modify(|_, w| w.emc3().set_());
 
-                reg.ir().modify(|_, w| w.mr3int().set_bit());
+                reg.ir().modify(|_, w| w.mr3int().clear_bit_by_one());
 
                 reg.pwmc().modify(|_, w| w.pwmen3().pwm());
             }
@@ -1114,7 +1114,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for CtimerInterrup
 
         if ir.mr0int().bit_is_set() {
             reg.mcr().modify(|_, w| w.mr0i().clear_bit());
-            reg.ir().modify(|_, w| w.mr0int().set_bit());
+            reg.ir().modify(|_, w| w.mr0int().clear_bit_by_one());
             reg.mr(0).write(|w| unsafe {
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
@@ -1123,7 +1123,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for CtimerInterrup
         }
         if ir.mr1int().bit_is_set() {
             reg.mcr().modify(|_, w| w.mr1i().clear_bit());
-            reg.ir().modify(|_, w| w.mr1int().set_bit());
+            reg.ir().modify(|_, w| w.mr1int().clear_bit_by_one());
             reg.mr(1).write(|w| unsafe {
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
@@ -1132,7 +1132,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for CtimerInterrup
         }
         if ir.mr2int().bit_is_set() {
             reg.mcr().modify(|_, w| w.mr2i().clear_bit());
-            reg.ir().modify(|_, w| w.mr2int().set_bit());
+            reg.ir().modify(|_, w| w.mr2int().clear_bit_by_one());
             reg.mr(2).write(|w| unsafe {
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
@@ -1141,7 +1141,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for CtimerInterrup
         }
         if ir.mr3int().bit_is_set() {
             reg.mcr().modify(|_, w| w.mr3i().clear_bit());
-            reg.ir().modify(|_, w| w.mr3int().set_bit());
+            reg.ir().modify(|_, w| w.mr3int().clear_bit_by_one());
             reg.mr(3).write(|w| unsafe {
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
@@ -1150,22 +1150,22 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for CtimerInterrup
         }
         if ir.cr0int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap0i().clear_bit());
-            reg.ir().modify(|_, w| w.cr0int().set_bit());
+            reg.ir().modify(|_, w| w.cr0int().clear_bit_by_one());
             WAKERS[module * CHANNEL_PER_MODULE + COUNT_CHANNEL].wake();
         }
         if ir.cr1int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap1i().clear_bit());
-            reg.ir().modify(|_, w| w.cr1int().set_bit());
+            reg.ir().modify(|_, w| w.cr1int().clear_bit_by_one());
             WAKERS[module * CHANNEL_PER_MODULE + COUNT_CHANNEL + 1].wake();
         }
         if ir.cr2int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap2i().clear_bit());
-            reg.ir().modify(|_, w| w.cr2int().set_bit());
+            reg.ir().modify(|_, w| w.cr2int().clear_bit_by_one());
             WAKERS[module * CHANNEL_PER_MODULE + COUNT_CHANNEL + 2].wake();
         }
         if ir.cr3int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap3i().clear_bit());
-            reg.ir().modify(|_, w| w.cr3int().set_bit());
+            reg.ir().modify(|_, w| w.cr3int().clear_bit_by_one());
             WAKERS[module * CHANNEL_PER_MODULE + COUNT_CHANNEL + 3].wake();
         }
     }

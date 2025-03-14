@@ -97,8 +97,8 @@ document-features = "0.2.7"
 paste = "1.0"
 
 # PACs
-mimxrt685s-pac = { version = "0.3.0", optional = true, features = ["rt", "critical-section"] }
-mimxrt633s-pac = { version = "0.3.0", optional = true, features = ["rt", "critical-section"] }
+mimxrt685s-pac = { version = "0.4.0", optional = true, features = ["rt", "critical-section"] }
+mimxrt633s-pac = { version = "0.4.0", optional = true, features = ["rt", "critical-section"] }
 
 [dev-dependencies]
 embassy-executor = { git = "https://github.com/embassy-rs/embassy" }
