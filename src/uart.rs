@@ -556,7 +556,7 @@ impl<'a> UartTx<'a, Async> {
 
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
 
-        Ok(Self::new_inner::<T>(Some(tx_dma)))
+        Ok(Self::new_inner::<T>(tx_dma))
     }
 
     /// Transmit the provided buffer asynchronously.
@@ -687,7 +687,7 @@ impl<'a> UartRx<'a, Async> {
 
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
-        Ok(Self::new_inner::<T>(Some(rx_dma)))
+        Ok(Self::new_inner::<T>(rx_dma))
     }
 
     /// Read from UART RX asynchronously.
@@ -788,8 +788,8 @@ impl<'a> Uart<'a, Async> {
 
         Ok(Self {
             info: T::info(),
-            tx: UartTx::new_inner::<T>(Some(tx_dma)),
-            rx: UartRx::new_inner::<T>(Some(rx_dma)),
+            tx: UartTx::new_inner::<T>(tx_dma),
+            rx: UartRx::new_inner::<T>(rx_dma),
         })
     }
 
@@ -834,8 +834,8 @@ impl<'a> Uart<'a, Async> {
 
         Ok(Self {
             info: T::info(),
-            tx: UartTx::new_inner::<T>(Some(tx_dma)),
-            rx: UartRx::new_inner::<T>(Some(rx_dma)),
+            tx: UartTx::new_inner::<T>(tx_dma),
+            rx: UartRx::new_inner::<T>(rx_dma),
         })
     }
 

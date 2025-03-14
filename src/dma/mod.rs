@@ -6,6 +6,7 @@ pub mod transfer;
 use core::marker::PhantomData;
 use core::ptr;
 
+use embassy_hal_internal::impl_peripheral;
 use embassy_hal_internal::interrupt::InterruptExt;
 use embassy_sync::waitqueue::AtomicWaker;
 
@@ -145,16 +146,20 @@ struct DmaInfo {
 
 impl<'d> Dma<'d> {
     /// Reserves a DMA channel for exclusive use
-    pub fn reserve_channel<T: Instance>(_inner: impl Peripheral<P = T> + 'd) -> Channel<'d> {
-        Channel {
-            info: T::info(),
-            _lifetime: PhantomData,
+    pub fn reserve_channel<T: Instance>(_inner: impl Peripheral<P = T> + 'd) -> Option<Channel<'d>> {
+        if T::info().is_some() {
+            Some(Channel {
+                info: T::info().unwrap(),
+                _lifetime: PhantomData,
+            })
+        } else {
+            None
         }
     }
 }
 
 trait SealedInstance {
-    fn info() -> DmaInfo;
+    fn info() -> Option<DmaInfo>;
 }
 
 /// DMA instance trait
@@ -171,12 +176,12 @@ macro_rules! dma_channel_instance {
         }
 
         impl SealedInstance for peripherals::$instance {
-            fn info() -> DmaInfo {
-                DmaInfo {
+            fn info() -> Option<DmaInfo> {
+                Some(DmaInfo {
                     // SAFETY: safe from single executor
                     regs: unsafe { crate::pac::$controller::steal() },
                     ch_num: $number,
-                }
+                })
             }
         }
     };
@@ -215,3 +220,20 @@ dma_channel_instance!(DMA0_CH29, Dma0, DMA0, 29);
 dma_channel_instance!(DMA0_CH30, Dma0, DMA0, 30);
 dma_channel_instance!(DMA0_CH31, Dma0, DMA0, 31);
 dma_channel_instance!(DMA0_CH32, Dma0, DMA0, 32);
+
+/// IMPORTANT: DO NOT USE unless you are aware of the performance implications of not using DMA.
+/// NoDma should only be used when a Flexcomm doesn't support DMA, such as Flexcomm 15.
+///
+/// For other transport layers, like UART, NoDma is not supported.
+pub struct NoDma;
+impl_peripheral!(NoDma);
+
+impl Instance for NoDma {
+    type Interrupt = crate::interrupt::typelevel::DMA0;
+}
+
+impl SealedInstance for NoDma {
+    fn info() -> Option<DmaInfo> {
+        None
+    }
+}

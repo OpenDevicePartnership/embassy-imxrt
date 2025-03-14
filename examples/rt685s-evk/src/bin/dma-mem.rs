@@ -13,7 +13,7 @@ const TEST_LEN: usize = 16;
 
 macro_rules! test_dma_channel {
     ($peripherals:expr, $instance:ident, $number:expr) => {
-        let ch = Dma::reserve_channel::<$instance>($peripherals.$instance);
+        let ch = Dma::reserve_channel::<$instance>($peripherals.$instance).unwrap();
         dma_test(ch, $number).await;
     };
 }

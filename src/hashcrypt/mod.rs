@@ -104,7 +104,7 @@ impl<'d> Hashcrypt<'d, Async> {
         peripheral: impl Peripheral<P = HASHCRYPT> + 'd,
         dma_ch: impl Peripheral<P = impl HashcryptDma> + 'd,
     ) -> Self {
-        Self::new_inner(peripheral, Some(dma::Dma::reserve_channel(dma_ch)))
+        Self::new_inner(peripheral, dma::Dma::reserve_channel(dma_ch))
     }
 
     /// Start a new SHA256 hash
