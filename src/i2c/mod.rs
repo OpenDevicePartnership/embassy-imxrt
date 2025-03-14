@@ -97,34 +97,42 @@ pub trait Instance: crate::flexcomm::IntoI2c + SealedInstance + Peripheral<P = S
 
 macro_rules! impl_instance {
     ($($n:expr),*) => {
-	$(
-	    paste!{
-		impl SealedInstance for crate::peripherals::[<FLEXCOMM $n>] {
-		    fn info() -> Info {
-			Info {
-			    regs: unsafe { &*crate::pac::[<I2c $n>]::ptr() },
-			    index: $n,
-			}
-		    }
+        $(
+            paste!{
+                impl SealedInstance for crate::peripherals::[<FLEXCOMM $n>] {
+                    fn info() -> Info {
+                        let mut info_index = $n;
+                        if $n == 15 {
+                            info_index = 8;
+                        }
+
+                        Info {
+                            regs: unsafe { &*crate::pac::[<I2c $n>]::ptr() },
+                            index: info_index,
+                        }
+                    }
 
 
-		    #[inline]
-		    fn index() -> usize {
-			$n
-		    }
-		}
+                    #[inline]
+                    fn index() -> usize {
+                        if $n == 15 {
+                            return 8
+                        }
+                        $n
+                    }
+                }
 
-		impl Instance for crate::peripherals::[<FLEXCOMM $n>] {
-		    type Interrupt = crate::interrupt::typelevel::[<FLEXCOMM $n>];
-		}
-	    }
-	)*
+                impl Instance for crate::peripherals::[<FLEXCOMM $n>] {
+                    type Interrupt = crate::interrupt::typelevel::[<FLEXCOMM $n>];
+                }
+            }
+        )*
     };
 }
 
-impl_instance!(0, 1, 2, 3, 4, 5, 6, 7);
+impl_instance!(0, 1, 2, 3, 4, 5, 6, 7, 15);
 
-const I2C_COUNT: usize = 8;
+const I2C_COUNT: usize = 9;
 static I2C_WAKERS: [AtomicWaker; I2C_COUNT] = [const { AtomicWaker::new() }; I2C_COUNT];
 
 /// Ten bit addresses start with first byte 0b11110XXX
@@ -292,6 +300,12 @@ impl_scl!(PIO4_1, F1, FLEXCOMM7);
 impl_sda!(PIO4_2, F1, FLEXCOMM7);
 impl_sda!(PIO4_3, F1, FLEXCOMM7);
 impl_scl!(PIO4_4, F1, FLEXCOMM7);
+
+// Flexcomm15 GPIOs
+// Function configuration is not needed for FC15
+// Implementing SCL/SDA traits to use the I2C APIs
+impl_scl!(PIOFC15_SCL, F1, FLEXCOMM15);
+impl_sda!(PIOFC15_SDA, F1, FLEXCOMM15);
 
 /// I2C Master DMA trait.
 #[allow(private_bounds)]

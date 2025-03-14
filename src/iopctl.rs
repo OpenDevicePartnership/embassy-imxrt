@@ -101,6 +101,15 @@ trait ToAnyPin: SealedPin {
     }
 }
 
+trait ToFC15Pin: SealedPin {
+    #[inline]
+    fn to_raw(pin: u8) -> FC15Pin {
+        // SAFETY: This is safe since this is only called from within the module,
+        // where the port and pin numbers have been verified to be correct.
+        unsafe { FC15Pin::new(pin) }
+    }
+}
+
 /// A pin that can be configured via iopctl.
 #[allow(private_bounds)]
 pub trait IopctlPin: SealedPin {
@@ -222,133 +231,258 @@ impl AnyPin {
     }
 }
 
-// This allows AnyPin to be used in HAL constructors that require types
+/// Represents a FC15 pin peripheral created at run-time from given pin number.
+pub struct FC15Pin {
+    reg: &'static PioM_N,
+}
+
+impl FC15Pin {
+    /// Creates an FC15 pin from raw pin number which can then be configured.
+    ///
+    /// This should ONLY be called when there is no other choice
+    /// (e.g. from a type-erased GPIO pin).
+    ///
+    /// Otherwise, pin peripherals should be configured directly.
+    ///
+    /// # Safety
+    ///
+    /// The caller MUST ensure valid port and pin numbers are provided,
+    /// and that multiple instances of [`AnyPin`] with the same port
+    /// and pin combination are not being used simultaneously.
+    ///
+    /// Failure to uphold these requirements will result in undefined behavior.
+    ///
+    /// See Table 297 in reference manual for a list of valid
+    /// pin and port number combinations.
+    #[must_use]
+    pub unsafe fn new(pin: u8) -> Self {
+        // Table 297:  FC15_I2C_SCL offset = 0x400, FC15_I2C_SCL offset = 0x404
+        let iopctl = unsafe { crate::pac::Iopctl::steal() };
+
+        let reg = if pin == 0 {
+            &*iopctl.fc15_i2c_scl().as_ptr().cast()
+        } else {
+            &*iopctl.fc15_i2c_sda().as_ptr().cast()
+        };
+
+        Self { reg }
+    }
+}
+
+// This allows AnyPin/FC15Pin to be used in HAL constructors that require types
 // which impl Peripheral. Used primarily by GPIO HAL to convert type-erased
 // GPIO pins back into an Output or Input pin specifically.
 embassy_hal_internal::impl_peripheral!(AnyPin);
 
 impl SealedPin for AnyPin {}
-impl IopctlPin for AnyPin {
-    fn set_function(&self, function: Function) -> &Self {
-        match function {
-            Function::F0 => {
-                self.reg.modify(|_, w| w.fsel().function_0());
+
+embassy_hal_internal::impl_peripheral!(FC15Pin);
+
+impl SealedPin for FC15Pin {}
+
+macro_rules! impl_iopctlpin {
+    ($pintype:ident) => {
+        impl IopctlPin for $pintype {
+            fn set_function(&self, function: Function) -> &Self {
+                match function {
+                    Function::F0 => {
+                        self.reg.modify(|_, w| w.fsel().function_0());
+                    }
+                    Function::F1 => {
+                        self.reg.modify(|_, w| w.fsel().function_1());
+                    }
+                    Function::F2 => {
+                        self.reg.modify(|_, w| w.fsel().function_2());
+                    }
+                    Function::F3 => {
+                        self.reg.modify(|_, w| w.fsel().function_3());
+                    }
+                    Function::F4 => {
+                        self.reg.modify(|_, w| w.fsel().function_4());
+                    }
+                    Function::F5 => {
+                        self.reg.modify(|_, w| w.fsel().function_5());
+                    }
+                    Function::F6 => {
+                        self.reg.modify(|_, w| w.fsel().function_6());
+                    }
+                    Function::F7 => {
+                        self.reg.modify(|_, w| w.fsel().function_7());
+                    }
+                    Function::F8 => {
+                        self.reg.modify(|_, w| w.fsel().function_8());
+                    }
+                }
+                self
             }
-            Function::F1 => {
-                self.reg.modify(|_, w| w.fsel().function_1());
+
+            fn set_pull(&self, pull: Pull) -> &Self {
+                match pull {
+                    Pull::None => {
+                        self.reg.modify(|_, w| w.pupdena().disabled());
+                    }
+                    Pull::Up => {
+                        self.reg.modify(|_, w| w.pupdena().enabled().pupdsel().pull_up());
+                    }
+                    Pull::Down => {
+                        self.reg
+                            .modify(|_, w| w.pupdena().enabled().pupdsel().pull_down());
+                    }
+                }
+                self
             }
-            Function::F2 => {
-                self.reg.modify(|_, w| w.fsel().function_2());
+
+            fn enable_input_buffer(&self) -> &Self {
+                self.reg.modify(|_, w| w.ibena().enabled());
+                self
             }
-            Function::F3 => {
-                self.reg.modify(|_, w| w.fsel().function_3());
+
+            fn disable_input_buffer(&self) -> &Self {
+                self.reg.modify(|_, w| w.ibena().disabled());
+                self
             }
-            Function::F4 => {
-                self.reg.modify(|_, w| w.fsel().function_4());
+
+            fn set_slew_rate(&self, slew_rate: SlewRate) -> &Self {
+                match slew_rate {
+                    SlewRate::Standard => {
+                        self.reg.modify(|_, w| w.slewrate().normal());
+                    }
+                    SlewRate::Slow => {
+                        self.reg.modify(|_, w| w.slewrate().slow());
+                    }
+                }
+                self
             }
-            Function::F5 => {
-                self.reg.modify(|_, w| w.fsel().function_5());
+
+            fn set_drive_strength(&self, strength: DriveStrength) -> &Self {
+                match strength {
+                    DriveStrength::Normal => {
+                        self.reg.modify(|_, w| w.fulldrive().normal_drive());
+                    }
+                    DriveStrength::Full => {
+                        self.reg.modify(|_, w| w.fulldrive().full_drive());
+                    }
+                }
+                self
             }
-            Function::F6 => {
-                self.reg.modify(|_, w| w.fsel().function_6());
+
+            fn enable_analog_multiplex(&self) -> &Self {
+                self.reg.modify(|_, w| w.amena().enabled());
+                self
             }
-            Function::F7 => {
-                self.reg.modify(|_, w| w.fsel().function_7());
+
+            fn disable_analog_multiplex(&self) -> &Self {
+                self.reg.modify(|_, w| w.amena().disabled());
+                self
             }
-            Function::F8 => {
-                self.reg.modify(|_, w| w.fsel().function_8());
+
+            fn set_drive_mode(&self, mode: DriveMode) -> &Self {
+                match mode {
+                    DriveMode::PushPull => {
+                        self.reg.modify(|_, w| w.odena().disabled());
+                    }
+                    DriveMode::OpenDrain => {
+                        self.reg.modify(|_, w| w.odena().enabled());
+                    }
+                }
+                self
+            }
+
+            fn set_input_inverter(&self, inverter: Inverter) -> &Self {
+                match inverter {
+                    Inverter::Disabled => {
+                        self.reg.modify(|_, w| w.iiena().disabled());
+                    }
+                    Inverter::Enabled => {
+                        self.reg.modify(|_, w| w.iiena().enabled());
+                    }
+                }
+                self
+            }
+
+            fn reset(&self) -> &Self {
+                self.reg.reset();
+                self
             }
         }
-        self
-    }
+    };
+}
 
-    fn set_pull(&self, pull: Pull) -> &Self {
-        match pull {
-            Pull::None => {
-                self.reg.modify(|_, w| w.pupdena().disabled());
+impl_iopctlpin!(AnyPin);
+impl_iopctlpin!(FC15Pin);
+
+macro_rules! impl_FC15pin {
+    ($pin_periph:ident, $pin_no:expr) => {
+        impl SealedPin for crate::peripherals::$pin_periph {}
+        impl ToFC15Pin for crate::peripherals::$pin_periph {}
+        impl IopctlPin for crate::peripherals::$pin_periph {
+            #[inline]
+            fn set_function(&self, _function: Function) -> &Self {
+                //No function configuration for FC15 pin
+                self
             }
-            Pull::Up => {
-                self.reg.modify(|_, w| w.pupdena().enabled().pupdsel().pull_up());
+
+            #[inline]
+            fn set_pull(&self, pull: Pull) -> &Self {
+                Self::to_raw($pin_no).set_pull(pull);
+                self
             }
-            Pull::Down => {
-                self.reg.modify(|_, w| w.pupdena().enabled().pupdsel().pull_down());
+
+            #[inline]
+            fn enable_input_buffer(&self) -> &Self {
+                Self::to_raw($pin_no).enable_input_buffer();
+                self
+            }
+
+            #[inline]
+            fn disable_input_buffer(&self) -> &Self {
+                Self::to_raw($pin_no).disable_input_buffer();
+                self
+            }
+
+            #[inline]
+            fn set_slew_rate(&self, slew_rate: SlewRate) -> &Self {
+                Self::to_raw($pin_no).set_slew_rate(slew_rate);
+                self
+            }
+
+            #[inline]
+            fn set_drive_strength(&self, strength: DriveStrength) -> &Self {
+                Self::to_raw($pin_no).set_drive_strength(strength);
+                self
+            }
+
+            #[inline]
+            fn enable_analog_multiplex(&self) -> &Self {
+                Self::to_raw($pin_no).enable_analog_multiplex();
+                self
+            }
+
+            #[inline]
+            fn disable_analog_multiplex(&self) -> &Self {
+                Self::to_raw($pin_no).disable_analog_multiplex();
+                self
+            }
+
+            #[inline]
+            fn set_drive_mode(&self, mode: DriveMode) -> &Self {
+                Self::to_raw($pin_no).set_drive_mode(mode);
+                self
+            }
+
+            #[inline]
+            fn set_input_inverter(&self, inverter: Inverter) -> &Self {
+                Self::to_raw($pin_no).set_input_inverter(inverter);
+                self
+            }
+
+            #[inline]
+            fn reset(&self) -> &Self {
+                Self::to_raw($pin_no).reset();
+                self
             }
         }
-        self
-    }
-
-    fn enable_input_buffer(&self) -> &Self {
-        self.reg.modify(|_, w| w.ibena().enabled());
-        self
-    }
-
-    fn disable_input_buffer(&self) -> &Self {
-        self.reg.modify(|_, w| w.ibena().disabled());
-        self
-    }
-
-    fn set_slew_rate(&self, slew_rate: SlewRate) -> &Self {
-        match slew_rate {
-            SlewRate::Standard => {
-                self.reg.modify(|_, w| w.slewrate().normal());
-            }
-            SlewRate::Slow => {
-                self.reg.modify(|_, w| w.slewrate().slow());
-            }
-        }
-        self
-    }
-
-    fn set_drive_strength(&self, strength: DriveStrength) -> &Self {
-        match strength {
-            DriveStrength::Normal => {
-                self.reg.modify(|_, w| w.fulldrive().normal_drive());
-            }
-            DriveStrength::Full => {
-                self.reg.modify(|_, w| w.fulldrive().full_drive());
-            }
-        }
-        self
-    }
-
-    fn enable_analog_multiplex(&self) -> &Self {
-        self.reg.modify(|_, w| w.amena().enabled());
-        self
-    }
-
-    fn disable_analog_multiplex(&self) -> &Self {
-        self.reg.modify(|_, w| w.amena().disabled());
-        self
-    }
-
-    fn set_drive_mode(&self, mode: DriveMode) -> &Self {
-        match mode {
-            DriveMode::PushPull => {
-                self.reg.modify(|_, w| w.odena().disabled());
-            }
-            DriveMode::OpenDrain => {
-                self.reg.modify(|_, w| w.odena().enabled());
-            }
-        }
-        self
-    }
-
-    fn set_input_inverter(&self, inverter: Inverter) -> &Self {
-        match inverter {
-            Inverter::Disabled => {
-                self.reg.modify(|_, w| w.iiena().disabled());
-            }
-            Inverter::Enabled => {
-                self.reg.modify(|_, w| w.iiena().enabled());
-            }
-        }
-        self
-    }
-
-    fn reset(&self) -> &Self {
-        self.reg.reset();
-        self
-    }
+    };
 }
 
 macro_rules! impl_pin {
@@ -575,3 +709,7 @@ impl_pin!(PIO7_28, 7, 28);
 impl_pin!(PIO7_29, 7, 29);
 impl_pin!(PIO7_30, 7, 30);
 impl_pin!(PIO7_31, 7, 31);
+
+// FC15 pins
+impl_FC15pin!(PIOFC15_SCL, 0);
+impl_FC15pin!(PIOFC15_SDA, 1);
