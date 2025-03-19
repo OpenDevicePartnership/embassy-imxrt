@@ -4,13 +4,15 @@ use core::convert::Infallible;
 use core::future::Future;
 use core::marker::PhantomData;
 use core::pin::Pin as FuturePin;
+use core::sync::atomic::AtomicU32;
+use core::sync::atomic::Ordering::Relaxed;
 use core::task::{Context, Poll};
 
 use embassy_hal_internal::interrupt::InterruptExt;
 use embassy_sync::waitqueue::AtomicWaker;
 use sealed::Sealed;
 
-use crate::clocks::enable_and_reset;
+use crate::clocks::{disable, enable_and_reset};
 use crate::iopctl::IopctlPin;
 pub use crate::iopctl::{AnyPin, DriveMode, DriveStrength, Function, Inverter, Pull, SlewRate};
 use crate::{interrupt, into_ref, peripherals, Peripheral, PeripheralRef};
@@ -106,18 +108,9 @@ fn irq_handler(port_wakers: &[Option<&PortWaker>]) {
 }
 
 /// Initialization Logic
-/// Note: GPIO port clocks are initialized in the clocks module.
+/// Note: A GPIO port's clock is initialized whenever the first pin from a port is constructed
+/// and deinitialized when the last pin from a port is dropped
 pub(crate) fn init() {
-    // Enable GPIO clocks
-    enable_and_reset::<peripherals::HSGPIO0>();
-    enable_and_reset::<peripherals::HSGPIO1>();
-    enable_and_reset::<peripherals::HSGPIO2>();
-    enable_and_reset::<peripherals::HSGPIO3>();
-    enable_and_reset::<peripherals::HSGPIO4>();
-    enable_and_reset::<peripherals::HSGPIO5>();
-    enable_and_reset::<peripherals::HSGPIO6>();
-    enable_and_reset::<peripherals::HSGPIO7>();
-
     // Enable INTA
     interrupt::GPIO_INTA.unpend();
 
@@ -153,6 +146,17 @@ impl Sense for SenseEnabled {}
 pub struct SenseDisabled;
 impl Sealed for SenseDisabled {}
 impl Sense for SenseDisabled {}
+
+static PORT_USECOUNT: [AtomicU32; PORT_COUNT] = [
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+];
 
 /// Flex pin.
 ///
@@ -234,7 +238,7 @@ impl<S: Sense> Flex<'_, S> {
 impl<S: Sense> Drop for Flex<'_, S> {
     fn drop(&mut self) {
         self.pin.reset();
-        // TODO: Disable clock for pin's port (assuming ref counted)?
+        decrement_port_usecount(self.pin.port());
     }
 }
 
@@ -246,6 +250,8 @@ impl<'d> Flex<'d, SenseEnabled> {
         pin.set_function(Function::F0)
             .disable_analog_multiplex()
             .enable_input_buffer();
+
+        increment_port_usecount(pin.port());
 
         Self {
             pin: pin.map_into(),
@@ -327,6 +333,9 @@ impl<'d> Flex<'d, SenseEnabled> {
     /// Return a new Flex pin instance with level sensing disabled.
     ///
     /// Consumes less power than a flex pin with sensing enabled.
+    ///
+    /// NOTE: A brand new flex pin is returned without any sense of previous state.
+    /// Be sure to set the pin level and pin direction (input or output)
     #[must_use]
     pub fn disable_sensing(self) -> Flex<'d, SenseDisabled> {
         // Cloning the pin is ok since we consume self immediately
@@ -345,6 +354,8 @@ impl<'d> Flex<'d, SenseDisabled> {
             .disable_analog_multiplex()
             .disable_input_buffer();
 
+        increment_port_usecount(pin.port());
+
         Self {
             pin: pin.map_into(),
             _sense_mode: PhantomData::<SenseDisabled>,
@@ -352,12 +363,57 @@ impl<'d> Flex<'d, SenseDisabled> {
     }
 
     /// Return a new Flex pin instance with level sensing enabled.
+    ///
+    /// NOTE: A brand new flex pin is returned without any sense of previous state.
+    /// Be sure to set the pin level and pin direction (input or output)
     #[must_use]
     pub fn enable_sensing(self) -> Flex<'d, SenseEnabled> {
         // Cloning the pin is ok since we consume self immediately
         let new_pin = unsafe { self.pin.clone_unchecked() };
         drop(self);
         Flex::<SenseEnabled>::new(new_pin)
+    }
+}
+
+/// Increment port usecount counter
+///
+/// If the calling pin is the first pin in that port, then this enables the port's clock
+fn increment_port_usecount(port: usize) {
+    let port_usecount = &PORT_USECOUNT[port];
+    let usecount = port_usecount.fetch_add(1, Relaxed);
+    if usecount == 0 {
+        match port {
+            0 => enable_and_reset::<peripherals::HSGPIO0>(),
+            1 => enable_and_reset::<peripherals::HSGPIO1>(),
+            2 => enable_and_reset::<peripherals::HSGPIO2>(),
+            3 => enable_and_reset::<peripherals::HSGPIO3>(),
+            4 => enable_and_reset::<peripherals::HSGPIO4>(),
+            5 => enable_and_reset::<peripherals::HSGPIO5>(),
+            6 => enable_and_reset::<peripherals::HSGPIO6>(),
+            7 => enable_and_reset::<peripherals::HSGPIO7>(),
+            _ => (),
+        }
+    }
+}
+
+/// Decrement port usecount counter
+///
+/// If the calling pin is the last pin in that port, then this disables the port's clock
+fn decrement_port_usecount(port: usize) {
+    let port_usecount = &PORT_USECOUNT[port];
+    let usecount = port_usecount.fetch_sub(1, Relaxed);
+    if usecount == 1 {
+        match port {
+            0 => disable::<peripherals::HSGPIO0>(),
+            1 => disable::<peripherals::HSGPIO1>(),
+            2 => disable::<peripherals::HSGPIO2>(),
+            3 => disable::<peripherals::HSGPIO3>(),
+            4 => disable::<peripherals::HSGPIO4>(),
+            5 => disable::<peripherals::HSGPIO5>(),
+            6 => disable::<peripherals::HSGPIO6>(),
+            7 => disable::<peripherals::HSGPIO7>(),
+            _ => (),
+        }
     }
 }
 
