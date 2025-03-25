@@ -1,9 +1,11 @@
 //! implements flexcomm interface wrapper for easier usage across modules
 
+use core::sync::atomic::{AtomicU8, Ordering};
+
 use embassy_hal_internal::Peripheral;
 use paste::paste;
 
-use crate::clocks::{enable_and_reset, SysconPeripheral};
+use crate::clocks::{disable, enable_and_reset, SysconPeripheral};
 use crate::pac;
 use crate::peripherals::{
     FLEXCOMM0, FLEXCOMM1, FLEXCOMM14, FLEXCOMM15, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7,
@@ -46,6 +48,57 @@ mod sealed {
     pub trait Sealed {}
 }
 
+struct State {
+    refcount: AtomicU8,
+}
+
+impl State {
+    const fn new() -> Self {
+        Self {
+            refcount: AtomicU8::new(0),
+        }
+    }
+}
+
+/// A generic reference to a usage of a Flexcomm peripheral.
+///
+/// Can be cloned to share the usage of the peripheral across multiple sites.
+/// Dropping the last reference will disable the Flexcomm peripheral.
+#[must_use]
+pub(crate) struct FlexcommRef {
+    disable_fn: fn(),
+    state: &'static State,
+}
+
+impl FlexcommRef {
+    fn new<T: FlexcommLowLevel>() -> Self {
+        let state = T::state();
+        assert_eq!(state.refcount.fetch_add(1, Ordering::AcqRel), 0);
+        Self {
+            disable_fn: T::disable,
+            state,
+        }
+    }
+}
+
+impl Clone for FlexcommRef {
+    fn clone(&self) -> Self {
+        self.state.refcount.fetch_add(1, Ordering::AcqRel);
+        Self {
+            disable_fn: self.disable_fn,
+            state: self.state,
+        }
+    }
+}
+
+impl Drop for FlexcommRef {
+    fn drop(&mut self) {
+        if self.state.refcount.fetch_sub(1, Ordering::AcqRel) == 1 {
+            (self.disable_fn)();
+        }
+    }
+}
+
 /// primary low-level flexcomm interface
 pub(crate) trait FlexcommLowLevel:
     sealed::Sealed + Peripheral<P = Self> + SysconPeripheral + 'static + Send
@@ -54,7 +107,14 @@ pub(crate) trait FlexcommLowLevel:
     fn reg() -> &'static pac::flexcomm0::RegisterBlock;
 
     // set the clock select for this flexcomm instance and remove from reset
-    fn enable(clk: Clock);
+    fn enable(clk: Clock) -> FlexcommRef;
+
+    // deconfigure the clock select
+    fn disable();
+
+    // a state associated with a flexcomm device, keeping count
+    #[allow(private_interfaces)]
+    fn state() -> &'static State;
 }
 
 macro_rules! impl_flexcomm {
@@ -72,7 +132,7 @@ macro_rules! impl_flexcomm {
 			}
 		    }
 
-		    fn enable(clk: Clock) {
+		    fn enable(clk: Clock) -> FlexcommRef {
 			// SAFETY: safe from single executor
 			let clkctl1 = unsafe { crate::pac::Clkctl1::steal() };
 
@@ -103,7 +163,23 @@ macro_rules! impl_flexcomm {
 				   unsafe { w.mult().bits(0) });
 
 			enable_and_reset::<[<FLEXCOMM $idx>]>();
+
+            FlexcommRef::new::<Self>()
 		    }
+
+            fn disable() {
+            // SAFETY: safe from single executor
+			let clkctl1 = unsafe { crate::pac::Clkctl1::steal() };
+            clkctl1.flexcomm($idx).fcfclksel().write(|w| w.sel().none());
+            clkctl1.flexcomm($idx).frgclksel().write(|w| w.sel().none());
+            disable::<[<FLEXCOMM $idx>]>();
+            }
+
+            #[allow(private_interfaces)]
+            fn state() -> &'static State {
+            static STATE: State = State::new();
+            &STATE
+            }
 		}
 	    }
         )*
@@ -123,7 +199,7 @@ impl FlexcommLowLevel for crate::peripherals::FLEXCOMM14 {
         unsafe { &*crate::pac::Flexcomm14::ptr() }
     }
 
-    fn enable(clk: Clock) {
+    fn enable(clk: Clock) -> FlexcommRef {
         // SAFETY: safe from single executor
         let clkctl1 = unsafe { crate::pac::Clkctl1::steal() };
 
@@ -151,6 +227,22 @@ impl FlexcommLowLevel for crate::peripherals::FLEXCOMM14 {
                 unsafe { w.mult().bits(0) });
 
         enable_and_reset::<FLEXCOMM14>();
+
+        FlexcommRef::new::<Self>()
+    }
+
+    fn disable() {
+        // SAFETY: safe from single executor
+        let clkctl1 = unsafe { crate::pac::Clkctl1::steal() };
+        clkctl1.fc14fclksel().write(|w| w.sel().none());
+        clkctl1.frg14clksel().write(|w| w.sel().none());
+        disable::<FLEXCOMM14>();
+    }
+
+    #[allow(private_interfaces)]
+    fn state() -> &'static State {
+        static STATE: State = State::new();
+        &STATE
     }
 }
 
@@ -164,7 +256,7 @@ impl FlexcommLowLevel for crate::peripherals::FLEXCOMM15 {
         unsafe { &*crate::pac::Flexcomm15::ptr() }
     }
 
-    fn enable(clk: Clock) {
+    fn enable(clk: Clock) -> FlexcommRef {
         // SAFETY: safe from single executor
         let clkctl1 = unsafe { crate::pac::Clkctl1::steal() };
 
@@ -192,6 +284,22 @@ impl FlexcommLowLevel for crate::peripherals::FLEXCOMM15 {
                 unsafe { w.mult().bits(0) });
 
         enable_and_reset::<FLEXCOMM15>();
+
+        FlexcommRef::new::<Self>()
+    }
+
+    fn disable() {
+        // SAFETY: safe from single executor
+        let clkctl1 = unsafe { crate::pac::Clkctl1::steal() };
+        clkctl1.fc15fclksel().write(|w| w.sel().none());
+        clkctl1.frg15clksel().write(|w| w.sel().none());
+        disable::<FLEXCOMM15>();
+    }
+
+    #[allow(private_interfaces)]
+    fn state() -> &'static State {
+        static STATE: State = State::new();
+        &STATE
     }
 }
 

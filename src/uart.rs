@@ -11,6 +11,7 @@ use paste::paste;
 
 use crate::dma::channel::Channel;
 use crate::dma::transfer::Transfer;
+use crate::flexcomm::FlexcommRef;
 use crate::gpio::{AnyPin, GpioPin as Pin};
 use crate::interrupt::typelevel::Interrupt;
 use crate::iopctl::{DriveMode, DriveStrength, Inverter, IopctlPin, Pull, SlewRate};
@@ -42,6 +43,7 @@ pub struct Uart<'a, M: Mode> {
 /// Uart TX driver.
 pub struct UartTx<'a, M: Mode> {
     info: Info,
+    _flexcomm: FlexcommRef,
     _tx_dma: Option<Channel<'a>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
@@ -49,6 +51,7 @@ pub struct UartTx<'a, M: Mode> {
 /// Uart RX driver.
 pub struct UartRx<'a, M: Mode> {
     info: Info,
+    _flexcomm: FlexcommRef,
     _rx_dma: Option<Channel<'a>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
@@ -134,9 +137,10 @@ pub enum Error {
 pub type Result<T> = core::result::Result<T, Error>;
 
 impl<'a, M: Mode> UartTx<'a, M> {
-    fn new_inner<T: Instance>(_tx_dma: Option<Channel<'a>>) -> Self {
+    fn new_inner<T: Instance>(_flexcomm: FlexcommRef, _tx_dma: Option<Channel<'a>>) -> Self {
         Self {
             info: T::info(),
+            _flexcomm,
             _tx_dma,
             _phantom: PhantomData,
         }
@@ -156,9 +160,9 @@ impl<'a> UartTx<'a, Blocking> {
         tx.as_tx();
 
         let mut _tx = tx.map_into();
-        Uart::<Blocking>::init::<T>(Some(_tx.reborrow()), None, None, None, config)?;
+        let flexcomm = Uart::<Blocking>::init::<T>(Some(_tx.reborrow()), None, None, None, config)?;
 
-        Ok(Self::new_inner::<T>(None))
+        Ok(Self::new_inner::<T>(flexcomm, None))
     }
 
     fn write_byte_internal(&mut self, byte: u8) -> Result<()> {
@@ -219,9 +223,10 @@ impl<'a> UartTx<'a, Blocking> {
 }
 
 impl<'a, M: Mode> UartRx<'a, M> {
-    fn new_inner<T: Instance>(_rx_dma: Option<Channel<'a>>) -> Self {
+    fn new_inner<T: Instance>(_flexcomm: FlexcommRef, _rx_dma: Option<Channel<'a>>) -> Self {
         Self {
             info: T::info(),
+            _flexcomm,
             _rx_dma,
             _phantom: PhantomData,
         }
@@ -240,9 +245,9 @@ impl<'a> UartRx<'a, Blocking> {
         rx.as_rx();
 
         let mut _rx = rx.map_into();
-        Uart::<Blocking>::init::<T>(None, Some(_rx.reborrow()), None, None, config)?;
+        let flexcomm = Uart::<Blocking>::init::<T>(None, Some(_rx.reborrow()), None, None, config)?;
 
-        Ok(Self::new_inner::<T>(None))
+        Ok(Self::new_inner::<T>(flexcomm, None))
     }
 }
 
@@ -306,10 +311,10 @@ impl<'a, M: Mode> Uart<'a, M> {
         rts: Option<PeripheralRef<'_, AnyPin>>,
         cts: Option<PeripheralRef<'_, AnyPin>>,
         config: Config,
-    ) -> Result<()> {
+    ) -> Result<FlexcommRef> {
         // TODO - clock integration
-        let clock = crate::flexcomm::Clock::Sfro;
-        T::enable(clock);
+        let clock: crate::flexcomm::Clock = crate::flexcomm::Clock::Sfro;
+        let flexcomm = T::enable(clock);
         T::into_usart();
 
         let regs = T::info().regs;
@@ -335,7 +340,7 @@ impl<'a, M: Mode> Uart<'a, M> {
         Self::set_baudrate_inner::<T>(config.baudrate)?;
         Self::set_uart_config::<T>(config);
 
-        Ok(())
+        Ok(flexcomm)
     }
 
     fn get_fc_freq() -> u32 {
@@ -495,12 +500,12 @@ impl<'a> Uart<'a, Blocking> {
         let mut tx = tx.map_into();
         let mut rx = rx.map_into();
 
-        Self::init::<T>(Some(tx.reborrow()), Some(rx.reborrow()), None, None, config)?;
+        let flexcomm = Self::init::<T>(Some(tx.reborrow()), Some(rx.reborrow()), None, None, config)?;
 
         Ok(Self {
             info: T::info(),
-            tx: UartTx::new_inner::<T>(None),
-            rx: UartRx::new_inner::<T>(None),
+            tx: UartTx::new_inner::<T>(flexcomm.clone(), None),
+            rx: UartRx::new_inner::<T>(flexcomm, None),
         })
     }
 
@@ -549,14 +554,14 @@ impl<'a> UartTx<'a, Async> {
         tx.as_tx();
 
         let mut _tx = tx.map_into();
-        Uart::<Async>::init::<T>(Some(_tx.reborrow()), None, None, None, config)?;
+        let flexcomm = Uart::<Async>::init::<T>(Some(_tx.reborrow()), None, None, None, config)?;
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
 
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
 
-        Ok(Self::new_inner::<T>(tx_dma))
+        Ok(Self::new_inner::<T>(flexcomm, tx_dma))
     }
 
     /// Transmit the provided buffer asynchronously.
@@ -680,14 +685,14 @@ impl<'a> UartRx<'a, Async> {
         rx.as_rx();
 
         let mut _rx = rx.map_into();
-        Uart::<Async>::init::<T>(None, Some(_rx.reborrow()), None, None, config)?;
+        let flexcomm = Uart::<Async>::init::<T>(None, Some(_rx.reborrow()), None, None, config)?;
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
 
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
-        Ok(Self::new_inner::<T>(rx_dma))
+        Ok(Self::new_inner::<T>(flexcomm, rx_dma))
     }
 
     /// Read from UART RX asynchronously.
@@ -784,12 +789,12 @@ impl<'a> Uart<'a, Async> {
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
-        Self::init::<T>(Some(tx.reborrow()), Some(rx.reborrow()), None, None, config)?;
+        let flexcomm = Self::init::<T>(Some(tx.reborrow()), Some(rx.reborrow()), None, None, config)?;
 
         Ok(Self {
             info: T::info(),
-            tx: UartTx::new_inner::<T>(tx_dma),
-            rx: UartRx::new_inner::<T>(rx_dma),
+            tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
+            rx: UartRx::new_inner::<T>(flexcomm, rx_dma),
         })
     }
 
@@ -824,7 +829,7 @@ impl<'a> Uart<'a, Async> {
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
-        Self::init::<T>(
+        let flexcomm = Self::init::<T>(
             Some(tx.reborrow()),
             Some(rx.reborrow()),
             Some(rts.reborrow()),
@@ -834,8 +839,8 @@ impl<'a> Uart<'a, Async> {
 
         Ok(Self {
             info: T::info(),
-            tx: UartTx::new_inner::<T>(tx_dma),
-            rx: UartRx::new_inner::<T>(rx_dma),
+            tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
+            rx: UartRx::new_inner::<T>(flexcomm, rx_dma),
         })
     }
 
