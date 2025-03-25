@@ -11,6 +11,7 @@ use super::{
     Async, Blocking, Error, Info, Instance, InterruptHandler, MasterDma, Mode, Result, SclPin, SdaPin, TransferError,
     I2C_WAKERS, TEN_BIT_PREFIX,
 };
+use crate::flexcomm::FlexcommRef;
 use crate::interrupt::typelevel::Interrupt;
 use crate::{dma, interrupt, Peripheral};
 
@@ -32,6 +33,7 @@ pub enum Speed {
 /// use `FCn` as I2C Master controller
 pub struct I2cMaster<'a, M: Mode> {
     info: Info,
+    _flexcomm: FlexcommRef,
     _phantom: PhantomData<M>,
     dma_ch: Option<dma::channel::Channel<'a>>,
 }
@@ -48,6 +50,11 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
         into_ref!(_bus);
         into_ref!(scl);
         into_ref!(sda);
+
+        // TODO - clock integration
+        let clock = crate::flexcomm::Clock::Sfro;
+        let flexcomm = T::enable(clock);
+        T::into_i2c();
 
         sda.as_sda();
         scl.as_scl();
@@ -96,6 +103,7 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
 
         Ok(Self {
             info,
+            _flexcomm: flexcomm,
             _phantom: PhantomData,
             dma_ch,
         })
@@ -123,14 +131,7 @@ impl<'a> I2cMaster<'a, Blocking> {
         // TODO - integrate clock APIs to allow dynamic freq selection | clock: crate::flexcomm::Clock,
         speed: Speed,
     ) -> Result<Self> {
-        // TODO - clock integration
-        let clock = crate::flexcomm::Clock::Sfro;
-        T::enable(clock);
-        T::into_i2c();
-
-        let this = Self::new_inner::<T>(fc, scl, sda, speed, None)?;
-
-        Ok(this)
+        Ok(Self::new_inner::<T>(fc, scl, sda, speed, None)?)
     }
 
     fn start(&mut self, address: u16, is_read: bool) -> Result<()> {
@@ -325,11 +326,6 @@ impl<'a> I2cMaster<'a, Async> {
         speed: Speed,
         dma_ch: impl Peripheral<P = impl MasterDma<T>> + 'a,
     ) -> Result<Self> {
-        // TODO - clock integration
-        let clock = crate::flexcomm::Clock::Sfro;
-        T::enable(clock);
-        T::into_i2c();
-
         let ch = dma::Dma::reserve_channel(dma_ch);
         let this = Self::new_inner::<T>(fc, scl, sda, speed, ch)?;
 

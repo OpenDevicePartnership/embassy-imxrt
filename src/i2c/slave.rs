@@ -10,6 +10,7 @@ use super::{
     Async, Blocking, Info, Instance, InterruptHandler, Mode, Result, SclPin, SdaPin, SlaveDma, TransferError,
     I2C_WAKERS, TEN_BIT_PREFIX,
 };
+use crate::flexcomm::FlexcommRef;
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::i2c0::stat::Slvstate;
 use crate::{dma, interrupt};
@@ -129,6 +130,7 @@ pub enum Response {
 /// use `FCn` as I2C Slave controller
 pub struct I2cSlave<'a, M: Mode> {
     info: Info,
+    _flexcomm: FlexcommRef,
     _phantom: PhantomData<M>,
     dma_ch: Option<dma::channel::Channel<'a>>,
     ten_bit_info: Option<TenBitAddressInfo>,
@@ -147,6 +149,11 @@ impl<'a, M: Mode> I2cSlave<'a, M> {
         into_ref!(_bus);
         into_ref!(scl);
         into_ref!(sda);
+
+        // TODO - clock integration
+        let clock = crate::flexcomm::Clock::Sfro;
+        let flexcomm = T::enable(clock);
+        T::into_i2c();
 
         sda.as_sda();
         scl.as_scl();
@@ -196,6 +203,7 @@ impl<'a, M: Mode> I2cSlave<'a, M> {
 
         Ok(Self {
             info,
+            _flexcomm: flexcomm,
             _phantom: PhantomData,
             dma_ch,
             ten_bit_info,
@@ -212,11 +220,6 @@ impl<'a> I2cSlave<'a, Blocking> {
         // TODO - integrate clock APIs to allow dynamic freq selection | clock: crate::flexcomm::Clock,
         address: Address,
     ) -> Result<Self> {
-        // TODO - clock integration
-        let clock = crate::flexcomm::Clock::Sfro;
-        T::enable(clock);
-        T::into_i2c();
-
         Self::new_inner::<T>(_bus, scl, sda, address, None)
     }
 
@@ -252,11 +255,6 @@ impl<'a> I2cSlave<'a, Async> {
         address: Address,
         dma_ch: impl Peripheral<P = impl SlaveDma<T>> + 'a,
     ) -> Result<Self> {
-        // TODO - clock integration
-        let clock = crate::flexcomm::Clock::Sfro;
-        T::enable(clock);
-        T::into_i2c();
-
         let ch = dma::Dma::reserve_channel(dma_ch);
 
         if ch.is_some() {
