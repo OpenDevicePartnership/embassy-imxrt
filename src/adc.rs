@@ -104,6 +104,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 /// ADC driver
 pub struct Adc<'p, const N: usize> {
     info: Info,
+    channels: [ChannelConfig<'p>; N],
     _lifetime: PhantomData<&'p ()>,
 }
 
@@ -175,13 +176,13 @@ impl<const N: usize> Adc<'_, N> {
         self.info.regs.ctrl().modify(|_, w| w.rstfifo().rstfifo_1());
     }
 
-    fn configure_channels(&mut self, channel_config: &[ChannelConfig; N]) {
-        let mut cmd = channel_config.len();
+    fn configure_channels(&mut self) {
+        let mut cmd = self.channels.len();
 
         // Configure conversion CMD configuration
         // Set up a cmd chain, one cmd per channel
         //   one points to the next, last one points to 0
-        for ch in channel_config {
+        for ch in &self.channels {
             // Mapping cmd [1-15] into reg array index [0-14]
             // Reg array index is one less than cmd
             let cmd_index = cmd - 1;
@@ -230,7 +231,7 @@ impl<const N: usize> Adc<'_, N> {
                 .tdly()
                 .bits(0)
                 .tcmd()
-                .bits(channel_config.len() as u8)
+                .bits(self.channels.len() as u8)
         });
     }
 }
@@ -241,18 +242,19 @@ impl<'p, const N: usize> Adc<'p, N> {
         _adc: impl Peripheral<P = T> + 'p,
         _irq: impl Binding<T::Interrupt, InterruptHandler<T>> + 'p,
         config: Config,
-        channel_config: [ChannelConfig; N],
+        channels: [ChannelConfig<'p>; N],
     ) -> Self {
         into_ref!(_adc);
 
         let mut inst = Self {
             info: T::info(),
+            channels,
             _lifetime: PhantomData,
         };
 
         Self::init();
         inst.configure_adc(config);
-        inst.configure_channels(&channel_config);
+        inst.configure_channels();
 
         // Enable interrupt
         interrupt::ADC0.unpend();
