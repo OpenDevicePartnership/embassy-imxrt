@@ -2,6 +2,10 @@
 //!
 //! Also known as IO Pin Configuration (IOCON)
 
+use core::ops::Deref;
+
+use embassy_hal_internal::{Peri, PeripheralType};
+
 use crate::pac::{iopctl, Iopctl};
 
 // A generic pin of any type.
@@ -92,27 +96,29 @@ pub enum Inverter {
 }
 
 trait SealedPin {}
-trait ToAnyPin: SealedPin {
+trait ToAnyGpioPin: SealedPin {
     #[inline]
-    fn to_raw(port: u8, pin: u8) -> AnyPin {
+    fn to_raw(port: u8, pin: u8) -> AnyGpioPin {
         // SAFETY: This is safe since this is only called from within the module,
         // where the port and pin numbers have been verified to be correct.
-        unsafe { AnyPin::new(port, pin) }
+        unsafe { AnyGpioPin::new(port, pin) }
     }
 }
 
 trait ToFC15Pin: SealedPin {
     #[inline]
-    fn to_raw(pin: u8) -> FC15Pin {
+    fn to_raw(pin: u8) -> AnyFC15Pin {
         // SAFETY: This is safe since this is only called from within the module,
         // where the port and pin numbers have been verified to be correct.
-        unsafe { FC15Pin::new(pin) }
+        unsafe { AnyFC15Pin::new(pin) }
     }
 }
 
-/// A pin that can be configured via iopctl.
+/// A pin that can have the function be configured via iopctl.
+///
+/// Pins with a dedicated function must not implement this trait.
 #[allow(private_bounds)]
-pub trait IopctlPin: SealedPin {
+pub trait IopctlFunctionPin: IopctlPin + SealedPin {
     /// Sets the function number of a pin.
     ///
     /// This number corresponds to a specific function that the pin supports.
@@ -121,7 +127,11 @@ pub trait IopctlPin: SealedPin {
     ///
     /// See Section 7.5.3 in reference manual for list of pins and their supported functions.
     fn set_function(&self, function: Function) -> &Self;
+}
 
+/// A pin that can be configured via iopctl.
+#[allow(private_bounds)]
+pub trait IopctlPin: SealedPin + PeripheralType + Sized + 'static {
     /// Enables either a pull-up or pull-down resistor on a pin.
     ///
     /// Setting this to [`Pull::None`] will disable the resistor.
@@ -156,7 +166,7 @@ pub trait IopctlPin: SealedPin {
     ///
     /// This must be called to allow analog functionalities of a pin.
     ///
-    /// To protect the analog input, [`IopctlPin::set_function`] should be
+    /// To protect the analog input, [`IopctlFunctionPin::set_function`] should be
     /// called with [`Function::F0`] to disable digital functions.
     ///
     /// Additionally, [`IopctlPin::disable_input_buffer`] and [`IopctlPin::set_pull`]
@@ -184,13 +194,21 @@ pub trait IopctlPin: SealedPin {
     fn reset(&self) -> &Self;
 }
 
-/// Represents a pin peripheral created at run-time from given port and pin numbers.
+/// Represents a pin peripheral created at run-time from either a general IO pin or a dedicated function IO pin.
 pub struct AnyPin {
+    reg: &'static PioM_N,
+}
+
+/// Represents a general IO pin peripheral created at run-time from given port and pin number.
+///
+/// These pins can be configured for an alternate function, and are distinct from pins that have a
+/// dedicated function.
+pub struct AnyGpioPin {
     pin_port: u8,
     reg: &'static PioM_N,
 }
 
-impl AnyPin {
+impl AnyGpioPin {
     /// Creates a pin from raw port and pin numbers which can then be configured.
     ///
     /// This should ONLY be called when there is no other choice
@@ -201,7 +219,7 @@ impl AnyPin {
     /// # Safety
     ///
     /// The caller MUST ensure valid port and pin numbers are provided,
-    /// and that multiple instances of [`AnyPin`] with the same port
+    /// and that multiple instances of [`AnyGpioPin`] with the same port
     /// and pin combination are not being used simultaneously.
     ///
     /// Failure to uphold these requirements will result in undefined behavior.
@@ -231,12 +249,37 @@ impl AnyPin {
     }
 }
 
-/// Represents a FC15 pin peripheral created at run-time from given pin number.
-pub struct FC15Pin {
+/// Pin driver that will reset the pin when dropped.
+pub struct GuardedAnyPin<'a> {
+    inner: Peri<'a, AnyPin>,
+}
+
+impl<'a, T: Into<AnyPin> + PeripheralType> From<Peri<'a, T>> for GuardedAnyPin<'a> {
+    fn from(value: Peri<'a, T>) -> Self {
+        GuardedAnyPin { inner: value.into() }
+    }
+}
+
+impl<'a> Deref for GuardedAnyPin<'a> {
+    type Target = Peri<'a, AnyPin>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Drop for GuardedAnyPin<'_> {
+    fn drop(&mut self) {
+        self.inner.reg.reset();
+    }
+}
+
+/// Represents a FC15 pin peripheral created at run-time from a given pin number.
+pub struct AnyFC15Pin {
     reg: &'static PioM_N,
 }
 
-impl FC15Pin {
+impl AnyFC15Pin {
     /// Creates an FC15 pin from raw pin number which can then be configured.
     ///
     /// This should ONLY be called when there is no other choice
@@ -247,7 +290,7 @@ impl FC15Pin {
     /// # Safety
     ///
     /// The caller MUST ensure valid port and pin numbers are provided,
-    /// and that multiple instances of [`AnyPin`] with the same port
+    /// and that multiple instances of [`AnyGpioPin`] with the same port
     /// and pin combination are not being used simultaneously.
     ///
     /// Failure to uphold these requirements will result in undefined behavior.
@@ -269,20 +312,21 @@ impl FC15Pin {
     }
 }
 
-// This allows AnyPin/FC15Pin to be used in HAL constructors that require types
+// This allows AnyPin/AnyGpioPin/FC15Pin to be used in HAL constructors that require types
 // which impl Peripheral. Used primarily by GPIO HAL to convert type-erased
 // GPIO pins back into an Output or Input pin specifically.
 embassy_hal_internal::impl_peripheral!(AnyPin);
-
 impl SealedPin for AnyPin {}
 
-embassy_hal_internal::impl_peripheral!(FC15Pin);
+embassy_hal_internal::impl_peripheral!(AnyGpioPin);
+impl SealedPin for AnyGpioPin {}
 
-impl SealedPin for FC15Pin {}
+embassy_hal_internal::impl_peripheral!(AnyFC15Pin);
+impl SealedPin for AnyFC15Pin {}
 
 macro_rules! impl_iopctlpin {
     ($pintype:ident) => {
-        impl IopctlPin for $pintype {
+        impl IopctlFunctionPin for $pintype {
             fn set_function(&self, function: Function) -> &Self {
                 match function {
                     Function::F0 => {
@@ -315,7 +359,8 @@ macro_rules! impl_iopctlpin {
                 }
                 self
             }
-
+        }
+        impl IopctlPin for $pintype {
             fn set_pull(&self, pull: Pull) -> &Self {
                 match pull {
                     Pull::None => {
@@ -409,19 +454,26 @@ macro_rules! impl_iopctlpin {
 }
 
 impl_iopctlpin!(AnyPin);
-impl_iopctlpin!(FC15Pin);
+impl_iopctlpin!(AnyGpioPin);
+impl_iopctlpin!(AnyFC15Pin);
+
+impl From<AnyGpioPin> for AnyPin {
+    fn from(val: AnyGpioPin) -> Self {
+        AnyPin { reg: val.reg }
+    }
+}
+
+impl From<AnyFC15Pin> for AnyPin {
+    fn from(val: AnyFC15Pin) -> Self {
+        AnyPin { reg: val.reg }
+    }
+}
 
 macro_rules! impl_FC15pin {
     ($pin_periph:ident, $pin_no:expr) => {
         impl SealedPin for crate::peripherals::$pin_periph {}
         impl ToFC15Pin for crate::peripherals::$pin_periph {}
         impl IopctlPin for crate::peripherals::$pin_periph {
-            #[inline]
-            fn set_function(&self, _function: Function) -> &Self {
-                //No function configuration for FC15 pin
-                self
-            }
-
             #[inline]
             fn set_pull(&self, pull: Pull) -> &Self {
                 Self::to_raw($pin_no).set_pull(pull);
@@ -482,20 +534,26 @@ macro_rules! impl_FC15pin {
                 self
             }
         }
+        impl From<crate::peripherals::$pin_periph> for AnyPin {
+            fn from(_val: crate::peripherals::$pin_periph) -> AnyPin {
+                crate::peripherals::$pin_periph::to_raw($pin_no).into()
+            }
+        }
     };
 }
 
 macro_rules! impl_pin {
     ($pin_periph:ident, $pin_port:expr, $pin_no:expr) => {
         impl SealedPin for crate::peripherals::$pin_periph {}
-        impl ToAnyPin for crate::peripherals::$pin_periph {}
-        impl IopctlPin for crate::peripherals::$pin_periph {
+        impl ToAnyGpioPin for crate::peripherals::$pin_periph {}
+        impl IopctlFunctionPin for crate::peripherals::$pin_periph {
             #[inline]
             fn set_function(&self, function: Function) -> &Self {
                 Self::to_raw($pin_port, $pin_no).set_function(function);
                 self
             }
-
+        }
+        impl IopctlPin for crate::peripherals::$pin_periph {
             #[inline]
             fn set_pull(&self, pull: Pull) -> &Self {
                 Self::to_raw($pin_port, $pin_no).set_pull(pull);
@@ -554,6 +612,11 @@ macro_rules! impl_pin {
             fn reset(&self) -> &Self {
                 Self::to_raw($pin_port, $pin_no).reset();
                 self
+            }
+        }
+        impl From<crate::peripherals::$pin_periph> for AnyPin {
+            fn from(_val: crate::peripherals::$pin_periph) -> AnyPin {
+                crate::peripherals::$pin_periph::to_raw($pin_port, $pin_no).into()
             }
         }
     };
