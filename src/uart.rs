@@ -12,9 +12,9 @@ use paste::paste;
 use crate::dma::channel::Channel;
 use crate::dma::transfer::Transfer;
 use crate::flexcomm::Clock;
-use crate::gpio::{AnyPin, GpioPin as Pin};
+use crate::gpio::GpioPin as Pin;
 use crate::interrupt::typelevel::Interrupt;
-use crate::iopctl::{DriveMode, DriveStrength, Inverter, IopctlPin, Pull, SlewRate};
+use crate::iopctl::{DriveMode, DriveStrength, GuardedAnyPin, Inverter, IopctlFunctionPin, IopctlPin, Pull, SlewRate};
 use crate::pac::usart0::cfg::{Clkpol, Datalen, Loop, Paritysel as Parity, Stoplen, Syncen, Syncmst};
 use crate::pac::usart0::ctl::Cc;
 use crate::{dma, interrupt};
@@ -43,6 +43,8 @@ pub struct Uart<'a, M: Mode> {
 /// Uart TX driver.
 pub struct UartTx<'a, M: Mode> {
     info: Info,
+    _tx_pin: GuardedAnyPin<'a>,
+    _cts_pin: Option<GuardedAnyPin<'a>>,
     _tx_dma: Option<Channel<'a>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
@@ -50,6 +52,8 @@ pub struct UartTx<'a, M: Mode> {
 /// Uart RX driver.
 pub struct UartRx<'a, M: Mode> {
     info: Info,
+    _rx_pin: GuardedAnyPin<'a>,
+    _rts_pin: Option<GuardedAnyPin<'a>>,
     _rx_dma: Option<Channel<'a>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
@@ -138,9 +142,15 @@ pub enum Error {
 pub type Result<T> = core::result::Result<T, Error>;
 
 impl<'a, M: Mode> UartTx<'a, M> {
-    fn new_inner<T: Instance>(_tx_dma: Option<Channel<'a>>) -> Self {
+    fn new_inner<T: Instance>(
+        _tx_pin: GuardedAnyPin<'a>,
+        _cts_pin: Option<GuardedAnyPin<'a>>,
+        _tx_dma: Option<Channel<'a>>,
+    ) -> Self {
         Self {
             info: T::info(),
+            _tx_pin,
+            _cts_pin,
             _tx_dma,
             _phantom: PhantomData,
         }
@@ -151,12 +161,9 @@ impl<'a> UartTx<'a, Blocking> {
     /// Create a new UART which can only send data
     /// Unidirectional Uart - Tx only
     pub fn new_blocking<T: Instance>(_inner: Peri<'a, T>, tx: Peri<'a, impl TxPin<T>>, config: Config) -> Result<Self> {
-        tx.as_tx();
-
-        let _tx = tx.into();
-        Uart::<Blocking>::init::<T>(Some(_tx), None, None, None, config)?;
-
-        Ok(Self::new_inner::<T>(None))
+        let tx = TxPin::as_tx(tx);
+        Uart::<Blocking>::init::<T>(Some(&tx), None, None, None, config)?;
+        Ok(Self::new_inner::<T>(tx, None, None))
     }
 
     fn write_byte_internal(&mut self, byte: u8) -> Result<()> {
@@ -217,9 +224,15 @@ impl<'a> UartTx<'a, Blocking> {
 }
 
 impl<'a, M: Mode> UartRx<'a, M> {
-    fn new_inner<T: Instance>(_rx_dma: Option<Channel<'a>>) -> Self {
+    fn new_inner<T: Instance>(
+        _rx_pin: GuardedAnyPin<'a>,
+        _rts_pin: Option<GuardedAnyPin<'a>>,
+        _rx_dma: Option<Channel<'a>>,
+    ) -> Self {
         Self {
             info: T::info(),
+            _rx_pin,
+            _rts_pin,
             _rx_dma,
             _phantom: PhantomData,
         }
@@ -229,12 +242,9 @@ impl<'a, M: Mode> UartRx<'a, M> {
 impl<'a> UartRx<'a, Blocking> {
     /// Create a new blocking UART which can only receive data
     pub fn new_blocking<T: Instance>(_inner: Peri<'a, T>, rx: Peri<'a, impl RxPin<T>>, config: Config) -> Result<Self> {
-        rx.as_rx();
-
-        let _rx = rx.into();
-        Uart::<Blocking>::init::<T>(None, Some(_rx), None, None, config)?;
-
-        Ok(Self::new_inner::<T>(None))
+        let rx = RxPin::as_rx(rx);
+        Uart::<Blocking>::init::<T>(None, Some(&rx), None, None, config)?;
+        Ok(Self::new_inner::<T>(rx, None, None))
     }
 }
 
@@ -293,10 +303,10 @@ impl UartRx<'_, Blocking> {
 
 impl<'a, M: Mode> Uart<'a, M> {
     fn init<T: Instance>(
-        tx: Option<Peri<'a, AnyPin>>,
-        rx: Option<Peri<'a, AnyPin>>,
-        rts: Option<Peri<'a, AnyPin>>,
-        cts: Option<Peri<'a, AnyPin>>,
+        tx: Option<&GuardedAnyPin<'a>>,
+        rx: Option<&GuardedAnyPin<'a>>,
+        rts: Option<&GuardedAnyPin<'a>>,
+        cts: Option<&GuardedAnyPin<'a>>,
         config: Config,
     ) -> Result<()> {
         T::enable(config.clock);
@@ -484,18 +494,15 @@ impl<'a> Uart<'a, Blocking> {
         rx: Peri<'a, impl RxPin<T>>,
         config: Config,
     ) -> Result<Self> {
-        tx.as_tx();
-        rx.as_rx();
+        let tx = TxPin::as_tx(tx);
+        let rx = RxPin::as_rx(rx);
 
-        let tx = tx.into();
-        let rx = rx.into();
-
-        Self::init::<T>(Some(tx), Some(rx), None, None, config)?;
+        Self::init::<T>(Some(&tx), Some(&rx), None, None, config)?;
 
         Ok(Self {
             info: T::info(),
-            tx: UartTx::new_inner::<T>(None),
-            rx: UartRx::new_inner::<T>(None),
+            tx: UartTx::new_inner::<T>(tx, None, None),
+            rx: UartRx::new_inner::<T>(rx, None, None),
         })
     }
 
@@ -539,17 +546,15 @@ impl<'a> UartTx<'a, Async> {
         tx_dma: Peri<'a, impl TxDma<T>>,
         config: Config,
     ) -> Result<Self> {
-        tx.as_tx();
-
-        let _tx = tx.into();
-        Uart::<Async>::init::<T>(Some(_tx), None, None, None, config)?;
+        let tx = TxPin::as_tx(tx);
+        Uart::<Async>::init::<T>(Some(&tx), None, None, None, config)?;
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
 
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
 
-        Ok(Self::new_inner::<T>(tx_dma))
+        Ok(Self::new_inner::<T>(tx, None, tx_dma))
     }
 
     /// Transmit the provided buffer asynchronously.
@@ -668,17 +673,15 @@ impl<'a> UartRx<'a, Async> {
         rx_dma: Peri<'a, impl RxDma<T>>,
         config: Config,
     ) -> Result<Self> {
-        rx.as_rx();
-
-        let _rx = rx.into();
-        Uart::<Async>::init::<T>(None, Some(_rx), None, None, config)?;
+        let rx = RxPin::as_rx(rx);
+        Uart::<Async>::init::<T>(None, Some(&rx), None, None, config)?;
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
 
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
-        Ok(Self::new_inner::<T>(rx_dma))
+        Ok(Self::new_inner::<T>(rx, None, rx_dma))
     }
 
     /// Read from UART RX asynchronously.
@@ -762,21 +765,18 @@ impl<'a> Uart<'a, Async> {
         rx_dma: Peri<'a, impl RxDma<T>>,
         config: Config,
     ) -> Result<Self> {
-        tx.as_tx();
-        rx.as_rx();
-
-        let tx = tx.into();
-        let rx = rx.into();
+        let tx = TxPin::as_tx(tx);
+        let rx = RxPin::as_rx(rx);
 
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
-        Self::init::<T>(Some(tx), Some(rx), None, None, config)?;
+        Self::init::<T>(Some(&tx), Some(&rx), None, None, config)?;
 
         Ok(Self {
             info: T::info(),
-            tx: UartTx::new_inner::<T>(tx_dma),
-            rx: UartRx::new_inner::<T>(rx_dma),
+            tx: UartTx::new_inner::<T>(tx, None, tx_dma),
+            rx: UartRx::new_inner::<T>(rx, None, rx_dma),
         })
     }
 
@@ -792,25 +792,20 @@ impl<'a> Uart<'a, Async> {
         rx_dma: Peri<'a, impl RxDma<T>>,
         config: Config,
     ) -> Result<Self> {
-        tx.as_tx();
-        rx.as_rx();
-        rts.as_rts();
-        cts.as_cts();
-
-        let tx = tx.into();
-        let rx = rx.into();
-        let rts = rts.into();
-        let cts = cts.into();
+        let tx = TxPin::as_tx(tx);
+        let rx = RxPin::as_rx(rx);
+        let rts = RtsPin::as_rts(rts);
+        let cts = CtsPin::as_cts(cts);
 
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
-        Self::init::<T>(Some(tx), Some(rx), Some(rts), Some(cts), config)?;
+        Self::init::<T>(Some(&tx), Some(&rx), Some(&rts), Some(&cts), config)?;
 
         Ok(Self {
             info: T::info(),
-            tx: UartTx::new_inner::<T>(tx_dma),
-            rx: UartRx::new_inner::<T>(rx_dma),
+            tx: UartTx::new_inner::<T>(tx, Some(cts), tx_dma),
+            rx: UartRx::new_inner::<T>(rx, Some(rts), rx_dma),
         })
     }
 
@@ -1164,26 +1159,26 @@ impl<T: Pin> sealed::Sealed for T {}
 
 /// io configuration trait for Uart Tx configuration
 pub trait TxPin<T: Instance>: Pin + sealed::Sealed + PeripheralType {
-    /// convert the pin to appropriate function for Uart Tx  usage
-    fn as_tx(&self);
+    /// convert the pin to appropriate function for Uart Tx usage
+    fn as_tx(pin: Peri<'_, Self>) -> GuardedAnyPin<'_>;
 }
 
 /// io configuration trait for Uart Rx configuration
 pub trait RxPin<T: Instance>: Pin + sealed::Sealed + PeripheralType {
-    /// convert the pin to appropriate function for Uart Rx  usage
-    fn as_rx(&self);
+    /// convert the pin to appropriate function for Uart Rx usage
+    fn as_rx(pin: Peri<'_, Self>) -> GuardedAnyPin<'_>;
 }
 
 /// io configuration trait for Uart Cts
 pub trait CtsPin<T: Instance>: Pin + sealed::Sealed + PeripheralType {
     /// convert the pin to appropriate function for Uart Cts usage
-    fn as_cts(&self);
+    fn as_cts(pin: Peri<'_, Self>) -> GuardedAnyPin<'_>;
 }
 
 /// io configuration trait for Uart Rts
 pub trait RtsPin<T: Instance>: Pin + sealed::Sealed + PeripheralType {
     /// convert the pin to appropriate function for Uart Rts usage
-    fn as_rts(&self);
+    fn as_rts(pin: Peri<'_, Self>) -> GuardedAnyPin<'_>;
 }
 
 macro_rules! impl_pin_trait {
@@ -1191,9 +1186,9 @@ macro_rules! impl_pin_trait {
         paste! {
 	    $(
                 impl [<$mode:camel Pin>]<crate::peripherals::$fcn> for crate::peripherals::$pin {
-                    fn [<as_ $mode>](&self) {
+                    fn [<as_ $mode>](pin: Peri<'_, Self>) -> GuardedAnyPin<'_> {
                         // UM11147 table 507 pg 495
-                        self.set_function(crate::iopctl::Function::$fn)
+                        pin.set_function(crate::iopctl::Function::$fn)
                             .set_pull(Pull::None)
                             .enable_input_buffer()
                             .set_slew_rate(SlewRate::Standard)
@@ -1201,6 +1196,8 @@ macro_rules! impl_pin_trait {
                             .disable_analog_multiplex()
                             .set_drive_mode(DriveMode::PushPull)
                             .set_input_inverter(Inverter::Disabled);
+
+                        GuardedAnyPin::from(pin)
                     }
                 }
 	    )*
