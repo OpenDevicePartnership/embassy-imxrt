@@ -2,12 +2,12 @@
 
 use core::marker::PhantomData;
 
-use embassy_hal_internal::Peripheral;
+use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 use sealed::Sealed;
 
-use crate::iopctl::IopctlPin as Pin;
+use crate::iopctl::{GuardedAnyPin, IopctlFunctionPin, IopctlPin as Pin};
 use crate::{dma, interrupt};
 
 /// I2C Master Driver
@@ -176,13 +176,13 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 /// io configuration trait for easier configuration
 pub trait SclPin<Instance>: Pin + sealed::Sealed + Peripheral {
     /// convert the pin to appropriate function for SCL usage
-    fn as_scl(&self);
+    fn as_scl<'a>(pin: impl Peripheral<P = Self> + 'a) -> GuardedAnyPin<'a>;
 }
 
 /// io configuration trait for easier configuration
 pub trait SdaPin<Instance>: Pin + sealed::Sealed + Peripheral {
     /// convert the pin to appropriate function for SDA usage
-    fn as_sda(&self);
+    fn as_sda<'a>(pin: impl Peripheral<P = Self> + 'a) -> GuardedAnyPin<'a>;
 }
 
 /// Driver mode.
@@ -199,20 +199,28 @@ pub struct Async;
 impl Sealed for Async {}
 impl Mode for Async {}
 
+fn configure_pin(pin: &PeripheralRef<'_, impl Pin>) {
+    pin.set_pull(crate::iopctl::Pull::None)
+        .enable_input_buffer()
+        .set_slew_rate(crate::gpio::SlewRate::Slow)
+        .set_drive_strength(crate::gpio::DriveStrength::Normal)
+        .disable_analog_multiplex()
+        .set_drive_mode(crate::gpio::DriveMode::OpenDrain)
+        .set_input_inverter(crate::gpio::Inverter::Disabled);
+}
+
 // flexcomm <-> Pin function map
 macro_rules! impl_scl {
     ($piom_n:ident, $fn:ident, $fcn:ident) => {
         impl SclPin<crate::peripherals::$fcn> for crate::peripherals::$piom_n {
-            fn as_scl(&self) {
+            fn as_scl<'a>(pin: impl Peripheral<P = Self> + 'a) -> GuardedAnyPin<'a> {
+                into_ref!(pin);
+
                 // UM11147 table 556 pg 550
-                self.set_function(crate::iopctl::Function::$fn)
-                    .set_pull(crate::iopctl::Pull::None)
-                    .enable_input_buffer()
-                    .set_slew_rate(crate::gpio::SlewRate::Slow)
-                    .set_drive_strength(crate::gpio::DriveStrength::Normal)
-                    .disable_analog_multiplex()
-                    .set_drive_mode(crate::gpio::DriveMode::OpenDrain)
-                    .set_input_inverter(crate::gpio::Inverter::Disabled);
+                pin.set_function(crate::iopctl::Function::$fn);
+                configure_pin(&pin);
+
+                pin.into()
             }
         }
     };
@@ -220,16 +228,14 @@ macro_rules! impl_scl {
 macro_rules! impl_sda {
     ($piom_n:ident, $fn:ident, $fcn:ident) => {
         impl SdaPin<crate::peripherals::$fcn> for crate::peripherals::$piom_n {
-            fn as_sda(&self) {
+            fn as_sda<'a>(pin: impl Peripheral<P = Self> + 'a) -> GuardedAnyPin<'a> {
+                into_ref!(pin);
+
                 // UM11147 table 556 pg 550
-                self.set_function(crate::iopctl::Function::$fn)
-                    .set_pull(crate::iopctl::Pull::None)
-                    .enable_input_buffer()
-                    .set_slew_rate(crate::gpio::SlewRate::Slow)
-                    .set_drive_strength(crate::gpio::DriveStrength::Normal)
-                    .disable_analog_multiplex()
-                    .set_drive_mode(crate::gpio::DriveMode::OpenDrain)
-                    .set_input_inverter(crate::gpio::Inverter::Disabled);
+                pin.set_function(crate::iopctl::Function::$fn);
+                configure_pin(&pin);
+
+                pin.into()
             }
         }
     };
@@ -304,8 +310,20 @@ impl_scl!(PIO4_4, F1, FLEXCOMM7);
 // Flexcomm15 GPIOs
 // Function configuration is not needed for FC15
 // Implementing SCL/SDA traits to use the I2C APIs
-impl_scl!(PIOFC15_SCL, F1, FLEXCOMM15);
-impl_sda!(PIOFC15_SDA, F1, FLEXCOMM15);
+impl SclPin<crate::peripherals::FLEXCOMM15> for crate::peripherals::PIOFC15_SCL {
+    fn as_scl<'a>(pin: impl Peripheral<P = Self> + 'a) -> GuardedAnyPin<'a> {
+        into_ref!(pin);
+        configure_pin(&pin);
+        pin.into()
+    }
+}
+impl SdaPin<crate::peripherals::FLEXCOMM15> for crate::peripherals::PIOFC15_SDA {
+    fn as_sda<'a>(pin: impl Peripheral<P = Self> + 'a) -> GuardedAnyPin<'a> {
+        into_ref!(pin);
+        configure_pin(&pin);
+        pin.into()
+    }
+}
 
 /// I2C Master DMA trait.
 #[allow(private_bounds)]

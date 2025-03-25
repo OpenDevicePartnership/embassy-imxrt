@@ -4,14 +4,14 @@ use core::marker::PhantomData;
 use core::task::Poll;
 
 use embassy_futures::select::{select, Either};
-use embassy_hal_internal::drop::OnDrop;
-use embassy_hal_internal::into_ref;
+use embassy_hal_internal::{drop::OnDrop, into_ref};
 
 use super::{
     Async, Blocking, Error, Info, Instance, InterruptHandler, MasterDma, Mode, Result, SclPin, SdaPin, TransferError,
     I2C_WAKERS, TEN_BIT_PREFIX,
 };
 use crate::interrupt::typelevel::Interrupt;
+use crate::iopctl::GuardedAnyPin;
 use crate::{dma, interrupt, Peripheral};
 
 /// Bus speed (nominal SCL, no clock stretching)
@@ -34,6 +34,8 @@ pub struct I2cMaster<'a, M: Mode> {
     info: Info,
     _phantom: PhantomData<M>,
     dma_ch: Option<dma::channel::Channel<'a>>,
+    _sda: GuardedAnyPin<'a>,
+    _scl: GuardedAnyPin<'a>,
 }
 
 impl<'a, M: Mode> I2cMaster<'a, M> {
@@ -46,11 +48,9 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
         dma_ch: Option<dma::channel::Channel<'a>>,
     ) -> Result<Self> {
         into_ref!(_bus);
-        into_ref!(scl);
-        into_ref!(sda);
 
-        sda.as_sda();
-        scl.as_scl();
+        let sda = SdaPin::as_sda(sda);
+        let scl = SclPin::as_scl(scl);
 
         let info = T::info();
         let regs = info.regs;
@@ -98,6 +98,8 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
             info,
             _phantom: PhantomData,
             dma_ch,
+            _scl: scl,
+            _sda: sda,
         })
     }
 

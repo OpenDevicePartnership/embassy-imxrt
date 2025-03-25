@@ -11,6 +11,7 @@ use super::{
     I2C_WAKERS, TEN_BIT_PREFIX,
 };
 use crate::interrupt::typelevel::Interrupt;
+use crate::iopctl::GuardedAnyPin;
 use crate::pac::i2c0::stat::Slvstate;
 use crate::{dma, interrupt};
 
@@ -132,6 +133,8 @@ pub struct I2cSlave<'a, M: Mode> {
     _phantom: PhantomData<M>,
     dma_ch: Option<dma::channel::Channel<'a>>,
     ten_bit_info: Option<TenBitAddressInfo>,
+    _sda: GuardedAnyPin<'a>,
+    _scl: GuardedAnyPin<'a>,
 }
 
 impl<'a, M: Mode> I2cSlave<'a, M> {
@@ -145,11 +148,9 @@ impl<'a, M: Mode> I2cSlave<'a, M> {
         dma_ch: Option<dma::channel::Channel<'a>>,
     ) -> Result<Self> {
         into_ref!(_bus);
-        into_ref!(scl);
-        into_ref!(sda);
 
-        sda.as_sda();
-        scl.as_scl();
+        let sda = SdaPin::as_sda(sda);
+        let scl = SclPin::as_scl(scl);
 
         // this check should be redundant with T::set_mode()? above
         let info = T::info();
@@ -199,6 +200,8 @@ impl<'a, M: Mode> I2cSlave<'a, M> {
             _phantom: PhantomData,
             dma_ch,
             ten_bit_info,
+            _scl: scl,
+            _sda: sda,
         })
     }
 }
