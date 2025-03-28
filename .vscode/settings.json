@@ -3,7 +3,7 @@
         "editor.formatOnSave": false
     },
     "[toml]": {
-        "editor.formatOnSave": true
+        "editor.formatOnSave": false
     },
     "[rust]": {
         "editor.formatOnSave": true
