@@ -11,6 +11,7 @@ use super::{
     I2C_WAKERS, TEN_BIT_PREFIX,
 };
 use crate::interrupt::typelevel::Interrupt;
+use crate::iopctl::GuardedAnyPin;
 use crate::{dma, interrupt, Peri};
 
 /// Bus speed (nominal SCL, no clock stretching)
@@ -33,6 +34,8 @@ pub struct I2cMaster<'a, M: Mode> {
     info: Info,
     _phantom: PhantomData<M>,
     dma_ch: Option<dma::channel::Channel<'a>>,
+    _sda: GuardedAnyPin<'a>,
+    _scl: GuardedAnyPin<'a>,
 }
 
 impl<'a, M: Mode> I2cMaster<'a, M> {
@@ -44,8 +47,8 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
         speed: Speed,
         dma_ch: Option<dma::channel::Channel<'a>>,
     ) -> Result<Self> {
-        sda.as_sda();
-        scl.as_scl();
+        let sda = SdaPin::as_sda(sda);
+        let scl = SclPin::as_scl(scl);
 
         let info = T::info();
         let regs = info.regs;
@@ -93,6 +96,8 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
             info,
             _phantom: PhantomData,
             dma_ch,
+            _scl: scl,
+            _sda: sda,
         })
     }
 
