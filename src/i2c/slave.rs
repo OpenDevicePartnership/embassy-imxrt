@@ -219,7 +219,7 @@ impl<'a> I2cSlave<'a, Blocking> {
     fn poll(&self) -> Result<()> {
         let i2c = self.info.regs;
 
-        while i2c.stat().read().slvpending().is_in_progress() {}
+        while i2c.stat().read().slvpending().is_in_progress() && i2c.stat().read().slvdesel().is_not_deselected() {}
 
         Ok(())
     }
