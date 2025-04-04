@@ -12,7 +12,8 @@
     "rust-analyzer.check.command": "clippy",
     "rust-analyzer.cargo.target": "thumbv8m.main-none-eabihf",
     "rust-analyzer.linkedProjects": [
-        "${workspaceFolder}/Cargo.toml",
+        //"${workspaceFolder}/Cargo.toml",
+        "${workspaceFolder}/examples/rt633/Cargo.toml",
         "${workspaceFolder}/examples/rt685s-evk/Cargo.toml",
     ],
     "rust-analyzer.cargo.features": [
@@ -21,5 +22,6 @@
         // "defmt",
         // "time",
         // "time-driver",
+        // "mimxrt633s",
     ]
 }
