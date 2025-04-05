@@ -15,3 +15,4 @@ target = "thumbv8m.main-none-eabihf" # Cortex-M33
 
 [env]
 DEFMT_LOG = "trace"
+EMBASSY_EXECUTOR_TASK_ARENA_SIZE = "16384"
