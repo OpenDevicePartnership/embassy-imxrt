@@ -1,0 +1,3 @@
+[toolchain]
+targets = [ "thumbv8m.main-none-eabihf" ]
+components = [ "rust-src", "rustfmt", "llvm-tools-preview", "clippy" ]
