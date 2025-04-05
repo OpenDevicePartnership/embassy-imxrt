@@ -4,6 +4,7 @@ use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
+use embassy_hal_internal::drop::OnDrop;
 use embassy_hal_internal::Peri;
 
 use super::{
@@ -532,6 +533,11 @@ impl I2cSlave<'_, Async> {
                 .unwrap()
                 .read_from_peripheral(i2c.slvdat().as_ptr() as *mut u8, buf, options);
 
+        // Hold guard to disable on cancellation or completion
+        let _dma_guard = OnDrop::new(|| {
+            i2c.slvctl().modify(|_r, w| w.slvdma().disabled());
+        });
+
         poll_fn(|cx| {
             let i2c = self.info.regs;
             let dma = self.dma_ch.as_ref().unwrap();
@@ -604,6 +610,11 @@ impl I2cSlave<'_, Async> {
                 .as_ref()
                 .unwrap()
                 .write_to_peripheral(buf, i2c.slvdat().as_ptr() as *mut u8, options);
+
+        // Hold guard to disable on cancellation or completion
+        let _dma_guard = OnDrop::new(|| {
+            i2c.slvctl().modify(|_r, w| w.slvdma().disabled());
+        });
 
         poll_fn(|cx| {
             let i2c = self.info.regs;

@@ -479,17 +479,16 @@ impl<'a> I2cMaster<'a, Async> {
         let i2cregs = self.info.regs;
 
         // read of 0 size is not allowed according to i2c spec
-        if read.is_empty() {
+        //
+        // These are used in the DMA branch, but also checks implicitly
+        // if the slice is empty, so we do it here anyway
+        let Some((last_byte, dma_read)) = read.split_last_mut() else {
             return Err(TransferError::OtherBusError.into());
-        }
+        };
 
         self.start(address, true).await?;
 
         if self.dma_ch.is_some() {
-            // Do a DMA recv
-            // Read one byte less using DMA and then read the last byte manually
-            let (dma_read, last_byte) = read.split_at_mut(read.len() - 1);
-
             if !dma_read.is_empty() {
                 let transfer = dma::transfer::Transfer::new_read(
                     self.dma_ch.as_mut().unwrap(),
@@ -505,6 +504,12 @@ impl<'a> I2cMaster<'a, Async> {
                 // Additionally, at this point we know the slave has
                 // acknowledged the address.
                 i2cregs.mstctl().write(|w| w.mstdma().enabled());
+
+                // Use drop guard to ensure that DMA is disabled when we exit
+                // scope, successful or not.
+                let _dma_guard = OnDrop::new(|| {
+                    i2cregs.mstctl().modify(|_r, w| w.mstdma().disabled());
+                });
 
                 let res = select(
                     transfer,
@@ -532,8 +537,6 @@ impl<'a> I2cMaster<'a, Async> {
                     }),
                 )
                 .await;
-
-                i2cregs.mstctl().write(|w| w.mstdma().disabled());
 
                 if let Either::Second(e) = res {
                     e?;
@@ -568,7 +571,7 @@ impl<'a> I2cMaster<'a, Async> {
             .await?;
 
             // Read the last byte
-            last_byte[0] = i2cregs.mstdat().read().data().bits();
+            *last_byte = i2cregs.mstdat().read().data().bits();
         } else {
             // No DMA recv, we must manually recv one byte at a time.
             let read_len = read.len();
@@ -645,6 +648,12 @@ impl<'a> I2cMaster<'a, Async> {
             // acknowledged the address.
             i2cregs.mstctl().write(|w| w.mstdma().enabled());
 
+            // Use drop guard to ensure that DMA is disabled when we exit
+            // scope, successful or not.
+            let dma_guard = OnDrop::new(|| {
+                i2cregs.mstctl().modify(|_r, w| w.mstdma().disabled());
+            });
+
             let res = select(
                 transfer,
                 poll_fn(|cx| {
@@ -672,7 +681,8 @@ impl<'a> I2cMaster<'a, Async> {
             )
             .await;
 
-            i2cregs.mstctl().write(|w| w.mstdma().disabled());
+            // trigger drop guard to disable DMA flag
+            drop(dma_guard);
 
             if let Either::Second(e) = res {
                 e?;
