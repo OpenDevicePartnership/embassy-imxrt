@@ -5,7 +5,7 @@ extern crate embassy_imxrt_examples;
 
 use defmt::{error, info};
 use embassy_executor::Spawner;
-use embassy_imxrt::iopctl::IopctlPin;
+use embassy_imxrt::iopctl::{IopctlFunctionPin, IopctlPin};
 use embassy_imxrt::{clocks, gpio};
 use embassy_time::Timer;
 use {defmt_rtt as _, embassy_imxrt as _, panic_probe as _};
