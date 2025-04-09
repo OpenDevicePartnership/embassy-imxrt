@@ -270,7 +270,7 @@ dependencies = [
 [[package]]
 name = "embassy-executor"
 version = "0.7.0"
-source = "git+https://github.com/embassy-rs/embassy#61b77624219eac1b5e74bdeeb64f5c38df997a93"
+source = "git+https://github.com/embassy-rs/embassy#5158482eb95d2ec5c25d0d65991e7df2d5733e10"
 dependencies = [
  "critical-section",
  "document-features",
@@ -280,7 +280,7 @@ dependencies = [
 [[package]]
 name = "embassy-executor-macros"
 version = "0.6.2"
-source = "git+https://github.com/embassy-rs/embassy#61b77624219eac1b5e74bdeeb64f5c38df997a93"
+source = "git+https://github.com/embassy-rs/embassy#5158482eb95d2ec5c25d0d65991e7df2d5733e10"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -291,7 +291,7 @@ dependencies = [
 [[package]]
 name = "embassy-futures"
 version = "0.1.1"
-source = "git+https://github.com/embassy-rs/embassy#61b77624219eac1b5e74bdeeb64f5c38df997a93"
+source = "git+https://github.com/embassy-rs/embassy#5158482eb95d2ec5c25d0d65991e7df2d5733e10"
 
 [[package]]
 name = "embassy-hal-internal"
@@ -343,7 +343,7 @@ dependencies = [
 [[package]]
 name = "embassy-sync"
 version = "0.6.2"
-source = "git+https://github.com/embassy-rs/embassy#61b77624219eac1b5e74bdeeb64f5c38df997a93"
+source = "git+https://github.com/embassy-rs/embassy#5158482eb95d2ec5c25d0d65991e7df2d5733e10"
 dependencies = [
  "cfg-if",
  "critical-section",
@@ -357,7 +357,7 @@ dependencies = [
 [[package]]
 name = "embassy-time"
 version = "0.4.0"
-source = "git+https://github.com/embassy-rs/embassy#61b77624219eac1b5e74bdeeb64f5c38df997a93"
+source = "git+https://github.com/embassy-rs/embassy#5158482eb95d2ec5c25d0d65991e7df2d5733e10"
 dependencies = [
  "cfg-if",
  "critical-section",
@@ -372,7 +372,7 @@ dependencies = [
 [[package]]
 name = "embassy-time-driver"
 version = "0.2.0"
-source = "git+https://github.com/embassy-rs/embassy#61b77624219eac1b5e74bdeeb64f5c38df997a93"
+source = "git+https://github.com/embassy-rs/embassy#5158482eb95d2ec5c25d0d65991e7df2d5733e10"
 dependencies = [
  "document-features",
 ]
@@ -466,7 +466,7 @@ dependencies = [
 [[package]]
 name = "embedded-services"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-services#80725fb5796292f9fee2c739641d7eb6a4c7113f"
+source = "git+https://github.com/OpenDevicePartnership/embedded-services#2ccfbcdc4a779c1882bc85a86ba5570170a6e003"
 dependencies = [
  "bitfield 0.17.0",
  "bitflags 2.9.0",
@@ -892,7 +892,7 @@ dependencies = [
 [[package]]
 name = "storage_bus"
 version = "0.1.1"
-source = "git+https://github.com/OpenDevicePartnership/embedded-services#80725fb5796292f9fee2c739641d7eb6a4c7113f"
+source = "git+https://github.com/OpenDevicePartnership/embedded-services#2ccfbcdc4a779c1882bc85a86ba5570170a6e003"
 dependencies = [
  "embassy-executor",
  "embassy-sync",
