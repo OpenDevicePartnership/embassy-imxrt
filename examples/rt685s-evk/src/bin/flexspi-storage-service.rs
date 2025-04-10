@@ -3,9 +3,9 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_imxrt::flexspi_nor_storage_bus::{
+use embassy_imxrt::flexspi::nor::{
     AhbConfig, FlexSpiBusWidth, FlexSpiFlashPort, FlexSpiFlashPortDeviceInstance, FlexspiAhbBufferConfig,
-    FlexspiConfig, FlexspiDeviceConfig, FlexspiNorStorageBus,
+    FlexspiConfig, FlexspiConfigPortData, FlexspiDeviceConfig, FlexspiNorStorageBus, FlexspiPinConfig, SpiSinglePin,
 };
 use embassy_imxrt::pac::flexspi::ahbcr::*;
 use embassy_imxrt::pac::flexspi::flshcr1::*;
@@ -403,20 +403,19 @@ async fn main(_spawner: Spawner) {
     };
 
     let mut flexspi_storage = FlexspiNorStorageBus::new_blocking(
-        p.FLEXSPI,       // FlexSPI peripheral
-        Some(p.PIO1_11), // FlexSPI DATA 0 pin
-        Some(p.PIO1_12),
-        Some(p.PIO1_13),
-        Some(p.PIO1_14),
-        Some(p.PIO2_17),
-        Some(p.PIO2_18),
-        Some(p.PIO2_22),
-        Some(p.PIO2_23),
-        p.PIO1_29,
-        p.PIO2_19,
-        FlexSpiFlashPort::PortB,                         // FlexSPI port
-        FlexSpiBusWidth::Octal,                          // FlexSPI bus width
-        FlexSpiFlashPortDeviceInstance::DeviceInstance0, // FlexSPI device instance
+        p.FLEXSPI, // FlexSPI peripheral
+        FlexspiPinConfig::SingleSpiPin {
+            data_pins: SpiSinglePin { data0: p.PIO1_11 },
+            clk: p.PIO1_29,
+            cs: p.PIO2_19,
+        },
+        FlexspiConfigPortData {
+            port: FlexSpiFlashPort::PortB,                                 // FlexSPI port
+            bus_width: FlexSpiBusWidth::Octal,                             // FlexSPI bus width
+            dev_instance: FlexSpiFlashPortDeviceInstance::DeviceInstance0, // FlexSPI device instance
+            rx_watermark: 8,                                               // 8 bytes
+            tx_watermark: 8,                                               // 8 bytes
+        },
     );
 
     // Configure the Flexspi controller

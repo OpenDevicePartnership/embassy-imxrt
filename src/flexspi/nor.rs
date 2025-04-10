@@ -7,12 +7,15 @@ use embassy_hal_internal::{Peri, PeripheralType};
 use embassy_time::Instant;
 use mimxrt600_fcb::FlexSpiLutOpcode;
 use mimxrt600_fcb::FlexSpiLutOpcode::*;
+use paste::paste;
 use storage_bus::nor::{
     BlockingNorStorageBusDriver, NorStorageBusError, NorStorageBusWidth, NorStorageCmd, NorStorageCmdMode,
     NorStorageCmdType, NorStorageDummyCycles,
 };
 
 use crate::clocks::enable_and_reset;
+#[cfg(feature = "time")]
+use crate::flexspi::expired;
 use crate::iopctl::IopctlPin as Pin;
 use crate::pac::flexspi::ahbcr::*;
 use crate::pac::flexspi::flshcr1::*;
@@ -22,20 +25,87 @@ use crate::pac::flexspi::mcr0::*;
 use crate::pac::flexspi::mcr2::*;
 use crate::{interrupt, peripherals};
 
+macro_rules! configure_ports_a {
+    ($port:expr, $regs: ident, $device_config: ident, $flash_size: ident) => {
+        paste! {
+            $regs.[<flsha $port cr0>]().modify(|_, w| unsafe { w.flshsz().bits($flash_size) });
+            $regs.[<flshcr1a $port>]().modify(|_, w| unsafe {
+                w.csinterval()
+                    .bits($device_config.cs_interval)
+                    .tcsh()
+                    .bits($device_config.cs_hold_time)
+                    .tcss()
+                    .bits($device_config.cs_setup_time)
+                    .cas()
+                    .bits($device_config.columnspace)
+                    .wa()
+                    .bit($device_config.enable_word_address)
+                    .csintervalunit()
+                    .variant($device_config.cs_interval_unit)
+            });
+            $regs.[<flshcr2a $port>]()
+                .modify(|_, w| w.awrwaitunit().variant($device_config.ahb_write_wait_unit));
+
+            if $device_config.ard_seq_number > 0 {
+                $regs.[<flshcr2a $port>]().modify(|_, w| unsafe {
+                    w.ardseqnum()
+                        .bits($device_config.ard_seq_number - 1)
+                        .ardseqid()
+                        .bits($device_config.ard_seq_index)
+                });
+            }
+        }
+    };
+}
+
+macro_rules! configure_ports_b {
+    ($port:expr, $regs: ident, $device_config: ident, $flash_size: ident) => {
+        paste! {
+            $regs.[<flshb $port cr0>]().modify(|_, w| unsafe { w.flshsz().bits($flash_size) });
+            $regs.[<flshcr1b $port>]().modify(|_, w| unsafe {
+                w.csinterval()
+                    .bits($device_config.cs_interval)
+                    .tcsh()
+                    .bits($device_config.cs_hold_time)
+                    .tcss()
+                    .bits($device_config.cs_setup_time)
+                    .cas()
+                    .bits($device_config.columnspace)
+                    .wa()
+                    .bit($device_config.enable_word_address)
+                    .csintervalunit()
+                    .variant($device_config.cs_interval_unit)
+            });
+            $regs.[<flshcr2b $port>]()
+                .modify(|_, w| w.awrwaitunit().variant($device_config.ahb_write_wait_unit));
+
+            if $device_config.ard_seq_number > 0 {
+                $regs.[<flshcr2b $port>]().modify(|_, w| unsafe {
+                    w.ardseqnum()
+                        .bits($device_config.ard_seq_number - 1)
+                        .ardseqid()
+                        .bits($device_config.ard_seq_index)
+                });
+            }
+        }
+    };
+}
+
+const FLEXSPI_FIFO_ENTRY_SIZE: u32 = 4; // 4 bytes
 const MAX_FLEXSPI_TRANSFER_SIZE: u32 = 128;
 const FLEXSPI_OP_SEQ_NUMBER: u8 = 0;
 const FLEXSPI_LUT_UNLOCK_CODE: u32 = 0x5AF05AF0;
 
 #[cfg(feature = "time")]
-const FLEXSPI_CMD_COMPLETION_TIMEOUT: u64 = 1000; // 1 second
+const FLEXSPI_CMD_COMPLETION_TIMEOUT: u64 = 10; // 10 millisecond
 #[cfg(feature = "time")]
-const FLEXSPI_DATA_FILL_TIMEOUT: u64 = 1000; // 1 second
+const FLEXSPI_DATA_FILL_TIMEOUT: u64 = 10; // 10 millisecond
 #[cfg(feature = "time")]
-const FLEXSPI_TX_FIFO_FREE_WATERMARK_TIMEOUT: u64 = 1000; // 1 second
+const FLEXSPI_TX_FIFO_FREE_WATERMARK_TIMEOUT: u64 = 10; // 10 millisecond
 #[cfg(feature = "time")]
-const FLEXSPI_RESET_TIMEOUT: u64 = 1000; // 1 second
+const FLEXSPI_RESET_TIMEOUT: u64 = 10; // 10 millisecond
 #[cfg(feature = "time")]
-const FLEXSPI_IDLE_TIMEOUT: u64 = 1000; // 1 second
+const FLEXSPI_IDLE_TIMEOUT: u64 = 10; // 10 millisecond
 
 const CLOCK_100MHZ: u32 = 100_000_000;
 const DELAYCELLUNIT: u32 = 75; // 75ps
@@ -56,6 +126,107 @@ pub enum FlexSpiFlashPortDeviceInstance {
     DeviceInstance0,
     /// Device Instance 1
     DeviceInstance1,
+}
+
+/// FlexSPI Configuration Port data structure
+pub struct FlexspiConfigPortData {
+    /// FlexSPI Port - PortA or PortB
+    pub port: FlexSpiFlashPort,
+    /// FlexSPI Bus Width - Single, Dual, Quad or Octal
+    pub bus_width: FlexSpiBusWidth,
+    /// FlexSPI Flash Port Device Instance - DeviceInstance0 or DeviceInstance1
+    pub dev_instance: FlexSpiFlashPortDeviceInstance,
+    /// FlexSPI RX FIFO Watermark Level
+    pub rx_watermark: u8,
+    /// FlexSPI TX FIFO Watermark Level
+    pub tx_watermark: u8,
+}
+
+/// FlexSPI Pin Configuration for Single Pin Mode
+pub struct SpiSinglePin<'d, T: FlexSpiPin> {
+    /// Data Pin 0
+    pub data0: Peri<'d, T>,
+}
+
+/// FlexSPI Pin Configuration for Dual Pin Mode
+pub struct SpiDualPin<'d, T: FlexSpiPin> {
+    /// Data Pin 0
+    pub data0: Peri<'d, T>,
+    /// Data Pin 1
+    pub data1: Peri<'d, T>,
+}
+
+/// FlexSPI Pin Configuration for Quad Pin Mode
+pub struct SpiQuadPin<'d, T: FlexSpiPin> {
+    /// Data Pin 0
+    pub data0: Peri<'d, T>,
+    /// Data Pin 1
+    pub data1: Peri<'d, T>,
+    /// Data Pin 2
+    pub data2: Peri<'d, T>,
+    /// Data Pin 3
+    pub data3: Peri<'d, T>,
+}
+
+/// FlexSPI Pin Configuration for Octal Pin Mode
+pub struct SpiOctalPin<'d, T: FlexSpiPin> {
+    /// Data Pin 0
+    pub data0: Peri<'d, T>,
+    /// Data Pin 1
+    pub data1: Peri<'d, T>,
+    /// Data Pin 2
+    pub data2: Peri<'d, T>,
+    /// Data Pin 3
+    pub data3: Peri<'d, T>,
+    /// Data Pin 4
+    pub data4: Peri<'d, T>,
+    /// Data Pin 5
+    pub data5: Peri<'d, T>,
+    /// Data Pin 6
+    pub data6: Peri<'d, T>,
+    /// Data Pin 7
+    pub data7: Peri<'d, T>,
+}
+
+/// FlexSPI Pin Configuration
+/// This structure is used to configure the FlexSPI pins for different modes of operation.
+pub enum FlexspiPinConfig<'d, T: FlexSpiPin, CS: FlexSpiPin, CLK: FlexSpiPin> {
+    /// Single SPI Pin Configuration
+    SingleSpiPin {
+        /// Single config
+        data_pins: SpiSinglePin<'d, T>,
+        /// SCK Pin
+        clk: Peri<'d, CLK>,
+        /// Chip select pin
+        cs: Peri<'d, CS>,
+    },
+    /// Dual SPI Pin Configuration
+    DualSpiPin {
+        /// Dual Spi config
+        data_pins: SpiDualPin<'d, T>,
+        /// SCK Pin
+        clk: Peri<'d, T>,
+        /// Chip select pin
+        cs: Peri<'d, T>,
+    },
+    /// Quad SPI Pin Configuration
+    QuadSpiPin {
+        /// Quad Spi config
+        data_pins: SpiQuadPin<'d, T>,
+        /// SCK Pin
+        clk: Peri<'d, T>,
+        /// Chip select pin
+        cs: Peri<'d, T>,
+    },
+    /// Octal SPI Pin Configuration
+    OctalSpiPin {
+        /// Octal Spi config
+        data_pins: SpiOctalPin<'d, T>,
+        /// SCK Pin
+        clk: Peri<'d, T>,
+        /// Chip select pin
+        cs: Peri<'d, T>,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -122,7 +293,8 @@ pub struct FlexspiAhbBufferConfig {
     pub master_index: u8,
     /// AHB buffer size in byte.   
     pub buffer_size: u16,
-    /// AHB Read Prefetch Enable for current AHB RX Buffer corresponding Master, allows to prefetch data for AHB read access.
+    /// AHB Read Prefetch Enable for current AHB RX Buffer corresponding Master, allows to prefetch
+    /// data for AHB read access.
     pub enable_prefetch: bool,
 }
 
@@ -178,17 +350,20 @@ pub struct AhbConfig {
     pub ahb_grant_timeout_cycle: u8,
     /// Timeout wait cycle for AHB read/write access, timeout after ahbBusTimeoutCycle*1024 AHB clock cycles.
     pub ahb_bus_timeout_cycle: u16,
-    /// Wait cycle for idle state before suspended command sequence resume, timeout after ahbBusTimeoutCycle AHB clock cycles.
+    /// Wait cycle for idle state before suspended command sequence resume, timeout after ahbBusTimeoutCycle
+    /// AHB clock cycles.
     pub resume_wait_cycle: u8,
     /// AHB buffer size.
     pub buffer: [FlexspiAhbBufferConfig; 8],
     /// Enable/disable automatically clean AHB RX Buffer and TX Buffer when FLEXSPI returns STOP mode ACK.
     pub enable_clear_ahb_buffer_opt: Clrahbbufopt,
-    /// Enable/disable remove AHB read burst start address alignment limitation. when enable, there is no AHB read burst start address alignment limitation.
+    /// Enable/disable remove AHB read burst start address alignment limitation. when enable, there is no AHB
+    /// read burst start address alignment limitation.
     pub enable_read_address_opt: Readaddropt,
     /// Enable/disable AHB read prefetch feature, when enabled, FLEXSPI will fetch more data than current AHB burst.
     pub enable_ahb_prefetch: bool,
-    /// Enable/disable AHB bufferable write access support, when enabled, FLEXSPI return before waiting for command execution finished.
+    /// Enable/disable AHB bufferable write access support, when enabled, FLEXSPI return before waiting for command
+    /// execution finished.
     pub enable_ahb_bufferable: Bufferableen,
     /// Enable AHB bus cachable read access support.
     pub enable_ahb_cachable: Cachableen,
@@ -201,17 +376,21 @@ pub struct FlexspiConfig {
     pub rx_sample_clock: Rxclksrc,
     /// Enable/disable SCK output free-running.
     pub enable_sck_free_running: Sckfreerunen,
-    /// Enable/disable combining PORT A and B Data Pins (SIOA[3:0] and SIOB[3:0]) to support Flash Octal mode.
+    /// Enable/disable combining PORT A and B Data Pins (SIOA[3:0] and SIOB[3:0]) to support
+    /// Flash Octal mode.
     pub enable_combination: bool,
     /// Enable/disable doze mode support.
     pub enable_doze: Dozeen,
     /// Enable/disable divide by 2 of the clock for half speed commands.
     pub enable_half_speed_access: Hsen,
-    /// Enable/disable SCKB pad use as SCKA differential clock output, when enable, Port B flash access is not available.
+    /// Enable/disable SCKB pad use as SCKA differential clock output, when enable, Port B flash access
+    /// is not available.
     pub enable_sck_b_diff_opt: Sckbdiffopt,
-    /// Enable/disable same configuration for all connected devices when enabled, same configuration in FLASHA1CRx is applied to all.
+    /// Enable/disable same configuration for all connected devices when enabled, same configuration in
+    /// FLASHA1CRx is applied to all.
     pub enable_same_config_for_all: Samedeviceen,
-    /// Timeout wait cycle for command sequence execution, timeout after ahbGrantTimeoutCyle*1024 serial root clock cycles.
+    /// Timeout wait cycle for command sequence execution, timeout after ahbGrantTimeoutCyle*1024 serial
+    /// root clock cycles.
     pub seq_timeout_cycle: u16,
     /// Timeout wait cycle for IP command grant, timeout after ipGrantTimeoutCycle*1024 AHB clock cycles.
     pub ip_grant_timeout_cycle: u8,
@@ -324,81 +503,61 @@ impl LutInstrCookie {
 #[derive(Debug, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(non_snake_case)]
+/// FlexSPI command result
+struct CmdResult {
+    /// AHB read command error
+    AhbReadCmdErr: bool,
+    /// AHB write command error
+    AhbWriteCmdErr: bool,
+    /// IP command error
+    IpCmdErr: bool,
+}
+
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[allow(non_snake_case)]
 enum FlexSpiError {
     /// Flash command grant error
-    CmdGrantErr {
-        /// AHB read command error
-        AhbReadCmdErr: bool,
-        /// AHB write command error
-        AhbWriteCmdErr: bool,
-        /// IP command error
-        IpCmdErr: bool,
-    }, // INTR[AHBCMDGE] = 1 / INTR[IPCMDGE] = 1
+    CmdGrantErr { result: CmdResult }, // INTR[AHBCMDGE] = 1 / INTR[IPCMDGE] = 1
     /// Flash command check error
-    CmdCheckErr {
-        /// AHB read command error
-        AhbReadCmdErr: bool,
-        /// AHB write command error
-        AhbWriteCmdErr: bool,
-        /// IP command error
-        IpCmdErr: bool,
-    }, // INTR[AHBCMDERR] = 1/ INTR[IPCMDERR] = 1
+    CmdCheckErr { result: CmdResult }, // INTR[AHBCMDERR] = 1/ INTR[IPCMDERR] = 1
     /// Flash command execution error
-    CmdExecErr {
-        /// AHB read command error
-        AhbReadCmdErr: bool,
-        /// AHB write command error
-        AhbWriteCmdErr: bool,
-        /// IP command error
-        IpCmdErr: bool,
-    }, // INTR[AHBCMDERR] = 1/ INTR[SEQTIMEOUT] = 1/ INTR[IPCMDERR] = 1
+    CmdExecErr { result: CmdResult }, // INTR[AHBCMDERR] = 1/ INTR[SEQTIMEOUT] = 1/ INTR[IPCMDERR] = 1
     /// AHB bus timeout error
-    AhbBusTimeout {
-        /// AHB read command error
-        AhbReadCmdErr: bool, // INTR[AHBBUSTIMEO UT] = 1
-        /// AHB write command error
-        AhbWriteCmdErr: bool, // INTR[AHBBUSTIMEO UT] = 1
-    },
+    AhbBusTimeout { result: CmdResult },
     /// Data learning failed
     DataLearningFailed, // INTR[DATALEARNFAIL] = 1
 }
 
-#[cfg(feature = "time")]
-fn check_timeout(start: Instant, timeout: u64) -> bool {
-    let current = Instant::now();
-    let elapsed = current.duration_since(start);
-
-    if elapsed.as_millis() > timeout {
-        return true;
+impl From<FlexSpiError> for NorStorageBusError {
+    fn from(err: FlexSpiError) -> Self {
+        match err {
+            FlexSpiError::CmdGrantErr { result: _ } => NorStorageBusError::StorageBusNotAvailable,
+            FlexSpiError::CmdCheckErr { result: _ } => NorStorageBusError::StorageBusIoError,
+            FlexSpiError::CmdExecErr { result: _ } => NorStorageBusError::StorageBusIoError,
+            FlexSpiError::AhbBusTimeout { result: _ } => NorStorageBusError::StorageBusIoError,
+            FlexSpiError::DataLearningFailed => NorStorageBusError::StorageBusInternalError,
+        }
     }
-    false
 }
 
 impl FlexSpiError {
     /// Get the description of the error
     pub fn describe<'a, M: Mode>(&self, flexspi: &'a FlexspiNorStorageBus<M>) {
         match self {
-            FlexSpiError::CmdGrantErr {
-                AhbReadCmdErr,
-                AhbWriteCmdErr,
-                IpCmdErr,
-            } => {
-                if *AhbReadCmdErr {
+            FlexSpiError::CmdGrantErr { result } => {
+                if result.AhbReadCmdErr {
                     info!("AHB bus error response for Read Command. Command grant timeout");
                 }
-                if *AhbWriteCmdErr {
+                if result.AhbWriteCmdErr {
                     info!("AHB bus error response for Write Command. Command grant timeout");
                 }
-                if *IpCmdErr {
+                if result.IpCmdErr {
                     info!("IP command grant timeout. Command grant timeout");
                 }
             }
-            FlexSpiError::CmdCheckErr {
-                AhbReadCmdErr,
-                AhbWriteCmdErr,
-                IpCmdErr,
-            } => {
-                if *AhbWriteCmdErr {
+            FlexSpiError::CmdCheckErr { result } => {
+                if result.AhbWriteCmdErr {
                     info!(
                         "LUT sequence ID = {:08X}",
                         flexspi.info.regs.sts1().read().ahbcmderrid().bits()
@@ -408,13 +567,16 @@ impl FlexSpiError {
                         "Sequnce Error Code = {:08X}",
                         flexspi.info.regs.sts1().read().ahbcmderrcode().bits()
                     );
-                    info!("Command is not executed when error detected in command check. Following are the possible reasons:
+                    info!(
+                        "Command is not executed when error detected in command check.
+                    Following are the possible reasons:
                     - AHB write command with JMP_ON_CS instruction used in the sequence
                     - There is unknown instruction opcode in the sequence.
                     - Instruction DUMMY_SDR/DUMMY_RWDS_SDR used in DDR sequence.
-                    - Instruction DUMMY_DDR/DUMMY_RWDS_DDR used in SDR sequence.");
+                    - Instruction DUMMY_DDR/DUMMY_RWDS_DDR used in SDR sequence."
+                    );
                 }
-                if *AhbReadCmdErr {
+                if result.AhbReadCmdErr {
                     info!(
                         "LUT sequence ID = {:08X}",
                         flexspi.info.regs.sts1().read().ahbcmderrid().bits()
@@ -424,12 +586,15 @@ impl FlexSpiError {
                         "Sequnce Error Code = {:08X}",
                         flexspi.info.regs.sts1().read().ahbcmderrcode().bits()
                     );
-                    info!("Command is not executed when error detected in command check. Following are the possible reasons:
+                    info!(
+                        "Command is not executed when error detected in command check.
+                    Following are the possible reasons:
                     - There is unknown instruction opcode in the sequence
                     - Instruction DUMMY_SDR/DUMMY_RWDS_SDR used in DDR sequence.
-                    - Instruction DUMMY_DDR/DUMMY_RWDS_DDR used in SDR sequence.");
+                    - Instruction DUMMY_DDR/DUMMY_RWDS_DDR used in SDR sequence."
+                    );
                 }
-                if *IpCmdErr {
+                if result.IpCmdErr {
                     info!(
                         "LUT sequence ID = {:08X}",
                         flexspi.info.regs.sts1().read().ipcmderrid().bits()
@@ -440,20 +605,19 @@ impl FlexSpiError {
                         flexspi.info.regs.sts1().read().ipcmderrcode().bits()
                     );
 
-                    info!("Command is not executed when error detected in command check. Following are the possible reasons:
+                    info!(
+                        "Command is not executed when error detected in command check.
+                    Following are the possible reasons:
                     - IP command with JMP_ON_CS instruction used in the sequence
                     - There is unknown instruction opcode in the sequence.
                     - Instruction DUMMY_SDR/DUMMY_RWDS_SDR used in DDR sequence
                     - Instruction DUMMY_DDR/DUMMY_RWDS_DDR used in SDR sequence
-                    - Flash boundary across");
+                    - Flash boundary across"
+                    );
                 }
             }
-            FlexSpiError::CmdExecErr {
-                AhbReadCmdErr,
-                AhbWriteCmdErr,
-                IpCmdErr,
-            } => {
-                if *AhbWriteCmdErr {
+            FlexSpiError::CmdExecErr { result } => {
+                if result.AhbWriteCmdErr {
                     info!(
                         "LUT sequence ID = {:08X}",
                         flexspi.info.regs.sts1().read().ahbcmderrid().bits()
@@ -471,7 +635,7 @@ impl FlexSpiError {
                         - Command timeout during execution"
                     );
                 }
-                if *AhbReadCmdErr {
+                if result.AhbReadCmdErr {
                     info!(
                         "LUT sequence ID = {:08X}",
                         flexspi.info.regs.sts1().read().ahbcmderrid().bits()
@@ -486,7 +650,7 @@ impl FlexSpiError {
                         - Command timeout during execution"
                     );
                 }
-                if *IpCmdErr {
+                if result.IpCmdErr {
                     info!(
                         "LUT sequence ID = {:08X}",
                         flexspi.info.regs.sts1().read().ipcmderrid().bits()
@@ -502,11 +666,8 @@ impl FlexSpiError {
                     );
                 }
             }
-            FlexSpiError::AhbBusTimeout {
-                AhbReadCmdErr,
-                AhbWriteCmdErr,
-            } => {
-                if *AhbReadCmdErr || *AhbWriteCmdErr {
+            FlexSpiError::AhbBusTimeout { result } => {
+                if result.AhbReadCmdErr || result.AhbWriteCmdErr {
                     info!(
                         "There will be AHB bus error response. Following are possible reasons for this error - 
                         - AHB bus timeout (no bus ready return)"
@@ -538,66 +699,34 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
 
         // Wait for command to complete
         // This wait is for FlexSPI to send the command to the Flash device
-        // But the command completion in the flash needs to be checked separately by reading the status register of the flash device
+        // But the command completion in the flash needs to be checked separately
+        // by reading the status register of the flash device
         let status = self.wait_for_cmd_completion();
         if status.is_err() {
             return status;
         }
 
         // Check for any errors during the transfer
-        if let Err(status) = self.check_transfer_status() {
-            status.describe(self);
+        self.check_transfer_status().map_err(|e| {
+            e.describe(self);
+            <FlexSpiError as Into<FlexSpiError>>::into(e)
+        })?;
+        // if let Err(status) = self.check_transfer_status() {
+        //     status.describe(self);
 
-            match status {
-                FlexSpiError::AhbBusTimeout {
-                    AhbReadCmdErr: _,
-                    AhbWriteCmdErr: _,
-                } => {
-                    return Err(NorStorageBusError::StorageBusIoError);
-                }
-                FlexSpiError::CmdCheckErr {
-                    AhbReadCmdErr: _,
-                    AhbWriteCmdErr: _,
-                    IpCmdErr: _,
-                } => {
-                    return Err(NorStorageBusError::StorageBusIoError);
-                }
-                FlexSpiError::CmdExecErr {
-                    AhbReadCmdErr: _,
-                    AhbWriteCmdErr: _,
-                    IpCmdErr: _,
-                } => {
-                    return Err(NorStorageBusError::StorageBusIoError);
-                }
-                FlexSpiError::CmdGrantErr {
-                    AhbReadCmdErr: _,
-                    AhbWriteCmdErr: _,
-                    IpCmdErr: _,
-                } => {
-                    return Err(NorStorageBusError::StorageBusNotAvailable);
-                }
-                FlexSpiError::DataLearningFailed => {
-                    return Err(NorStorageBusError::StorageBusInternalError);
-                }
-            }
-        }
+        //
+        // }
 
         // For data transfer commands, read/write the data
         if let Some(data_cmd) = cmd.cmdtype {
             match data_cmd {
                 NorStorageCmdType::Read => {
-                    if let Some(buffer) = read_buf {
-                        return self.read_data(cmd, buffer);
-                    } else {
-                        return Err(NorStorageBusError::StorageBusInternalError);
-                    }
+                    let buffer = read_buf.ok_or(NorStorageBusError::StorageBusInternalError)?;
+                    self.read_data(cmd, buffer)?;
                 }
                 NorStorageCmdType::Write => {
-                    if let Some(buffer) = write_buf {
-                        return self.write_data(cmd, buffer);
-                    } else {
-                        return Err(NorStorageBusError::StorageBusInternalError);
-                    }
+                    let buffer = write_buf.ok_or(NorStorageBusError::StorageBusInternalError)?;
+                    self.write_data(cmd, buffer)?;
                 }
             }
         }
@@ -607,18 +736,10 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
 
 impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     fn setup_ip_transfer(&mut self, seq_id: u8, addr: Option<u32>, size: Option<u32>) {
-        match addr {
-            Some(addr) => {
-                // SAFETY: Operation is safe as we are programming the address the transfer will be sent to
-                // and it won's impact any other registers
-                self.info.regs.ipcr0().modify(|_, w| unsafe { w.sfar().bits(addr) });
-            }
-
-            None => {
-                // SAFETY: Operation is safe as we are programming 0 as default the address
-                self.info.regs.ipcr0().modify(|_, w| unsafe { w.sfar().bits(0) });
-            }
-        }
+        self.info
+            .regs
+            .ipcr0()
+            .modify(|_, w| unsafe { w.sfar().bits(addr.unwrap_or(0)) });
 
         // Set the Command sequence ID
 
@@ -673,30 +794,38 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
             if intr.seqtimeout().bit_is_set() {
                 self.info.regs.intr().modify(|_, w| w.seqtimeout().clear_bit_by_one());
                 return Err(FlexSpiError::CmdExecErr {
-                    AhbReadCmdErr: false,
-                    AhbWriteCmdErr: false,
-                    IpCmdErr: true,
+                    result: CmdResult {
+                        AhbReadCmdErr: false,
+                        AhbWriteCmdErr: false,
+                        IpCmdErr: true,
+                    },
                 });
             } else {
                 return Err(FlexSpiError::CmdCheckErr {
-                    AhbReadCmdErr: false,
-                    AhbWriteCmdErr: false,
-                    IpCmdErr: true,
+                    result: CmdResult {
+                        AhbReadCmdErr: false,
+                        AhbWriteCmdErr: false,
+                        IpCmdErr: true,
+                    },
                 });
             }
         } else if intr.ahbcmderr().bit_is_set() {
             self.info.regs.intr().modify(|_, w| w.ahbcmderr().clear_bit_by_one());
             if intr.seqtimeout().bit_is_set() {
                 return Err(FlexSpiError::CmdExecErr {
-                    AhbReadCmdErr: true,
-                    AhbWriteCmdErr: true,
-                    IpCmdErr: false,
+                    result: CmdResult {
+                        AhbReadCmdErr: true,
+                        AhbWriteCmdErr: true,
+                        IpCmdErr: false,
+                    },
                 });
             } else {
                 return Err(FlexSpiError::CmdCheckErr {
-                    AhbReadCmdErr: true,
-                    AhbWriteCmdErr: true,
-                    IpCmdErr: false,
+                    result: CmdResult {
+                        AhbReadCmdErr: true,
+                        AhbWriteCmdErr: true,
+                        IpCmdErr: false,
+                    },
                 });
             }
         } else if intr.ahbbustimeout().bit_is_set() {
@@ -705,8 +834,11 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
                 .intr()
                 .modify(|_, w| w.ahbbustimeout().clear_bit_by_one());
             return Err(FlexSpiError::AhbBusTimeout {
-                AhbReadCmdErr: true,
-                AhbWriteCmdErr: true,
+                result: CmdResult {
+                    AhbReadCmdErr: true,
+                    AhbWriteCmdErr: true,
+                    IpCmdErr: false,
+                },
             });
         } else if intr.datalearnfail().bit_is_set() {
             self.info
@@ -717,16 +849,20 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
         } else if intr.ipcmdge().bit_is_set() {
             self.info.regs.intr().modify(|_, w| w.ipcmdge().clear_bit_by_one());
             return Err(FlexSpiError::CmdGrantErr {
-                AhbReadCmdErr: false,
-                AhbWriteCmdErr: false,
-                IpCmdErr: true,
+                result: CmdResult {
+                    AhbReadCmdErr: false,
+                    AhbWriteCmdErr: false,
+                    IpCmdErr: true,
+                },
             });
         } else if intr.ahbcmdge().bit_is_set() {
             self.info.regs.intr().modify(|_, w| w.ahbcmdge().clear_bit_by_one());
             return Err(FlexSpiError::CmdGrantErr {
-                AhbReadCmdErr: true,
-                AhbWriteCmdErr: true,
-                IpCmdErr: false,
+                result: CmdResult {
+                    AhbReadCmdErr: true,
+                    AhbWriteCmdErr: true,
+                    IpCmdErr: false,
+                },
             });
         } else {
             return Ok(());
@@ -945,31 +1081,28 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
 
 impl<'d> FlexspiNorStorageBus<'d, Blocking> {
     fn read_data(&mut self, cmd: NorStorageCmd, read_buf: &mut [u8]) -> Result<(), NorStorageBusError> {
-        if let Some(size) = cmd.data_bytes {
-            if read_buf.len() != size as usize {
-                return Err(NorStorageBusError::StorageBusInternalError);
-            }
+        let size = cmd.data_bytes.ok_or(NorStorageBusError::StorageBusInternalError)?;
 
-            for chunk in read_buf.chunks_mut(MAX_FLEXSPI_TRANSFER_SIZE as usize) {
-                self.read_cmd_data(chunk.len() as u32, chunk)?;
-            }
-        } else {
+        if read_buf.len() != size as usize {
             return Err(NorStorageBusError::StorageBusInternalError);
         }
+
+        for chunk in read_buf.chunks_mut(MAX_FLEXSPI_TRANSFER_SIZE as usize) {
+            self.read_cmd_data(chunk.len() as u32, chunk)?;
+        }
+
         Ok(())
     }
 
     fn write_data(&mut self, cmd: NorStorageCmd, write_buf: &[u8]) -> Result<(), NorStorageBusError> {
-        if let Some(size) = cmd.data_bytes {
-            if write_buf.len() != size as usize {
-                return Err(NorStorageBusError::StorageBusInternalError);
-            }
+        let size = cmd.data_bytes.ok_or(NorStorageBusError::StorageBusInternalError)?;
 
-            for chunk in write_buf.chunks(MAX_FLEXSPI_TRANSFER_SIZE as usize) {
-                self.write_cmd_data(chunk.len() as u32, chunk)?;
-            }
-        } else {
+        if write_buf.len() != size as usize {
             return Err(NorStorageBusError::StorageBusInternalError);
+        }
+
+        for chunk in write_buf.chunks(MAX_FLEXSPI_TRANSFER_SIZE as usize) {
+            self.write_cmd_data(chunk.len() as u32, chunk)?;
         }
 
         Ok(())
@@ -980,7 +1113,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         {
             let start = Instant::now();
             while self.info.regs.intr().read().ipcmddone().bit_is_clear() {
-                let timedout = check_timeout(start, FLEXSPI_CMD_COMPLETION_TIMEOUT);
+                let timedout = expired(start, FLEXSPI_CMD_COMPLETION_TIMEOUT);
                 if timedout {
                     return Err(NorStorageBusError::StorageBusIoError);
                 }
@@ -1006,17 +1139,17 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             e.describe(self);
             return Err(NorStorageBusError::StorageBusIoError);
         }
-        num_fifo_slot = size / 4;
-        num_rx_watermark_slot = self.rx_watermark / 4;
+
+        num_fifo_slot = size / FLEXSPI_FIFO_ENTRY_SIZE as u32;
+        num_rx_watermark_slot = self.rx_watermark / FLEXSPI_FIFO_ENTRY_SIZE as u8;
         slot_group = num_fifo_slot / num_rx_watermark_slot as u32;
 
-        for _ in 0..slot_group {
-            // Wait for RX FIFO to be filled with water mark level data
+        for (chunk_iter, _) in read_data.chunks_mut(self.rx_watermark as usize).zip(0..slot_group) {
             #[cfg(feature = "time")]
             {
                 let start = Instant::now();
                 while self.info.regs.intr().read().iprxwa().bit_is_clear() {
-                    let timedout = check_timeout(start, FLEXSPI_TX_FIFO_FREE_WATERMARK_TIMEOUT);
+                    let timedout = expired(start, FLEXSPI_TX_FIFO_FREE_WATERMARK_TIMEOUT);
                     if timedout {
                         return Err(NorStorageBusError::StorageBusInternalError);
                     }
@@ -1027,67 +1160,62 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
                 while self.info.regs.intr().read().iprxwa().bit_is_clear() {}
             }
 
-            for j in 0..num_rx_watermark_slot {
-                let temp = self.info.regs.rfdr(j as usize).read().bits();
-                info!("RX FIFO data: {:08X} idx = {}", temp, j);
-                for k in 0..4 {
-                    read_data[bytes_read as usize] = (temp >> (8 * k)) as u8;
-                    bytes_read += 1;
-                    size -= 1;
-                }
+            // chunk_iter is a watermark size buffer
+            for (chunk, slot) in chunk_iter
+                .chunks_mut(FLEXSPI_FIFO_ENTRY_SIZE as usize)
+                .zip(0..num_rx_watermark_slot)
+            {
+                let data = self.info.regs.rfdr(slot as usize).read().bits();
+                chunk.copy_from_slice(&data.to_le_bytes());
+                bytes_read += chunk.len() as u32;
+                size -= chunk.len() as u32;
             }
-            // Pop out the water mark level data
             self.info.regs.intr().modify(|_, w| w.iprxwa().clear_bit_by_one());
-        }
-        #[cfg(feature = "time")]
-        {
-            let start = Instant::now();
-            while (self.info.regs.iprxfsts().read().fill().bits() * 8) < size as u8 {
-                let timedout = check_timeout(start, FLEXSPI_DATA_FILL_TIMEOUT);
-                if timedout {
-                    return Err(NorStorageBusError::StorageBusInternalError);
-                }
-            }
-        }
-        #[cfg(not(feature = "time"))]
-        {
-            while (self.info.regs.iprxfsts().read().fill().bits() * 8) < size as u8 {}
         }
 
         if size > 0 {
+            // Wait for the remaining bytes in RX FIFO to be filled which is less than rx_watermark
+            #[cfg(feature = "time")]
+            {
+                let start = Instant::now();
+                while (self.info.regs.iprxfsts().read().fill().bits() * 8) < size as u8 {
+                    let timedout = expired(start, FLEXSPI_DATA_FILL_TIMEOUT);
+                    if timedout {
+                        return Err(NorStorageBusError::StorageBusInternalError);
+                    }
+                }
+            }
+            #[cfg(not(feature = "time"))]
+            {
+                while (self.info.regs.iprxfsts().read().fill().bits() * 8) < size as u8 {}
+            }
             // size must be between 1 and rx_watermark by now
             let mut temp;
-            num_fifo_slot = size / 4;
+            num_fifo_slot = size / FLEXSPI_FIFO_ENTRY_SIZE;
 
-            for i in 0..num_fifo_slot {
-                temp = self.info.regs.rfdr(i as usize).read().bits();
-
-                for j in 0..4 {
-                    read_data[bytes_read as usize] = (temp >> (8 * j)) as u8;
-                    bytes_read += 1;
-                    size -= 1;
-                }
+            if size % FLEXSPI_FIFO_ENTRY_SIZE != 0 {
+                // Data length is not multiple of FLEXSPI_FIFO_ENTRY_SIZE. We want to have 1 more slot to read the data
+                // in the last slot. Hence increment the slot group by 1
+                num_fifo_slot += 1;
             }
 
-            if size > 0 {
-                // size must be less than 4 bytes by now
-                temp = self.info.regs.rfdr(num_fifo_slot as usize).read().bits();
-                for j in 0..size {
-                    read_data[bytes_read as usize] = (temp >> (8 * j)) as u8;
-                    bytes_read += 1;
-                    size -= 1;
-                }
+            for (chunk, slot) in read_data[bytes_read as usize..]
+                .chunks_mut(FLEXSPI_FIFO_ENTRY_SIZE as usize)
+                .zip(0..num_fifo_slot)
+            {
+                temp = self.info.regs.rfdr(slot as usize).read().bits();
+                chunk.copy_from_slice(&temp.to_le_bytes());
             }
         }
-        // Pop out the water mark level data
+
+        // Pop out the water mark level data to cleanup the FIFO
         self.info.regs.intr().modify(|_, w| w.iprxwa().clear_bit_by_one());
 
         Ok(())
     }
 
-    fn write_cmd_data(&mut self, mut size: u32, write_data: &[u8]) -> Result<(), NorStorageBusError> {
-        let mut num_fifo_slot;
-        let mut byte_cnt = 0;
+    fn write_cmd_data(&mut self, size: u32, write_data: &[u8]) -> Result<(), NorStorageBusError> {
+        let num_fifo_slot;
 
         // Check for any errors during the transfer
         let error = self.check_transfer_status();
@@ -1096,17 +1224,23 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusIoError);
         }
 
-        num_fifo_slot = size / 4;
-        let num_tx_watermark_slot = self.tx_watermark / 4;
-        let slot_group = num_fifo_slot / num_tx_watermark_slot as u32;
+        num_fifo_slot = size / FLEXSPI_FIFO_ENTRY_SIZE as u32;
+        let num_tx_watermark_slot = self.tx_watermark / FLEXSPI_FIFO_ENTRY_SIZE as u8;
+        let mut slot_group = num_fifo_slot / num_tx_watermark_slot as u32;
 
-        for _ in 0..slot_group {
+        if num_fifo_slot % num_tx_watermark_slot as u32 != 0 {
+            // Data length is not multiple of tx_watermark. We want to have 1 more slot to write the data
+            // in the last slot. Hence increment the slot group by 1
+            slot_group += 1;
+        }
+
+        for (chunk_iter, _slot) in write_data.chunks(self.tx_watermark as usize).zip(0..slot_group) {
             // Wait for space in TX FIFO
             #[cfg(feature = "time")]
             {
                 let start = Instant::now();
                 while self.info.regs.intr().read().iptxwe().bit_is_clear() {
-                    let timedout = check_timeout(start, FLEXSPI_TX_FIFO_FREE_WATERMARK_TIMEOUT);
+                    let timedout = expired(start, FLEXSPI_TX_FIFO_FREE_WATERMARK_TIMEOUT);
                     if timedout {
                         return Err(NorStorageBusError::StorageBusInternalError);
                     }
@@ -1117,47 +1251,14 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
                 while self.info.regs.intr().read().iptxwe().bit_is_clear() {}
             }
 
-            for j in 0..num_tx_watermark_slot {
-                let mut temp = 0;
-
-                for k in 0..4 {
-                    temp |= (write_data[byte_cnt] as u32) << (8 * k);
-                    byte_cnt += 1;
-                    size -= 1;
-                }
-                self.info.regs.tfdr(j as usize).write(|w| unsafe { w.bits(temp) });
+            for (chunk, slot) in chunk_iter
+                .chunks(FLEXSPI_FIFO_ENTRY_SIZE as usize)
+                .zip(0..num_tx_watermark_slot)
+            {
+                let temp: u32 = 0;
+                temp.to_le_bytes().copy_from_slice(chunk);
+                self.info.regs.tfdr(slot as usize).write(|w| unsafe { w.bits(temp) });
             }
-            // Clear out the water mark level data
-            self.info.regs.intr().modify(|_, w| w.iptxwe().clear_bit_by_one());
-        }
-
-        if size > 0 {
-            // size must be between 1 and 7 inclusive by now
-            let mut temp = 0;
-
-            num_fifo_slot = size / 4;
-            for i in 0..num_fifo_slot {
-                for j in 0..4 {
-                    temp |= (write_data[byte_cnt] as u32) << (8 * j);
-                    byte_cnt += 1;
-                    size -= 1;
-                }
-                self.info.regs.tfdr(i as usize).write(|w| unsafe { w.bits(temp) });
-            }
-            if size > 0 {
-                let mut temp = 0;
-                // size must be less than 4 bytes by now
-                for j in 0..size {
-                    temp |= (write_data[byte_cnt] as u32) << (8 * j);
-                    byte_cnt += 1;
-                    size -= 1;
-                }
-                self.info
-                    .regs
-                    .tfdr(num_fifo_slot as usize)
-                    .write(|w| unsafe { w.bits(temp) });
-            }
-
             // Clear out the water mark level data
             self.info.regs.intr().modify(|_, w| w.iptxwe().clear_bit_by_one());
         }
@@ -1185,7 +1286,7 @@ impl FlexSpiConfigurationPort {
         {
             let start = Instant::now();
             while regs.mcr0().read().swreset().bit_is_set() {
-                let timedout = check_timeout(start, FLEXSPI_RESET_TIMEOUT);
+                let timedout = expired(start, FLEXSPI_RESET_TIMEOUT);
                 if timedout {
                     return Err(());
                 }
@@ -1238,11 +1339,8 @@ impl FlexSpiConfigurationPort {
                 .variant(config.ahb_config.enable_ahb_cachable)
         });
 
-        if config.ahb_config.enable_ahb_prefetch {
-            regs.ahbcr().modify(|_, w| w.prefetchen().set_bit());
-        } else {
-            regs.ahbcr().modify(|_, w| w.prefetchen().clear_bit());
-        }
+        regs.ahbcr()
+            .modify(|_, w| w.prefetchen().variant(config.ahb_config.enable_ahb_prefetch));
 
         regs.ahbrxbuf0cr0().modify(|_, w| unsafe {
             w.mstrid()
@@ -1361,32 +1459,17 @@ impl FlexSpiConfigurationPort {
         flexspi_config: &FlexspiConfig,
     ) -> Result<(), ()> {
         let regs = self.info.regs;
-
-        match self.flash_port {
-            FlexSpiFlashPort::PortA => self.configure_flexspi_device_port_a(device_config, flexspi_config)?,
-            FlexSpiFlashPort::PortB => self.configure_flexspi_device_port_b(device_config, flexspi_config)?,
-        }
-
-        // Enable the module
-        regs.mcr0().modify(|_, w| w.mdis().clear_bit());
-
-        Ok(())
-    }
-
-    fn configure_flexspi_device_port_a(
-        &self,
-        device_config: &FlexspiDeviceConfig,
-        flexspi_config: &FlexspiConfig,
-    ) -> Result<(), ()> {
-        let regs = self.info.regs;
-        let flash_size = device_config.flash_size_kb;
+        let inst = match self.device_instance {
+            FlexSpiFlashPortDeviceInstance::DeviceInstance0 => 0,
+            FlexSpiFlashPortDeviceInstance::DeviceInstance1 => 1,
+        };
 
         #[cfg(feature = "time")]
         {
             let start = Instant::now();
 
             while !(regs.sts0().read().arbidle().bit_is_set() && regs.sts0().read().seqidle().bit_is_set()) {
-                let timedout = check_timeout(start, FLEXSPI_IDLE_TIMEOUT);
+                let timedout = expired(start, FLEXSPI_IDLE_TIMEOUT);
                 if timedout {
                     return Err(());
                 }
@@ -1397,7 +1480,7 @@ impl FlexSpiConfigurationPort {
             while !(regs.sts0().read().arbidle().bit_is_set() && regs.sts0().read().seqidle().bit_is_set()) {}
         }
 
-        regs.dllcr(0).modify(|_, w| {
+        regs.dllcr(inst).modify(|_, w| {
             let is_unified_config;
             let mut dll_value;
             let temp;
@@ -1417,9 +1500,8 @@ impl FlexSpiConfigurationPort {
             w.ovrden().variant(is_unified_config);
             if device_config.flexspi_root_clk >= CLOCK_100MHZ {
                 /* DLLEN = 1, SLVDLYTARGET = 0xF, */
-                w.dllen().set_bit();
                 unsafe {
-                    w.slvdlytarget().bits(0xF);
+                    w.slvdlytarget().bits(0xF).dllen().set_bit();
                 }
             } else {
                 temp = (device_config.data_valid_time) as u32 * 1000; /* Convert data valid time in ns to ps. */
@@ -1433,187 +1515,49 @@ impl FlexSpiConfigurationPort {
             }
             w
         });
-        regs.flshcr4()
-            .modify(|_, w| w.wmena().variant(device_config.enable_write_mask_port_a));
+
+        regs.flshcr4().modify(|_, w| match self.flash_port {
+            FlexSpiFlashPort::PortA => w.wmena().variant(device_config.enable_write_mask_port_a),
+            FlexSpiFlashPort::PortB => w.wmenb().variant(device_config.enable_write_mask_port_b),
+        });
+
+        match self.flash_port {
+            FlexSpiFlashPort::PortA => self.configure_flexspi_device_port_a(device_config)?,
+            FlexSpiFlashPort::PortB => self.configure_flexspi_device_port_b(device_config)?,
+        }
+
+        // Enable the module
+        regs.mcr0().modify(|_, w| w.mdis().clear_bit());
+
+        Ok(())
+    }
+
+    fn configure_flexspi_device_port_a(&self, device_config: &FlexspiDeviceConfig) -> Result<(), ()> {
+        let regs = self.info.regs;
+        let flash_size = device_config.flash_size_kb;
+
         match self.device_instance {
             FlexSpiFlashPortDeviceInstance::DeviceInstance0 => {
-                regs.flsha1cr0().modify(|_, w| unsafe { w.flshsz().bits(flash_size) });
-                regs.flshcr1a1().modify(|_, w| unsafe {
-                    w.csinterval()
-                        .bits(device_config.cs_interval)
-                        .tcsh()
-                        .bits(device_config.cs_hold_time)
-                        .tcss()
-                        .bits(device_config.cs_setup_time)
-                        .cas()
-                        .bits(device_config.columnspace)
-                        .wa()
-                        .bit(device_config.enable_word_address)
-                        .csintervalunit()
-                        .variant(device_config.cs_interval_unit)
-                });
-                regs.flshcr2a1()
-                    .modify(|_, w| w.awrwaitunit().variant(device_config.ahb_write_wait_unit));
-
-                if device_config.ard_seq_number > 0 {
-                    regs.flshcr2a1().modify(|_, w| unsafe {
-                        w.ardseqnum()
-                            .bits(device_config.ard_seq_number - 1)
-                            .ardseqid()
-                            .bits(device_config.ard_seq_index)
-                    });
-                }
+                configure_ports_a!(1, regs, device_config, flash_size);
             }
 
             FlexSpiFlashPortDeviceInstance::DeviceInstance1 => {
-                regs.flsha2cr0().modify(|_, w| unsafe { w.flshsz().bits(flash_size) });
-                regs.flshcr1a2().modify(|_, w| unsafe {
-                    w.csinterval()
-                        .bits(device_config.cs_interval)
-                        .tcsh()
-                        .bits(device_config.cs_hold_time)
-                        .tcss()
-                        .bits(device_config.cs_setup_time)
-                        .cas()
-                        .bits(device_config.columnspace)
-                        .wa()
-                        .bit(device_config.enable_word_address)
-                        .csintervalunit()
-                        .variant(device_config.cs_interval_unit)
-                });
-                regs.flshcr2a2()
-                    .modify(|_, w| w.awrwaitunit().variant(device_config.ahb_write_wait_unit));
-
-                if device_config.ard_seq_number > 0 {
-                    regs.flshcr2a2().modify(|_, w| unsafe {
-                        w.ardseqnum()
-                            .bits(device_config.ard_seq_number - 1)
-                            .ardseqid()
-                            .bits(device_config.ard_seq_index)
-                    });
-                }
+                configure_ports_a!(2, regs, device_config, flash_size);
             }
         }
         Ok(())
     }
 
-    fn configure_flexspi_device_port_b(
-        &self,
-        device_config: &FlexspiDeviceConfig,
-        flexspi_config: &FlexspiConfig,
-    ) -> Result<(), ()> {
+    fn configure_flexspi_device_port_b(&self, device_config: &FlexspiDeviceConfig) -> Result<(), ()> {
         let regs = self.info.regs;
         let flash_size = device_config.flash_size_kb;
 
-        #[cfg(feature = "time")]
-        {
-            let start = Instant::now();
-
-            while !(regs.sts0().read().arbidle().bit_is_set() && regs.sts0().read().seqidle().bit_is_set()) {
-                let timedout = check_timeout(start, FLEXSPI_IDLE_TIMEOUT);
-                if timedout {
-                    return Err(());
-                }
-            }
-        }
-        #[cfg(not(feature = "time"))]
-        {
-            while !(regs.sts0().read().arbidle().bit_is_set() && regs.sts0().read().seqidle().bit_is_set()) {}
-        }
-
-        regs.dllcr(1).modify(|_, mut w| unsafe {
-            let is_unified_config;
-            let mut dll_value;
-            let temp;
-
-            let rx_sample_clock = flexspi_config.rx_sample_clock;
-            match rx_sample_clock {
-                Rxclksrc::Rxclksrc0 => {
-                    is_unified_config = true;
-                }
-                Rxclksrc::Rxclksrc1 => {
-                    is_unified_config = true;
-                }
-                Rxclksrc::Rxclksrc3 => {
-                    is_unified_config = device_config.is_sck2_enabled;
-                }
-            }
-
-            if is_unified_config {
-                w = w.ovrden().set_bit();
-            } else if device_config.flexspi_root_clk >= CLOCK_100MHZ {
-                /* DLLEN = 1, SLVDLYTARGET = 0xF, */
-                w = w.dllen().set_bit();
-                w = w.slvdlytarget().bits(0xF);
-            } else {
-                temp = (device_config.data_valid_time) as u32 * 1000; /* Convert data valid time in ns to ps. */
-                dll_value = temp / DELAYCELLUNIT as u32;
-                if dll_value * (DELAYCELLUNIT as u32) < temp {
-                    dll_value += 1;
-                }
-                w = w.ovrden().set_bit();
-                w = w.ovrdval().bits((dll_value) as u8);
-            }
-            w
-        });
-        regs.flshcr4()
-            .modify(|_, w| w.wmenb().variant(device_config.enable_write_mask_port_b));
         match self.device_instance {
             FlexSpiFlashPortDeviceInstance::DeviceInstance0 => {
-                regs.flshb1cr0().modify(|_, w| unsafe { w.flshsz().bits(flash_size) });
-                regs.flshcr1b1().modify(|_, w| unsafe {
-                    w.csinterval()
-                        .bits(device_config.cs_interval)
-                        .tcsh()
-                        .bits(device_config.cs_hold_time)
-                        .tcss()
-                        .bits(device_config.cs_setup_time)
-                        .cas()
-                        .bits(device_config.columnspace)
-                        .wa()
-                        .bit(device_config.enable_word_address)
-                        .csintervalunit()
-                        .variant(device_config.cs_interval_unit)
-                });
-                regs.flshcr2b1()
-                    .modify(|_, w| w.awrwaitunit().variant(device_config.ahb_write_wait_unit));
-
-                if device_config.ard_seq_number > 0 {
-                    regs.flshcr2b1().modify(|_, w| unsafe {
-                        w.ardseqnum()
-                            .bits(device_config.ard_seq_number - 1)
-                            .ardseqid()
-                            .bits(device_config.ard_seq_index)
-                    });
-                }
+                configure_ports_b!(1, regs, device_config, flash_size);
             }
             FlexSpiFlashPortDeviceInstance::DeviceInstance1 => {
-                regs.flshb2cr0().modify(|_, w| unsafe { w.flshsz().bits(flash_size) });
-                regs.flshcr1b2().modify(|_, w| unsafe {
-                    w.csinterval()
-                        .bits(device_config.cs_interval)
-                        .tcsh()
-                        .bits(device_config.cs_hold_time)
-                        .tcss()
-                        .bits(device_config.cs_setup_time)
-                        .cas()
-                        .bits(device_config.columnspace)
-                        .wa()
-                        .bit(device_config.enable_word_address)
-                        .csintervalunit()
-                        .variant(device_config.cs_interval_unit)
-                });
-                regs.flshcr2b2()
-                    .modify(|_, w| w.awrwaitunit().variant(device_config.ahb_write_wait_unit));
-
-                if device_config.ard_seq_number > 0 {
-                    regs.flshcr2b2().modify(|_, w| unsafe {
-                        w.ardseqnum()
-                            .bits(device_config.ard_seq_number - 1)
-                            .ardseqid()
-                            .bits(device_config.ard_seq_index)
-                    });
-                }
+                configure_ports_b!(2, regs, device_config, flash_size);
             }
         }
         Ok(())
@@ -1621,62 +1565,58 @@ impl FlexSpiConfigurationPort {
 }
 
 impl<'d> FlexspiNorStorageBus<'d, Blocking> {
-    #[allow(clippy::too_many_arguments)]
     /// Create a new FlexSPI instance in blocking mode with RAM execution
-    pub fn new_blocking<T: Instance>(
+    pub fn new_blocking<T: Instance, P: FlexSpiPin, CLK: FlexSpiPin, CS: FlexSpiPin>(
         _inst: Peri<'d, T>,
-        data0: Option<Peri<'d, impl FlexSpiPin>>,
-        data1: Option<Peri<'d, impl FlexSpiPin>>,
-        data2: Option<Peri<'d, impl FlexSpiPin>>,
-        data3: Option<Peri<'d, impl FlexSpiPin>>,
-        data4: Option<Peri<'d, impl FlexSpiPin>>,
-        data5: Option<Peri<'d, impl FlexSpiPin>>,
-        data6: Option<Peri<'d, impl FlexSpiPin>>,
-        data7: Option<Peri<'d, impl FlexSpiPin>>,
-        clk: Peri<'d, impl FlexSpiPin>,
-        cs: Peri<'d, impl FlexSpiPin>,
-        port: FlexSpiFlashPort,
-        bus_width: FlexSpiBusWidth,
-        dev_instance: FlexSpiFlashPortDeviceInstance,
+        pin_config: FlexspiPinConfig<'d, P, CLK, CS>,
+        config: FlexspiConfigPortData,
     ) -> Self {
-        if let Some(data0) = data0 {
-            data0.config_pin();
-        }
-        if let Some(data1) = data1 {
-            data1.config_pin();
-        }
-        if let Some(data2) = data2 {
-            data2.config_pin();
-        }
-        if let Some(data3) = data3 {
-            data3.config_pin();
-        }
-        if let Some(data4) = data4 {
-            data4.config_pin();
-        }
-        if let Some(data5) = data5 {
-            data5.config_pin();
-        }
-        if let Some(data6) = data6 {
-            data6.config_pin();
-        }
-        if let Some(data7) = data7 {
-            data7.config_pin();
+        match pin_config {
+            FlexspiPinConfig::SingleSpiPin { data_pins, clk, cs } => {
+                data_pins.data0.config_pin();
+                clk.config_pin();
+                cs.config_pin();
+            }
+            FlexspiPinConfig::DualSpiPin { data_pins, clk, cs } => {
+                data_pins.data0.config_pin();
+                data_pins.data1.config_pin();
+                clk.config_pin();
+                cs.config_pin();
+            }
+            FlexspiPinConfig::QuadSpiPin { data_pins, clk, cs } => {
+                data_pins.data0.config_pin();
+                data_pins.data1.config_pin();
+                data_pins.data2.config_pin();
+                data_pins.data3.config_pin();
+                clk.config_pin();
+                cs.config_pin();
+            }
+            FlexspiPinConfig::OctalSpiPin { data_pins, clk, cs } => {
+                data_pins.data0.config_pin();
+                data_pins.data1.config_pin();
+                data_pins.data2.config_pin();
+                data_pins.data3.config_pin();
+                data_pins.data4.config_pin();
+                data_pins.data5.config_pin();
+                data_pins.data6.config_pin();
+                data_pins.data7.config_pin();
+                clk.config_pin();
+                cs.config_pin();
+            }
         }
 
-        cs.config_pin();
-        clk.config_pin();
+        info!("FlexSPI: Cleanup branch");
 
         Self {
             info: T::info(),
-            rx_watermark: 8, // 8 bytes
-            tx_watermark: 8, // 8 bytes
+            rx_watermark: config.rx_watermark,
+            tx_watermark: config.tx_watermark,
             _mode: core::marker::PhantomData,
             configport: FlexSpiConfigurationPort {
                 info: T::info(),
-                _bus_width: bus_width,
-                device_instance: dev_instance,
-                flash_port: port,
+                _bus_width: config.bus_width,
+                device_instance: config.dev_instance,
+                flash_port: config.port,
             },
             phantom: core::marker::PhantomData,
         }
