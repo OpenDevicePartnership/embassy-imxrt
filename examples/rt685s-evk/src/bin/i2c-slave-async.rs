@@ -3,9 +3,8 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_imxrt::i2c::slave::{Address, Command, I2cSlave, Response};
-use embassy_imxrt::i2c::{self, Async};
-use embassy_imxrt::{bind_interrupts, peripherals};
+use embassy_imxrt::i2c::slave::{Address, AsyncI2cSlave, Command, Response};
+use embassy_imxrt::{bind_interrupts, i2c, peripherals};
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 const SLAVE_ADDR: Option<Address> = Address::new(0x20);
@@ -16,7 +15,7 @@ bind_interrupts!(struct Irqs {
 });
 
 #[embassy_executor::task]
-async fn slave_service(mut i2c: I2cSlave<'static, Async>) {
+async fn slave_service(mut i2c: AsyncI2cSlave<'static>) {
     loop {
         let mut buf: [u8; BUFLEN] = [0xAA; BUFLEN];
 
@@ -64,7 +63,7 @@ async fn main(spawner: Spawner) {
     // NOTE: Tested with a raspberry pi 5 as master controller connected FC2 to i2c on Pi5
     //       Test program here: https://github.com/jerrysxie/pi5-i2c-test
     info!("i2cs example - I2c::new");
-    let i2c = I2cSlave::new_async(p.FLEXCOMM2, p.PIO0_18, p.PIO0_17, Irqs, SLAVE_ADDR.unwrap(), p.DMA0_CH4).unwrap();
+    let i2c = AsyncI2cSlave::new(p.FLEXCOMM2, p.PIO0_18, p.PIO0_17, Irqs, SLAVE_ADDR.unwrap(), p.DMA0_CH4).unwrap();
 
     spawner.must_spawn(slave_service(i2c));
 }
