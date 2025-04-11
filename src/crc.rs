@@ -14,6 +14,7 @@ pub struct Crc<'d> {
 }
 
 /// CRC configuration
+#[derive(Copy, Clone, Debug)]
 pub struct Config {
     /// Polynomial to be used
     pub polynomial: Polynomial,
@@ -83,6 +84,13 @@ impl<'d> Crc<'d> {
 
         instance.reconfigure();
         instance
+    }
+
+    /// Reconfigures the CRC peripheral with a new Config structure.
+    pub fn reconfigure_new(&mut self, config: Config) {
+        self._config = config;
+
+        self.reconfigure();
     }
 
     /// Reconfigured the CRC peripheral.
