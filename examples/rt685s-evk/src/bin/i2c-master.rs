@@ -81,8 +81,7 @@ async fn main(_spawner: Spawner) {
     let _isr_pin = Input::new(p.PIO1_5, Pull::Down, Inverter::Disabled);
 
     info!("i2c example - I2c::new");
-    let mut i2c =
-        i2c::master::I2cMaster::new_blocking(p.FLEXCOMM2, p.PIO0_18, p.PIO0_17, i2c::master::Speed::Standard).unwrap();
+    let mut i2c = i2c::master::I2cMaster::new_blocking(p.FLEXCOMM2, p.PIO0_18, p.PIO0_17, Default::default()).unwrap();
 
     // Read WHO_AM_I register, 0x0D to get value 0xC7 (1100 0111)
     info!("i2c example - ACC WHO_AM_I register check");

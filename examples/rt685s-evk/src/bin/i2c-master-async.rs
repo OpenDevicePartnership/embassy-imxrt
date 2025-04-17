@@ -86,15 +86,9 @@ async fn main(_spawner: Spawner) {
     let _isr_pin = Input::new(p.PIO1_5, Pull::Down, Inverter::Disabled);
 
     info!("i2c example - I2c::new");
-    let mut i2c = i2c::master::I2cMaster::new_async(
-        p.FLEXCOMM2,
-        p.PIO0_18,
-        p.PIO0_17,
-        Irqs,
-        i2c::master::Speed::Standard,
-        p.DMA0_CH5,
-    )
-    .unwrap();
+    let mut i2c =
+        i2c::master::I2cMaster::new_async(p.FLEXCOMM2, p.PIO0_18, p.PIO0_17, Irqs, Default::default(), p.DMA0_CH5)
+            .unwrap();
 
     info!("i2c example - write nack check");
     let result = i2c.write(NACK_ADDR, &[ACC_ID_REG]).await;
