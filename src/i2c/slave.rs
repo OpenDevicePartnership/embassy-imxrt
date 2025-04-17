@@ -117,6 +117,8 @@ pub enum Transaction<R, W> {
     Deselect,
     /// An i2c read transaction (data read by master from the slave)
     Read {
+        /// Address for which the read was received
+        address: Address,
         /// Handler to be used in handling the transaction
         ///
         /// Dropping this handler nacks the address. Any other interaction
@@ -125,6 +127,8 @@ pub enum Transaction<R, W> {
     },
     /// An i2c write transaction (data written by master to the slave)
     Write {
+        /// Address for which the write was received
+        address: Address,
         /// Handler to be used in handling the transaction
         ///
         /// Dropping this handler nacks the address. Any other interaction
@@ -145,6 +149,7 @@ impl<R, W> core::fmt::Debug for Transaction<R, W> {
 
 struct BaseI2cSlave<'a> {
     info: Info,
+    address: Address,
     _flexcomm: FlexcommRef,
     // holds the lifetime for which we have exclusively borrowed the peripherals needed.
     _phantom: PhantomData<&'a mut ()>,
@@ -213,6 +218,7 @@ impl<'a> BaseI2cSlave<'a> {
 
         Ok(Self {
             info,
+            address,
             _flexcomm: flexcomm,
             _phantom: PhantomData,
             ten_bit_info,
@@ -292,6 +298,7 @@ impl<'a> BlockingI2cSlave<'a> {
                         // anyway
 
                         break Ok(Transaction::Write {
+                            address: self.base.address,
                             handler: BlockingI2cSlaveWrite {
                                 info: self.base.info,
                                 ten_bit_info: &mut self.base.ten_bit_info,
@@ -314,6 +321,7 @@ impl<'a> BlockingI2cSlave<'a> {
                         // provide data to the master.
 
                         break Ok(Transaction::Read {
+                            address: self.base.address,
                             handler: BlockingI2cSlaveRead {
                                 info: self.base.info,
                                 should_ack_addr: true,
@@ -330,6 +338,7 @@ impl<'a> BlockingI2cSlave<'a> {
                 if addr & 1 == 0 {
                     // Write transaction
                     break Ok(Transaction::Write {
+                        address: self.base.address,
                         handler: BlockingI2cSlaveWrite {
                             info: self.base.info,
                             ten_bit_info: &mut self.base.ten_bit_info,
@@ -338,6 +347,7 @@ impl<'a> BlockingI2cSlave<'a> {
                 } else {
                     // Read transaction
                     break Ok(Transaction::Read {
+                        address: self.base.address,
                         handler: BlockingI2cSlaveRead {
                             info: self.base.info,
                             should_ack_addr: true,

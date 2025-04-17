@@ -23,7 +23,7 @@ async fn slave_service(mut i2c: BlockingI2cSlave<'static>) {
             Transaction::Deselect => {
                 info!("Deselection detected");
             }
-            Transaction::Read { handler } => {
+            Transaction::Read { handler, .. } => {
                 if cur_addr >= BUFLEN {
                     // No valid address, so can't facilitate a read, nack it.
                     info!("Rejected read transaction, no valid start address");
@@ -38,7 +38,7 @@ async fn slave_service(mut i2c: BlockingI2cSlave<'static>) {
                     cur_addr = cur_addr.saturating_add(size).min(BUFLEN);
                 }
             }
-            Transaction::Write { handler } => {
+            Transaction::Write { handler, .. } => {
                 info!("Write request");
                 let mut addr_byte = 0u8;
                 match handler.handle_part(core::slice::from_mut(&mut addr_byte)).unwrap() {
