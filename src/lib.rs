@@ -27,7 +27,8 @@ pub mod espi;
 
 pub mod flash;
 pub mod flexcomm;
-pub mod flexspi_nor_storage_bus;
+/// Flexspi storage bus driver
+pub mod flexspi;
 pub mod gpio;
 pub mod hashcrypt;
 pub mod i2c;
