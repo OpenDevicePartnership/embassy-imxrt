@@ -21,21 +21,6 @@ pub mod slave;
 /// shorthand for -> `Result<T>`
 pub type Result<T> = core::result::Result<T, Error>;
 
-/// Bus speed (nominal SCL, no clock stretching)
-pub enum Speed {
-    /// 100 kbit/s
-    Standard,
-
-    /// 400 kbit/s
-    Fast,
-
-    /// 1 Mbit/s
-    FastPlus,
-
-    /// 3.4Mbit/s only available for slave devices
-    High,
-}
-
 /// specific information regarding transfer errors
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
