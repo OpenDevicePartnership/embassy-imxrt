@@ -17,6 +17,7 @@ use crate::interrupt::typelevel::Interrupt;
 use crate::{dma, interrupt, Peri};
 
 /// Bus speed (nominal SCL, no clock stretching)
+#[derive(Clone, Copy)]
 pub enum Speed {
     /// 100 kbit/s
     Standard,
@@ -31,6 +32,11 @@ pub enum Speed {
     High,
 }
 
+/// Master SCL High time. Specifies the minimum high time in clock cycles that will be asserted by this master on SCL.
+pub use crate::pac::i2c0::msttime::Mstsclhigh;
+/// Master SCL Low time. Specifies the minimum low time in clock cycles that will be asserted by this master on SCL.
+pub use crate::pac::i2c0::msttime::Mstscllow;
+
 /// use `FCn` as I2C Master controller
 pub struct I2cMaster<'a, M: Mode> {
     info: Info,
@@ -39,13 +45,36 @@ pub struct I2cMaster<'a, M: Mode> {
     dma_ch: Option<dma::channel::Channel<'a>>,
 }
 
+/// Configuration for I2C Master
+#[derive(Clone, Copy)]
+pub struct Config {
+    /// Bus speed (nominal SCL, no clock stretching)
+    pub speed: Speed,
+
+    /// Master SCL Low time. Specifies the minimum low time in clock cycles that will be asserted by this master on SCL.
+    pub scl_low_clocks: Mstscllow,
+
+    /// Master SCL High time. Specifies the minimum high time in clock cycles that will be asserted by this master on SCL.
+    pub scl_high_clocks: Mstsclhigh,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            speed: Speed::Standard,
+            scl_low_clocks: Mstscllow::Clocks3,
+            scl_high_clocks: Mstsclhigh::Clocks2,
+        }
+    }
+}
+
 impl<'a, M: Mode> I2cMaster<'a, M> {
     fn new_inner<T: Instance>(
         _bus: Peri<'a, T>,
         scl: Peri<'a, impl SclPin<T>>,
         sda: Peri<'a, impl SdaPin<T>>,
         // TODO - integrate clock APIs to allow dynamic freq selection | clock: crate::flexcomm::Clock,
-        speed: Speed,
+        config: Config,
         dma_ch: Option<dma::channel::Channel<'a>>,
     ) -> Result<Self> {
         // TODO - clock integration
@@ -70,7 +99,7 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
         // 18 => 166.6 Khz
         // 22 => 142.6 kHz
         // 30 => 100.0 kHz
-        match speed {
+        match config.speed {
             // 100 kHz
             Speed::Standard => {
                 regs.clkdiv().write(|w|
@@ -88,9 +117,12 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
             _ => return Err(Error::UnsupportedConfiguration),
         }
 
-        regs.msttime().write(|w|
-            // SAFETY: only unsafe due to .bits usage
-            unsafe { w.mstsclhigh().bits(0).mstscllow().bits(1) });
+        regs.msttime().write(|w| {
+            w.mstsclhigh()
+                .variant(config.scl_high_clocks)
+                .mstscllow()
+                .variant(config.scl_low_clocks)
+        });
 
         regs.intenset().write(|w|
                 // SAFETY: only unsafe due to .bits usage
@@ -126,10 +158,10 @@ impl<'a> I2cMaster<'a, Blocking> {
         scl: Peri<'a, impl SclPin<T>>,
         sda: Peri<'a, impl SdaPin<T>>,
         // TODO - integrate clock APIs to allow dynamic freq selection | clock: crate::flexcomm::Clock,
-        speed: Speed,
+        config: Config,
     ) -> Result<Self> {
         force_clear_remediation(&T::info());
-        Ok(Self::new_inner::<T>(fc, scl, sda, speed, None)?)
+        Ok(Self::new_inner::<T>(fc, scl, sda, config, None)?)
     }
 
     fn start(&mut self, address: u16, is_read: bool) -> Result<()> {
@@ -321,12 +353,12 @@ impl<'a> I2cMaster<'a, Async> {
         sda: Peri<'a, impl SdaPin<T>>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'a,
         // TODO - integrate clock APIs to allow dynamic freq selection | clock: crate::flexcomm::Clock,
-        speed: Speed,
+        config: Config,
         dma_ch: Peri<'a, impl MasterDma<T>>,
     ) -> Result<Self> {
         force_clear_remediation(&T::info());
         let ch = dma::Dma::reserve_channel(dma_ch);
-        let this = Self::new_inner::<T>(fc, scl, sda, speed, ch)?;
+        let this = Self::new_inner::<T>(fc, scl, sda, config, ch)?;
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
