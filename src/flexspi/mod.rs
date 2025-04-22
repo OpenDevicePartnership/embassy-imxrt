@@ -4,6 +4,6 @@ pub mod nor;
 use embassy_time::Instant;
 
 #[cfg(feature = "time")]
-pub(crate) fn expired(start: Instant, timeout: u64) -> bool {
+pub(crate) fn is_expired(start: Instant, timeout: u64) -> bool {
     Instant::now().duration_since(start).as_millis() > timeout
 }

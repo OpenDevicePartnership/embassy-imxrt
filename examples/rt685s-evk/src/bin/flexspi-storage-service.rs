@@ -397,8 +397,6 @@ async fn main(_spawner: Spawner) {
         enable_same_config_for_all: Samedeviceen::Samedeviceen0,
         seq_timeout_cycle: 0xFFFF,
         ip_grant_timeout_cycle: 0xff,
-        tx_watermark: 0x08,
-        rx_watermark: 0x08,
         ahb_config,
     };
 
@@ -413,8 +411,8 @@ async fn main(_spawner: Spawner) {
             port: FlexSpiFlashPort::PortB,                                 // FlexSPI port
             bus_width: FlexSpiBusWidth::Octal,                             // FlexSPI bus width
             dev_instance: FlexSpiFlashPortDeviceInstance::DeviceInstance0, // FlexSPI device instance
-            rx_watermark: 8,                                               // 8 bytes
-            tx_watermark: 8,                                               // 8 bytes
+            rx_watermark: 0x8,
+            tx_watermark: 0x8,
         },
     );
 

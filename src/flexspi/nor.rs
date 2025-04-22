@@ -15,7 +15,7 @@ use storage_bus::nor::{
 
 use crate::clocks::enable_and_reset;
 #[cfg(feature = "time")]
-use crate::flexspi::expired;
+use crate::flexspi::is_expired;
 use crate::iopctl::IopctlPin as Pin;
 use crate::pac::flexspi::ahbcr::*;
 use crate::pac::flexspi::flshcr1::*;
@@ -91,21 +91,21 @@ macro_rules! configure_ports_b {
     };
 }
 
-const FLEXSPI_FIFO_ENTRY_SIZE: u32 = 4; // 4 bytes
-const MAX_FLEXSPI_TRANSFER_SIZE: u32 = 128;
-const FLEXSPI_OP_SEQ_NUMBER: u8 = 0;
-const FLEXSPI_LUT_UNLOCK_CODE: u32 = 0x5AF05AF0;
+const FIFO_SLOT_SIZE: u32 = 4; // 4 bytes
+const MAX_TRANSFER_SIZE: u32 = 128;
+const OPERATION_SEQ_NUMBER: u8 = 0;
+const LUT_UNLOCK_CODE: u32 = 0x5AF05AF0;
 
 #[cfg(feature = "time")]
-const FLEXSPI_CMD_COMPLETION_TIMEOUT: u64 = 10; // 10 millisecond
+const CMD_COMPLETION_TIMEOUT: u64 = 10; // 10 millisecond
 #[cfg(feature = "time")]
-const FLEXSPI_DATA_FILL_TIMEOUT: u64 = 10; // 10 millisecond
+const DATA_FILL_TIMEOUT: u64 = 10; // 10 millisecond
 #[cfg(feature = "time")]
-const FLEXSPI_TX_FIFO_FREE_WATERMARK_TIMEOUT: u64 = 10; // 10 millisecond
+const TX_FIFO_FREE_WATERMARK_TIMEOUT: u64 = 10; // 10 millisecond
 #[cfg(feature = "time")]
-const FLEXSPI_RESET_TIMEOUT: u64 = 10; // 10 millisecond
+const RESET_TIMEOUT: u64 = 10; // 10 millisecond
 #[cfg(feature = "time")]
-const FLEXSPI_IDLE_TIMEOUT: u64 = 10; // 10 millisecond
+const IDLE_TIMEOUT: u64 = 10; // 10 millisecond
 
 const CLOCK_100MHZ: u32 = 100_000_000;
 const DELAYCELLUNIT: u32 = 75; // 75ps
@@ -136,9 +136,9 @@ pub struct FlexspiConfigPortData {
     pub bus_width: FlexSpiBusWidth,
     /// FlexSPI Flash Port Device Instance - DeviceInstance0 or DeviceInstance1
     pub dev_instance: FlexSpiFlashPortDeviceInstance,
-    /// FlexSPI RX FIFO Watermark Level
+    /// RX watermark level
     pub rx_watermark: u8,
-    /// FlexSPI TX FIFO Watermark Level
+    /// TX watermark level
     pub tx_watermark: u8,
 }
 
@@ -227,6 +227,8 @@ pub enum FlexspiPinConfig<'d, T: FlexSpiPin, CS: FlexSpiPin, CLK: FlexSpiPin> {
         /// Chip select pin
         cs: Peri<'d, T>,
     },
+    /// XIP boot. We don't configure the pins as its configured by ROM code.
+    RomPinConfig,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -394,10 +396,6 @@ pub struct FlexspiConfig {
     pub seq_timeout_cycle: u16,
     /// Timeout wait cycle for IP command grant, timeout after ipGrantTimeoutCycle*1024 AHB clock cycles.
     pub ip_grant_timeout_cycle: u8,
-    /// FLEXSPI IP transmit watermark value.
-    pub tx_watermark: usize,
-    /// FLEXSPI receive watermark value.
-    pub rx_watermark: usize,
     /// AHB configuration
     pub ahb_config: AhbConfig,
 }
@@ -689,10 +687,10 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
         write_buf: Option<&[u8]>,
     ) -> Result<(), NorStorageBusError> {
         // Setup the transfer to be sent of the FlexSPI IP Port
-        self.setup_ip_transfer(FLEXSPI_OP_SEQ_NUMBER, cmd.addr, cmd.data_bytes);
+        self.setup_ip_transfer(OPERATION_SEQ_NUMBER, cmd.addr, cmd.data_bytes);
 
         // Program the LUT instructions for the command
-        self.program_lut(&cmd, FLEXSPI_OP_SEQ_NUMBER as u8);
+        self.program_lut(&cmd, OPERATION_SEQ_NUMBER as u8);
 
         // Start the transfer
         self.execute_ip_cmd();
@@ -711,11 +709,6 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
             e.describe(self);
             <FlexSpiError as Into<FlexSpiError>>::into(e)
         })?;
-        // if let Err(status) = self.check_transfer_status() {
-        //     status.describe(self);
-
-        //
-        // }
 
         // For data transfer commands, read/write the data
         if let Some(data_cmd) = cmd.cmdtype {
@@ -777,7 +770,7 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
         if let Some(size) = size {
             self.info.regs.ipcr1().modify(|_, w| unsafe {
                 // SAFETY: Operation is safe as we are programming the size of the transfer
-                w.idatsz().bits(min(size, MAX_FLEXSPI_TRANSFER_SIZE) as u16)
+                w.idatsz().bits(min(size, MAX_TRANSFER_SIZE) as u16)
             });
         }
     }
@@ -1020,7 +1013,7 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
         self.info
             .regs
             .lutkey()
-            .modify(|_, w| unsafe { w.key().bits(FLEXSPI_LUT_UNLOCK_CODE) });
+            .modify(|_, w| unsafe { w.key().bits(LUT_UNLOCK_CODE) });
 
         self.info.regs.lutcr().write(|w| w.unlock().set_bit());
 
@@ -1074,7 +1067,7 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
         self.info
             .regs
             .lutkey()
-            .modify(|_, w| unsafe { w.key().bits(FLEXSPI_LUT_UNLOCK_CODE) });
+            .modify(|_, w| unsafe { w.key().bits(LUT_UNLOCK_CODE) });
         self.info.regs.lutcr().modify(|_, w| w.lock().set_bit());
     }
 }
@@ -1087,7 +1080,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusInternalError);
         }
 
-        for chunk in read_buf.chunks_mut(MAX_FLEXSPI_TRANSFER_SIZE as usize) {
+        for chunk in read_buf.chunks_mut(MAX_TRANSFER_SIZE as usize) {
             self.read_cmd_data(chunk.len() as u32, chunk)?;
         }
 
@@ -1101,7 +1094,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusInternalError);
         }
 
-        for chunk in write_buf.chunks(MAX_FLEXSPI_TRANSFER_SIZE as usize) {
+        for chunk in write_buf.chunks(MAX_TRANSFER_SIZE as usize) {
             self.write_cmd_data(chunk.len() as u32, chunk)?;
         }
 
@@ -1113,7 +1106,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         {
             let start = Instant::now();
             while self.info.regs.intr().read().ipcmddone().bit_is_clear() {
-                let timedout = expired(start, FLEXSPI_CMD_COMPLETION_TIMEOUT);
+                let timedout = is_expired(start, CMD_COMPLETION_TIMEOUT);
                 if timedout {
                     return Err(NorStorageBusError::StorageBusIoError);
                 }
@@ -1129,9 +1122,9 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
 
     fn read_cmd_data(&mut self, mut size: u32, read_data: &mut [u8]) -> Result<(), NorStorageBusError> {
         let mut bytes_read = 0;
-        let mut num_fifo_slot;
+        let mut total_fifo_slot;
         let num_rx_watermark_slot;
-        let slot_group;
+        let num_rx_watermark_chunks;
 
         let error = self.check_transfer_status();
 
@@ -1140,16 +1133,21 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusIoError);
         }
 
-        num_fifo_slot = size / FLEXSPI_FIFO_ENTRY_SIZE as u32;
-        num_rx_watermark_slot = self.rx_watermark / FLEXSPI_FIFO_ENTRY_SIZE as u8;
-        slot_group = num_fifo_slot / num_rx_watermark_slot as u32;
+        total_fifo_slot = size / FIFO_SLOT_SIZE as u32;
+        num_rx_watermark_slot = self.rx_watermark / FIFO_SLOT_SIZE as u8;
+        num_rx_watermark_chunks = total_fifo_slot / num_rx_watermark_slot as u32;
 
-        for (chunk_iter, _) in read_data.chunks_mut(self.rx_watermark as usize).zip(0..slot_group) {
+        for (watermark_sized_chunk, _) in read_data
+            .chunks_mut(self.rx_watermark as usize)
+            .zip(0..num_rx_watermark_chunks)
+        {
+            // If the size is not multiple of rx_watermark, we will break out of the loop without reading the remaining data
+            // We need to read the remaining data in the RX FIFO which is less than rx_watermark
             #[cfg(feature = "time")]
             {
                 let start = Instant::now();
                 while self.info.regs.intr().read().iprxwa().bit_is_clear() {
-                    let timedout = expired(start, FLEXSPI_TX_FIFO_FREE_WATERMARK_TIMEOUT);
+                    let timedout = is_expired(start, TX_FIFO_FREE_WATERMARK_TIMEOUT);
                     if timedout {
                         return Err(NorStorageBusError::StorageBusInternalError);
                     }
@@ -1161,8 +1159,8 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             }
 
             // chunk_iter is a watermark size buffer
-            for (chunk, slot) in chunk_iter
-                .chunks_mut(FLEXSPI_FIFO_ENTRY_SIZE as usize)
+            for (chunk, slot) in watermark_sized_chunk
+                .chunks_mut(FIFO_SLOT_SIZE as usize)
                 .zip(0..num_rx_watermark_slot)
             {
                 let data = self.info.regs.rfdr(slot as usize).read().bits();
@@ -1173,13 +1171,14 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             self.info.regs.intr().modify(|_, w| w.iprxwa().clear_bit_by_one());
         }
 
+        // Data was not rx_watermark aligned. We need to read the remaining data in the RX FIFO
         if size > 0 {
             // Wait for the remaining bytes in RX FIFO to be filled which is less than rx_watermark
             #[cfg(feature = "time")]
             {
                 let start = Instant::now();
                 while (self.info.regs.iprxfsts().read().fill().bits() * 8) < size as u8 {
-                    let timedout = expired(start, FLEXSPI_DATA_FILL_TIMEOUT);
+                    let timedout = is_expired(start, DATA_FILL_TIMEOUT);
                     if timedout {
                         return Err(NorStorageBusError::StorageBusInternalError);
                     }
@@ -1191,17 +1190,17 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             }
             // size must be between 1 and rx_watermark by now
             let mut temp;
-            num_fifo_slot = size / FLEXSPI_FIFO_ENTRY_SIZE;
+            total_fifo_slot = size / FIFO_SLOT_SIZE;
 
-            if size % FLEXSPI_FIFO_ENTRY_SIZE != 0 {
+            if size % FIFO_SLOT_SIZE != 0 {
                 // Data length is not multiple of FLEXSPI_FIFO_ENTRY_SIZE. We want to have 1 more slot to read the data
                 // in the last slot. Hence increment the slot group by 1
-                num_fifo_slot += 1;
+                total_fifo_slot += 1;
             }
 
             for (chunk, slot) in read_data[bytes_read as usize..]
-                .chunks_mut(FLEXSPI_FIFO_ENTRY_SIZE as usize)
-                .zip(0..num_fifo_slot)
+                .chunks_mut(FIFO_SLOT_SIZE as usize)
+                .zip(0..total_fifo_slot)
             {
                 temp = self.info.regs.rfdr(slot as usize).read().bits();
                 chunk.copy_from_slice(&temp.to_le_bytes());
@@ -1214,9 +1213,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         Ok(())
     }
 
-    fn write_cmd_data(&mut self, size: u32, write_data: &[u8]) -> Result<(), NorStorageBusError> {
-        let num_fifo_slot;
-
+    fn write_cmd_data(&mut self, _size: u32, write_data: &[u8]) -> Result<(), NorStorageBusError> {
         // Check for any errors during the transfer
         let error = self.check_transfer_status();
         if let Err(e) = error {
@@ -1224,23 +1221,15 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusIoError);
         }
 
-        num_fifo_slot = size / FLEXSPI_FIFO_ENTRY_SIZE as u32;
-        let num_tx_watermark_slot = self.tx_watermark / FLEXSPI_FIFO_ENTRY_SIZE as u8;
-        let mut slot_group = num_fifo_slot / num_tx_watermark_slot as u32;
+        let num_tx_watermark_slot = self.tx_watermark / FIFO_SLOT_SIZE as u8;
 
-        if num_fifo_slot % num_tx_watermark_slot as u32 != 0 {
-            // Data length is not multiple of tx_watermark. We want to have 1 more slot to write the data
-            // in the last slot. Hence increment the slot group by 1
-            slot_group += 1;
-        }
-
-        for (chunk_iter, _slot) in write_data.chunks(self.tx_watermark as usize).zip(0..slot_group) {
+        for watermark_sized_chunk in write_data.chunks(self.tx_watermark as usize) {
             // Wait for space in TX FIFO
             #[cfg(feature = "time")]
             {
                 let start = Instant::now();
                 while self.info.regs.intr().read().iptxwe().bit_is_clear() {
-                    let timedout = expired(start, FLEXSPI_TX_FIFO_FREE_WATERMARK_TIMEOUT);
+                    let timedout = is_expired(start, TX_FIFO_FREE_WATERMARK_TIMEOUT);
                     if timedout {
                         return Err(NorStorageBusError::StorageBusInternalError);
                     }
@@ -1251,12 +1240,15 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
                 while self.info.regs.intr().read().iptxwe().bit_is_clear() {}
             }
 
-            for (chunk, slot) in chunk_iter
-                .chunks(FLEXSPI_FIFO_ENTRY_SIZE as usize)
+            for (chunk, slot) in watermark_sized_chunk
+                .chunks(FIFO_SLOT_SIZE as usize)
                 .zip(0..num_tx_watermark_slot)
             {
-                let temp: u32 = 0;
-                temp.to_le_bytes().copy_from_slice(chunk);
+                let temp = u32::from_ne_bytes(
+                    chunk
+                        .try_into()
+                        .map_err(|_| NorStorageBusError::StorageBusInternalError)?,
+                );
                 self.info.regs.tfdr(slot as usize).write(|w| unsafe { w.bits(temp) });
             }
             // Clear out the water mark level data
@@ -1286,7 +1278,7 @@ impl FlexSpiConfigurationPort {
         {
             let start = Instant::now();
             while regs.mcr0().read().swreset().bit_is_set() {
-                let timedout = expired(start, FLEXSPI_RESET_TIMEOUT);
+                let timedout = is_expired(start, RESET_TIMEOUT);
                 if timedout {
                     return Err(());
                 }
@@ -1469,7 +1461,7 @@ impl FlexSpiConfigurationPort {
             let start = Instant::now();
 
             while !(regs.sts0().read().arbidle().bit_is_set() && regs.sts0().read().seqidle().bit_is_set()) {
-                let timedout = expired(start, FLEXSPI_IDLE_TIMEOUT);
+                let timedout = is_expired(start, IDLE_TIMEOUT);
                 if timedout {
                     return Err(());
                 }
@@ -1603,14 +1595,15 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
                 clk.config_pin();
                 cs.config_pin();
             }
+            FlexspiPinConfig::RomPinConfig => {
+                // Nothing to do as ROM already configured the pins
+            }
         }
 
         info!("FlexSPI: Cleanup branch");
 
         Self {
             info: T::info(),
-            rx_watermark: config.rx_watermark,
-            tx_watermark: config.tx_watermark,
             _mode: core::marker::PhantomData,
             configport: FlexSpiConfigurationPort {
                 info: T::info(),
@@ -1618,6 +1611,8 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
                 device_instance: config.dev_instance,
                 flash_port: config.port,
             },
+            rx_watermark: config.rx_watermark,
+            tx_watermark: config.tx_watermark,
             phantom: core::marker::PhantomData,
         }
     }
