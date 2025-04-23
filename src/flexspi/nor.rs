@@ -729,10 +729,10 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
 
 impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     fn setup_ip_transfer(&mut self, seq_id: u8, addr: Option<u32>, size: Option<u32>) {
-        self.info
-            .regs
-            .ipcr0()
-            .modify(|_, w| unsafe { w.sfar().bits(addr.unwrap_or(0)) });
+        self.info.regs.ipcr0().modify(|_, w| unsafe {
+            //SAFETY - We are writing the address register. There is no issue from safety perspective
+            w.sfar().bits(addr.unwrap_or(0))
+        });
 
         // Set the Command sequence ID
 
@@ -1081,7 +1081,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         }
 
         for chunk in read_buf.chunks_mut(MAX_TRANSFER_SIZE as usize) {
-            self.read_cmd_data(chunk.len() as u32, chunk)?;
+            self.read_cmd_data(chunk)?;
         }
 
         Ok(())
@@ -1095,7 +1095,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         }
 
         for chunk in write_buf.chunks(MAX_TRANSFER_SIZE as usize) {
-            self.write_cmd_data(chunk.len() as u32, chunk)?;
+            self.write_cmd_data(chunk)?;
         }
 
         Ok(())
@@ -1120,11 +1120,11 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         Ok(())
     }
 
-    fn read_cmd_data(&mut self, mut size: u32, read_data: &mut [u8]) -> Result<(), NorStorageBusError> {
+    fn read_cmd_data(&mut self, read_data: &mut [u8]) -> Result<(), NorStorageBusError> {
         let mut bytes_read = 0;
         let mut total_fifo_slot;
         let num_rx_watermark_slot;
-        let num_rx_watermark_chunks;
+        let mut size = read_data.len() as u32;
 
         let error = self.check_transfer_status();
 
@@ -1133,14 +1133,9 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusIoError);
         }
 
-        total_fifo_slot = size / FIFO_SLOT_SIZE as u32;
         num_rx_watermark_slot = self.rx_watermark / FIFO_SLOT_SIZE as u8;
-        num_rx_watermark_chunks = total_fifo_slot / num_rx_watermark_slot as u32;
 
-        for (watermark_sized_chunk, _) in read_data
-            .chunks_mut(self.rx_watermark as usize)
-            .zip(0..num_rx_watermark_chunks)
-        {
+        for watermark_sized_chunk in read_data.chunks_mut(self.rx_watermark as usize) {
             // If the size is not multiple of rx_watermark, we will break out of the loop without reading the remaining data
             // We need to read the remaining data in the RX FIFO which is less than rx_watermark
             #[cfg(feature = "time")]
@@ -1213,7 +1208,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         Ok(())
     }
 
-    fn write_cmd_data(&mut self, _size: u32, write_data: &[u8]) -> Result<(), NorStorageBusError> {
+    fn write_cmd_data(&mut self, write_data: &[u8]) -> Result<(), NorStorageBusError> {
         // Check for any errors during the transfer
         let error = self.check_transfer_status();
         if let Err(e) = error {
@@ -1249,7 +1244,10 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
                         .try_into()
                         .map_err(|_| NorStorageBusError::StorageBusInternalError)?,
                 );
-                self.info.regs.tfdr(slot as usize).write(|w| unsafe { w.bits(temp) });
+                self.info.regs.tfdr(slot as usize).write(|w| unsafe {
+                    //SAFETY: Operation is safe as we are programming the data to be sent to the flash device
+                    w.bits(temp)
+                });
             }
             // Clear out the water mark level data
             self.info.regs.intr().modify(|_, w| w.iptxwe().clear_bit_by_one());
