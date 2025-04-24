@@ -9,7 +9,7 @@ use embassy_hal_internal::Peri;
 
 use super::{
     Info, Instance, InterruptHandler, Result, SclPin, SdaPin, SlaveDma, TransferError, I2C_REMEDIATION, I2C_WAKERS,
-    REMEDIATON_NONE, REMEDIATON_SLAVE_FINISH_READ, REMEDIATON_SLAVE_FINISH_WRITE, TEN_BIT_PREFIX,
+    REMEDIATION_NONE, REMEDIATION_SLAVE_FINISH_READ, REMEDIATION_SLAVE_FINISH_WRITE, TEN_BIT_PREFIX,
 };
 use crate::flexcomm::FlexcommRef;
 use crate::interrupt::typelevel::Interrupt;
@@ -111,7 +111,7 @@ impl TenBitAddressInfo {
 /// An I2c transaction received from `listen`
 pub enum Transaction<R, W> {
     /// A stop or restart with different address happened since the last
-    /// transaction. This may be emitted multiple times between transactions
+    /// transaction. This may be emitted multiple times between transactions.
     Deselect,
     /// An i2c read transaction (data read by master from the slave)
     Read {
@@ -177,7 +177,7 @@ impl<'a> BaseI2cSlave<'a> {
         let mut ten_bit_info = None;
 
         // Ensure old remediations dont trigger anymore
-        I2C_REMEDIATION[info.index].store(REMEDIATON_NONE, Ordering::Release);
+        I2C_REMEDIATION[info.index].store(REMEDIATION_NONE, Ordering::Release);
 
         // rates taken assuming SFRO:
         //
@@ -229,6 +229,7 @@ impl<'a> BaseI2cSlave<'a> {
 
 enum PendingRemediation {
     Write,
+    Read,
 }
 
 /// use `FCn` as I2C Slave controller
@@ -270,6 +271,19 @@ impl<'a> BlockingI2cSlave<'a> {
                     break;
                 }
             },
+            Some(PendingRemediation::Read) => {
+                // Wait until input is needed, then cycle the slave to reset it
+                blocking_poll(self.base.info);
+                let stat = i2c.stat().read();
+                if stat.slvpending().is_pending() && stat.slvstate().is_slave_transmit() {
+                    // send another overrun character (0xff)
+                    // Safety: modifying data register is safe since we are pending
+                    unsafe {
+                        i2c.slvdat().write(|w| w.data().bits(0xff));
+                    }
+                    i2c.slvctl().modify(|_, w| w.slvcontinue().continue_());
+                }
+            }
             None => {}
         }
         self.pending_remediation = None;
@@ -371,7 +385,7 @@ impl<'a> BlockingI2cSlave<'a> {
                             handler: BlockingI2cSlaveRead {
                                 info: self.base.info,
                                 should_ack_addr: true,
-                                _phantom: PhantomData,
+                                pending_remediation: &mut self.pending_remediation,
                             },
                         });
                     } else {
@@ -399,7 +413,7 @@ impl<'a> BlockingI2cSlave<'a> {
                         handler: BlockingI2cSlaveRead {
                             info: self.base.info,
                             should_ack_addr: true,
-                            _phantom: PhantomData,
+                            pending_remediation: &mut self.pending_remediation,
                         },
                     });
                 }
@@ -522,7 +536,7 @@ impl Drop for BlockingI2cSlaveWrite<'_> {
 pub struct BlockingI2cSlaveRead<'a> {
     info: Info,
     should_ack_addr: bool,
-    _phantom: PhantomData<&'a mut ()>,
+    pending_remediation: &'a mut Option<PendingRemediation>,
 }
 
 /// Result of a potentially partial i2c write.
@@ -619,14 +633,7 @@ impl Drop for BlockingI2cSlaveRead<'_> {
         if self.should_ack_addr {
             i2c.slvctl().modify(|_, w| w.slvnack().nack());
         } else {
-            // Wait until input is needed, then cycle the slave to reset it
-            blocking_poll(self.info);
-            let stat = i2c.stat().read();
-            if !stat.slvdesel().is_deselected() && stat.slvstate().is_slave_transmit() {
-                // The read is still going on, reset to let go of the bus.
-                i2c.cfg().modify(|_, w| w.slven().disabled());
-                i2c.cfg().modify(|_, w| w.slven().enabled());
-            }
+            *self.pending_remediation = Some(PendingRemediation::Read);
         }
     }
 }
@@ -742,7 +749,7 @@ impl<'a> AsyncI2cSlave<'a> {
                                 v
                             });
                             I2C_REMEDIATION[self.base.info.index]
-                                .fetch_or(REMEDIATON_SLAVE_FINISH_WRITE, Ordering::Release);
+                                .fetch_or(REMEDIATION_SLAVE_FINISH_WRITE, Ordering::Release);
                             // Enable interrupts to ensure the remediation happens
                             i2c.intenset()
                                 .write(|w| w.slvpendingen().enabled().slvdeselen().enabled());
@@ -750,7 +757,7 @@ impl<'a> AsyncI2cSlave<'a> {
                         } else {
                             // Ensure that all necessary data bytes are nacked
                             I2C_REMEDIATION[self.base.info.index]
-                                .fetch_or(REMEDIATON_SLAVE_FINISH_WRITE, Ordering::Release);
+                                .fetch_or(REMEDIATION_SLAVE_FINISH_WRITE, Ordering::Release);
 
                             // And wait for next event.
                             continue;
@@ -1007,7 +1014,7 @@ impl Drop for AsyncI2cSlaveWrite<'_> {
             // Using a critical section makes this code a lot simpler and predictable
             critical_section::with(|_| {
                 self.info.regs.slvctl().modify(|_, w| w.slvdma().clear_bit());
-                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATON_SLAVE_FINISH_WRITE, Ordering::Acquire);
+                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATION_SLAVE_FINISH_WRITE, Ordering::Acquire);
                 self.info
                     .regs
                     .intenset()
@@ -1105,7 +1112,7 @@ impl Drop for AsyncI2cSlaveRead<'_> {
             // Using a critical section makes this code a lot simpler and predictable
             critical_section::with(|_| {
                 self.info.regs.slvctl().modify(|_, w| w.slvdma().clear_bit());
-                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATON_SLAVE_FINISH_READ, Ordering::Acquire);
+                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATION_SLAVE_FINISH_READ, Ordering::Acquire);
                 self.info
                     .regs
                     .intenset()

@@ -126,10 +126,10 @@ static I2C_WAKERS: [AtomicWaker; I2C_COUNT] = [const { AtomicWaker::new() }; I2C
 // Used in cases where there was a cancellation that needs to be cleaned up on the next
 // interrupt
 static I2C_REMEDIATION: [AtomicU8; I2C_COUNT] = [const { AtomicU8::new(0) }; I2C_COUNT];
-const REMEDIATON_NONE: u8 = 0b0000_0000;
-const REMEDIATON_MASTER_STOP: u8 = 0b0000_0001;
-const REMEDIATON_SLAVE_FINISH_WRITE: u8 = 0b0000_0010;
-const REMEDIATON_SLAVE_FINISH_READ: u8 = 0b0000_0100;
+const REMEDIATION_NONE: u8 = 0b0000_0000;
+const REMEDIATION_MASTER_STOP: u8 = 0b0000_0001;
+const REMEDIATION_SLAVE_FINISH_WRITE: u8 = 0b0000_0010;
+const REMEDIATION_SLAVE_FINISH_READ: u8 = 0b0000_0100;
 
 /// Force the remediation state to NONE. To be used when first initializing
 /// a peripheral. This is meant to cover the extremely esoteric state where:
@@ -138,7 +138,7 @@ const REMEDIATON_SLAVE_FINISH_READ: u8 = 0b0000_0100;
 /// 2. We cancel that operation, without sending STOP, so a remediation is requested
 /// 3. BEFORE the remediation completes, we create a blocking peripheral
 fn force_clear_remediation(info: &Info) {
-    I2C_REMEDIATION[info.index].store(REMEDIATON_NONE, Ordering::Release);
+    I2C_REMEDIATION[info.index].store(REMEDIATION_NONE, Ordering::Release);
 }
 
 /// Await the remediation step being completed by the interrupt, after
@@ -148,7 +148,7 @@ async fn wait_remediation_complete(info: &Info) {
     poll_fn(|cx| {
         I2C_WAKERS[index].register(cx.waker());
         let rem = I2C_REMEDIATION[index].load(Ordering::Acquire);
-        if rem == REMEDIATON_NONE {
+        if rem == REMEDIATION_NONE {
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -173,9 +173,9 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         if i2c.intstat().read().mstpending().bit_is_set() {
             // Retrieve and mask off the remediation flags
-            let rem = I2C_REMEDIATION[T::index()].fetch_and(!REMEDIATON_MASTER_STOP, Ordering::AcqRel);
+            let rem = I2C_REMEDIATION[T::index()].fetch_and(!REMEDIATION_MASTER_STOP, Ordering::AcqRel);
 
-            if (rem & REMEDIATON_MASTER_STOP) != 0 {
+            if (rem & REMEDIATION_MASTER_STOP) != 0 {
                 i2c.mstctl().write(|w| w.mststop().set_bit());
             }
 
@@ -190,16 +190,26 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             i2c.intenclr().write(|w| w.mstststperrclr().set_bit());
         }
 
+        // Ensure deselections are handled before any pending
+        // This is needed to properly deal with the remediations.
+        if i2c.intstat().read().slvdesel().bit_is_set() {
+            // Remediation to finish a read or write is no longer needed.
+            I2C_REMEDIATION[T::index()].fetch_and(
+                !(REMEDIATION_SLAVE_FINISH_READ | REMEDIATION_SLAVE_FINISH_WRITE),
+                Ordering::Release,
+            );
+            i2c.intenclr().write(|w| w.slvdeselclr().set_bit());
+        }
         if i2c.intstat().read().slvpending().bit_is_set() {
             // Retrieve and mask off the remediation flags
             // Note: Don't mask them here since if handled we only do some of the work, not all of it (they're really only finished on a deselect or new address).
             let rem = I2C_REMEDIATION[T::index()].load(Ordering::Acquire);
             let mut handled = false;
 
-            if (rem & REMEDIATON_SLAVE_FINISH_WRITE) != 0 && i2c.stat().read().slvstate().is_slave_receive() {
+            if (rem & REMEDIATION_SLAVE_FINISH_WRITE) != 0 && i2c.stat().read().slvstate().is_slave_receive() {
                 handled = true;
                 i2c.slvctl().modify(|_, w| w.slvnack().set_bit());
-            } else if (rem & REMEDIATON_SLAVE_FINISH_READ) != 0 && i2c.stat().read().slvstate().is_slave_transmit() {
+            } else if (rem & REMEDIATION_SLAVE_FINISH_READ) != 0 && i2c.stat().read().slvstate().is_slave_transmit() {
                 handled = true;
                 // The read is still going on, provide 0xff as overrun character
                 // Safety: We are in a pending state, so modifying the slvdat register is safe.
@@ -211,7 +221,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 // We are actually done with these remediations.
                 // Note: this doesn't handle the triggering interrupt!
                 I2C_REMEDIATION[T::index()].fetch_and(
-                    !(REMEDIATON_SLAVE_FINISH_READ | REMEDIATON_SLAVE_FINISH_WRITE),
+                    !(REMEDIATION_SLAVE_FINISH_READ | REMEDIATION_SLAVE_FINISH_WRITE),
                     Ordering::Release,
                 );
             }
@@ -219,15 +229,6 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             if !handled {
                 i2c.intenclr().write(|w| w.slvpendingclr().set_bit());
             }
-        }
-
-        if i2c.intstat().read().slvdesel().bit_is_set() {
-            // Remediation to finish a read or write is no longer needed.
-            I2C_REMEDIATION[T::index()].fetch_and(
-                !(REMEDIATON_SLAVE_FINISH_READ | REMEDIATON_SLAVE_FINISH_WRITE),
-                Ordering::Release,
-            );
-            i2c.intenclr().write(|w| w.slvdeselclr().set_bit());
         }
 
         waker.wake();
