@@ -5,16 +5,14 @@ use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
 use core::task::Poll;
 
-use embassy_hal_internal::drop::OnDrop;
 use embassy_hal_internal::Peri;
 
 use super::{
     Info, Instance, InterruptHandler, Result, SclPin, SdaPin, SlaveDma, TransferError, I2C_REMEDIATION, I2C_WAKERS,
-    REMEDIATON_NONE, REMEDIATON_SLAVE_NAK, TEN_BIT_PREFIX,
+    REMEDIATON_NONE, REMEDIATON_SLAVE_FINISH_READ, REMEDIATON_SLAVE_FINISH_WRITE, TEN_BIT_PREFIX,
 };
 use crate::flexcomm::FlexcommRef;
 use crate::interrupt::typelevel::Interrupt;
-use crate::pac::i2c0::stat::Slvstate;
 use crate::{dma, interrupt};
 
 /// Address errors
@@ -537,7 +535,7 @@ pub enum ReadResult<R> {
 
 impl<'a> BlockingI2cSlaveRead<'a> {
     /// Provide part of the data for the read transaction
-    fn handle_part(mut self, buffer: &[u8]) -> Result<ReadResult<Self>> {
+    pub fn handle_part(mut self, buffer: &[u8]) -> Result<ReadResult<Self>> {
         let i2c = self.info.regs;
 
         // Ack address if needed
@@ -621,61 +619,21 @@ impl Drop for BlockingI2cSlaveRead<'_> {
         if self.should_ack_addr {
             i2c.slvctl().modify(|_, w| w.slvnack().nack());
         } else {
-            // complete the read with all-ones overrun
-            loop {
-                // Block until something happens
-                blocking_poll(self.info);
-
-                let stat = i2c.stat().read();
-                // if master send nack or stop, we are done
-                if stat.slvdesel().is_deselected() {
-                    break;
-                }
-                // if master send restart, we are done
-                if stat.slvstate().is_slave_address() {
-                    break;
-                }
-
-                // Verify that we are ready for write
-                if !stat.slvstate().is_slave_transmit() {
-                    // This probably indicates an error, but nothing we can do here.
-                    break;
-                }
-
-                i2c.slvdat().write(|w|
-                    // SAFETY: unsafe only here due to use of bits()
-                    unsafe{w.data().bits(0xFF)});
-                i2c.slvctl().write(|w| w.slvcontinue().continue_());
+            // Wait until input is needed, then cycle the slave to reset it
+            blocking_poll(self.info);
+            let stat = i2c.stat().read();
+            if !stat.slvdesel().is_deselected() && stat.slvstate().is_slave_transmit() {
+                // The read is still going on, reset to let go of the bus.
+                i2c.cfg().modify(|_, w| w.slven().disabled());
+                i2c.cfg().modify(|_, w| w.slven().enabled());
             }
         }
     }
 }
-
-/// Command from master
-pub enum Command {
-    /// I2C probe with no data
-    Probe,
-
-    /// I2C Read
-    Read,
-
-    /// I2C Write
-    Write,
-}
-
-/// Result of response functions
-pub enum Response {
-    /// I2C transaction complete with this amount of bytes
-    Complete(usize),
-
-    /// I2C transaction pending with this amount of bytes completed so far
-    Pending(usize),
-}
-
 /// use `FCn` as I2C Slave controller
 pub struct AsyncI2cSlave<'a> {
     base: BaseI2cSlave<'a>,
-    dma_ch: Option<dma::channel::Channel<'a>>,
+    dma_ch: dma::channel::Channel<'a>,
 }
 
 impl<'a> AsyncI2cSlave<'a> {
@@ -694,7 +652,7 @@ impl<'a> AsyncI2cSlave<'a> {
         if ch.is_some() {
             let this: AsyncI2cSlave<'a> = Self {
                 base: BaseI2cSlave::new(_bus, scl, sda, address)?,
-                dma_ch: Some(ch.unwrap()),
+                dma_ch: ch.unwrap(),
             };
 
             T::Interrupt::unpend();
@@ -705,324 +663,454 @@ impl<'a> AsyncI2cSlave<'a> {
             Err(super::Error::UnsupportedConfiguration)
         }
     }
-}
 
-impl AsyncI2cSlave<'_> {
-    /// Listen for commands from the I2C Master asynchronously
-    pub async fn listen(&mut self) -> Result<Command> {
+    /// Listen for a new incoming i2c transaction
+    pub async fn listen<'b>(&'b mut self) -> Result<Transaction<AsyncI2cSlaveRead<'b>, AsyncI2cSlaveWrite<'b>>>
+    where
+        'a: 'b,
+    {
         let i2c = self.base.info.regs;
 
-        // Disable DMA
-        i2c.slvctl().write(|w| w.slvdma().disabled());
+        // Ensure dma is disabled
+        i2c.slvctl().modify(|_, w| w.slvdma().disabled());
 
-        // Check whether we already have a matched address and just waiting
-        // for software ack/nack
-        if !i2c.stat().read().slvpending().is_pending() {
-            self.poll_sw_action().await;
-        }
+        loop {
+            wait_no_dma(self.base.info).await;
 
-        if i2c.stat().read().slvstate().is_slave_address() {
-            i2c.slvctl().write(|w| w.slvcontinue().continue_());
-        } else {
-            // If we are already past the addressed phase and in transmit or receive, that means we are already in the
-            // next state, most likely due to calling listen() before the previous transaction is completed and leading
-            // to state transition out of order. We can tolerate that, so we just move onto the next state.
-        }
+            let stat = i2c.stat().read();
 
-        // Poll for HW to transitioning from addressed to receive/transmit
-        self.poll_sw_action().await;
-
-        if let Some(ten_bit_address) = self.base.ten_bit_info {
-            // For 10 bit address, the first byte received is the second byte of the address
-            if i2c.slvdat().read().data().bits() == ten_bit_address.second_byte {
-                i2c.slvctl().write(|w| w.slvcontinue().continue_());
-                self.poll_sw_action().await;
-            } else {
-                // If the second byte of the 10 bit address is not received, then nack the address.
-                i2c.slvctl().write(|w| w.slvnack().nack());
-                return Ok(Command::Probe);
+            if stat.slvdesel().is_deselected() {
+                // clear deselection and return it
+                i2c.stat().write(|w| w.slvdesel().deselected());
+                if self.base.ten_bit_info.map(|v| v.selected).unwrap_or(true) {
+                    self.base.ten_bit_info = self.base.ten_bit_info.map(|mut v| {
+                        v.selected = false;
+                        v
+                    });
+                    return Ok(Transaction::Deselect);
+                } else {
+                    // We weren't actually selected, so no need for deselect transaction
+                    continue;
+                }
             }
 
-            // Check slave is still selected, master has not sent a stop
-            if i2c.stat().read().slvsel().is_selected() {
-                // Check for a restart
-                if i2c.stat().read().slvstate().is_slave_address() {
-                    // Check if first byte of 10 bit address is received again with read bit set
-                    if i2c.slvdat().read().data().bits() == ten_bit_address.first_byte | 1 {
-                        i2c.slvctl().write(|w| w.slvcontinue().continue_());
-                        self.poll_sw_action().await;
-                    } else {
-                        // If the first byte of the 10 bit address is not received again, then nack the address.
-                        i2c.slvctl().write(|w| w.slvnack().nack());
-                        return Ok(Command::Probe);
+            if !stat.slvpending().is_pending() || !stat.slvstate().is_slave_address() {
+                return Err(TransferError::OtherBusError.into());
+                // Unexpected state
+            }
+
+            // Read address
+            let addr = i2c.slvdat().read().data().bits();
+
+            if let Some(ten_bit_info) = self.base.ten_bit_info {
+                if addr & 1 == 0 {
+                    // Write transaction, read next byte and check 10 bit address
+                    i2c.slvctl().write(|w| w.slvcontinue().continue_());
+                    wait_no_dma(self.base.info).await;
+
+                    if !i2c.stat().read().slvstate().is_slave_receive() || !i2c.stat().read().slvpending().is_pending()
+                    {
+                        if i2c.stat().read().slvdesel().is_deselected() {
+                            // deselect handled on next iteration of the loop
+                            continue;
+                        }
                     }
-                    // Check slave is ready for transmit
-                    if !i2c.stat().read().slvstate().is_slave_transmit() {
-                        return Err(TransferError::WriteFail.into());
+
+                    if i2c.slvdat().read().data().bits() == ten_bit_info.second_byte {
+                        // We are selected, return a write transaction
+                        // The actual selection is only recorded once the user tries to read the
+                        // first byte from the master, as dropping before that should trigger a nack
+                        // anyway
+
+                        // Write transaction
+                        return Ok(Transaction::Write {
+                            address: self.base.address,
+                            handler: AsyncI2cSlaveWrite {
+                                info: self.base.info,
+                                dma_ch: &self.dma_ch,
+                                should_ack_addr: true,
+                                ten_bit_info: &mut self.base.ten_bit_info,
+                            },
+                        });
+                    } else {
+                        // Not selected, mark us as such
+
+                        if ten_bit_info.selected {
+                            // We were selected, so need to signal deselect to user.
+                            self.base.ten_bit_info = self.base.ten_bit_info.map(|mut v| {
+                                v.selected = false;
+                                v
+                            });
+                            I2C_REMEDIATION[self.base.info.index]
+                                .fetch_or(REMEDIATON_SLAVE_FINISH_WRITE, Ordering::Release);
+                            // Enable interrupts to ensure the remediation happens
+                            i2c.intenset()
+                                .write(|w| w.slvpendingen().enabled().slvdeselen().enabled());
+                            return Ok(Transaction::Deselect);
+                        } else {
+                            // Ensure that all necessary data bytes are nacked
+                            I2C_REMEDIATION[self.base.info.index]
+                                .fetch_or(REMEDIATON_SLAVE_FINISH_WRITE, Ordering::Release);
+
+                            // And wait for next event.
+                            continue;
+                        }
                     }
                 } else {
-                    // Check slave is ready to receive
-                    if !i2c.stat().read().slvstate().is_slave_receive() {
-                        return Err(TransferError::ReadFail.into());
+                    // Read transaction
+                    if ten_bit_info.selected {
+                        return Ok(Transaction::Read {
+                            address: self.base.address,
+                            handler: AsyncI2cSlaveRead {
+                                info: self.base.info,
+                                should_ack_addr: true,
+                                dma_ch: &self.dma_ch,
+                                _phantom: PhantomData,
+                            },
+                        });
+                    } else {
+                        // Not for us, nack address
+                        i2c.slvctl().modify(|_, w| w.slvnack().nack());
+                        continue;
                     }
+                }
+            } else {
+                if addr & 1 == 0 {
+                    // Write transaction
+                    return Ok(Transaction::Write {
+                        address: self.base.address,
+                        handler: AsyncI2cSlaveWrite {
+                            info: self.base.info,
+                            dma_ch: &self.dma_ch,
+                            should_ack_addr: true,
+                            ten_bit_info: &mut self.base.ten_bit_info,
+                        },
+                    });
+                } else {
+                    // Read transaction
+                    return Ok(Transaction::Read {
+                        address: self.base.address,
+                        handler: AsyncI2cSlaveRead {
+                            info: self.base.info,
+                            should_ack_addr: true,
+                            dma_ch: &self.dma_ch,
+                            _phantom: PhantomData,
+                        },
+                    });
                 }
             }
         }
+    }
+}
 
-        // We are deselected, so it must be an 0 byte write transaction
-        if i2c.stat().read().slvdesel().is_deselected() {
-            // Clear the deselected bit
-            i2c.stat().write(|w| w.slvdesel().deselected());
-            return Ok(Command::Probe);
+async fn wait_no_dma(info: Info) {
+    let i2c = info.regs;
+
+    i2c.intenset()
+        .write(|w| w.slvpendingen().enabled().slvdeselen().enabled());
+
+    poll_fn(|cx: &mut core::task::Context<'_>| {
+        I2C_WAKERS[info.index].register(cx.waker());
+
+        let stat = i2c.stat().read();
+        if stat.slvdesel().is_deselected() {
+            return Poll::Ready(());
+        }
+        if stat.slvpending().is_pending() {
+            return Poll::Ready(());
         }
 
-        let state = i2c.stat().read().slvstate().variant();
-        match state {
-            Some(Slvstate::SlaveReceive) => Ok(Command::Write),
-            Some(Slvstate::SlaveTransmit) => Ok(Command::Read),
-            _ => Err(TransferError::OtherBusError.into()),
+        Poll::Pending
+    })
+    .await;
+}
+
+async fn wait_dma(info: Info, dma: &dma::channel::Channel<'_>) {
+    let i2c = info.regs;
+
+    i2c.intenset()
+        .write(|w| w.slvdeselen().enabled().slvpendingen().enabled());
+    poll_fn(|cx| {
+        I2C_WAKERS[info.index].register(cx.waker());
+        dma.get_waker().register(cx.waker());
+
+        let stat = i2c.stat().read();
+        // Did master send a stop?
+        if stat.slvdesel().is_deselected() {
+            return Poll::Ready(());
+        }
+        // Does SW need to intervene?
+        if stat.slvpending().is_pending() {
+            return Poll::Ready(());
+        }
+
+        // Did we complete the DMA transfer?
+        if !dma.is_active() {
+            return Poll::Ready(());
+        }
+
+        Poll::Pending
+    })
+    .await;
+}
+
+/// Complete DMA and return bytes transfer
+fn abort_dma(dma: &dma::channel::Channel<'_>, xfer_size: usize) -> usize {
+    // abort DMA if DMA is not compelted
+    let remain_xfer_count = dma.get_xfer_count();
+    let mut xfer_count = xfer_size;
+    if dma.is_active() && remain_xfer_count != 0x3FF {
+        xfer_count -= remain_xfer_count as usize + 1;
+        dma.abort();
+    }
+
+    xfer_count
+}
+
+/// Handler for a asynchronous i2c write
+pub struct AsyncI2cSlaveWrite<'a> {
+    info: Info,
+    dma_ch: &'a dma::channel::Channel<'a>,
+    should_ack_addr: bool,
+    ten_bit_info: &'a mut Option<TenBitAddressInfo>,
+}
+
+impl AsyncI2cSlaveWrite<'_> {
+    /// Bulk response to the write, all the bytes received
+    /// by this function are immediately acknowledged
+    async fn handle_part_bulk(mut self, buffer: &mut [u8]) -> Result<WriteResult<Self>> {
+        let i2c = self.info.regs;
+        let buffer_len = buffer.len();
+
+        *self.ten_bit_info = self.ten_bit_info.map(|mut v| {
+            v.selected = true;
+            v
+        });
+
+        // Acknowledge address if needed, otherwise ack last byte
+        i2c.slvctl().modify(|_, w| w.slvcontinue().continue_());
+        if self.should_ack_addr {
+            self.should_ack_addr = false;
+        }
+
+        // Setup the dma transfer
+        i2c.slvctl().modify(|_, w| w.slvdma().enabled());
+        let transfer = self
+            .dma_ch
+            .read_from_peripheral(i2c.slvdat().as_ptr() as *const u8, buffer, Default::default());
+
+        wait_dma(self.info, self.dma_ch).await;
+
+        let xfer_count = abort_dma(&self.dma_ch, buffer_len);
+
+        let stat = i2c.stat().read();
+        // We can't use stat.slvstate to (reliably) make a decision as to what the
+        // next step is, since it is unreliable when slvpending is not
+        // in the pending state already. But no deselection and no pending
+        // implies the dma ran out and triggered the end of the wait.
+        if stat.slvdesel().is_deselected() || stat.slvpending().is_pending() {
+            // Something caused us to stop
+            // inhibit our own drop handler
+            core::mem::forget(self);
+            return Ok(WriteResult::Complete(xfer_count));
+        } else {
+            // That was a partial transaction, the master wants to send more
+            // data
+            drop(transfer);
+            return Ok(WriteResult::Partial(self));
         }
     }
 
-    /// Respond to write command from master
-    pub async fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<Response> {
-        let i2c = self.base.info.regs;
-        let buf_len = buf.len();
+    /// Receive a single byte from the master, and don't immediately ack it
+    /// `should_ack_prev` indicates whether there is still a byte from a
+    /// previous transaction that should be acknowledged.
+    async fn handle_single(mut self, last: &mut u8, should_ack_prev: bool) -> Result<WriteResult<Self>> {
+        let i2c = self.info.regs;
 
-        // Verify that we are ready for write
-        let stat = i2c.stat().read();
-        if !stat.slvstate().is_slave_receive() {
-            // 0 byte write
-            if stat.slvdesel().is_deselected() {
-                return Ok(Response::Complete(0));
-            }
-            return Err(TransferError::ReadFail.into());
-        }
-
-        // Enable DMA
-        i2c.slvctl().write(|w| w.slvdma().enabled());
-
-        // Enable interrupt
-        i2c.intenset()
-            .write(|w| w.slvpendingen().enabled().slvdeselen().enabled());
-
-        let options = dma::transfer::TransferOptions::default();
-        // Keep a reference to Transfer so it does not get dropped and aborted the DMA transfer
-        let _transfer =
-            self.dma_ch
-                .as_ref()
-                .unwrap()
-                .read_from_peripheral(i2c.slvdat().as_ptr() as *mut u8, buf, options);
-
-        // Hold guard to make sure that we send a NAK on cancellation
-        // Since drop order is reverse, this comes BEFORE the dma guard,
-        // so the DMA guard will be dropped FIRST, then the NAK guard.
-        let nak_guard = NakGuard { info: self.base.info };
-        // Hold guard to disable on cancellation or completion
-        let _dma_guard = OnDrop::new(|| {
-            i2c.slvctl().modify(|_r, w| w.slvdma().disabled());
+        *self.ten_bit_info = self.ten_bit_info.map(|mut v| {
+            v.selected = true;
+            v
         });
 
-        poll_fn(|cx| {
-            let i2c = self.base.info.regs;
-            let dma = self.dma_ch.as_ref().unwrap();
+        // Acknowledge address if needed
+        if self.should_ack_addr {
+            i2c.slvctl().modify(|_, w| w.slvcontinue().continue_());
+            self.should_ack_addr = false;
+        } else if should_ack_prev {
+            // Acknowledge last byte of previous block, since that wasn't done by bulk.
+            i2c.slvctl().modify(|_, w| w.slvcontinue().continue_());
+        }
 
-            I2C_WAKERS[self.base.info.index].register(cx.waker());
-            dma.get_waker().register(cx.waker());
+        // Disable dma and wait for read to be ready
+        i2c.slvctl().modify(|_, w| w.slvdma().disabled());
+        wait_no_dma(self.info).await;
 
-            let stat = i2c.stat().read();
-            // Did master send a stop?
-            if stat.slvdesel().is_deselected() {
-                return Poll::Ready(());
-            }
-            // Does SW need to intervene?
-            if stat.slvpending().is_pending() {
-                return Poll::Ready(());
-            }
-            // Did we complete the DMA transfer and does the master still have more data for us?
-            if !dma.is_active() && stat.slvstate().is_slave_receive() {
-                return Poll::Ready(());
-            }
-
-            Poll::Pending
-        })
-        .await;
-
-        // Complete DMA transaction and get transfer count
-        nak_guard.defuse();
-        let xfer_count = self.abort_dma(buf_len);
         let stat = i2c.stat().read();
-        // We got a stop from master, either way this transaction is
-        // completed
-        if stat.slvdesel().is_deselected() {
-            // Clear the deselected bit
-            i2c.stat().write(|w| w.slvdesel().deselected());
-
-            return Ok(Response::Complete(xfer_count));
-        } else if stat.slvstate().is_slave_address() {
-            // We are addressed again, so this must be a restart
-            return Ok(Response::Complete(xfer_count));
+        if stat.slvdesel().is_deselected() || stat.slvstate().is_slave_address() {
+            // Something caused us to stop
+            // inhibit our own drop handler
+            core::mem::forget(self);
+            return Ok(WriteResult::Complete(0));
         } else if stat.slvstate().is_slave_receive() {
             // That was a partial transaction, the master wants to send more
             // data
-            return Ok(Response::Pending(xfer_count));
+            *last = i2c.slvdat().read().data().bits();
+            return Ok(WriteResult::Partial(self));
         }
 
-        Err(TransferError::ReadFail.into())
+        Err(TransferError::OtherBusError.into())
     }
 
-    /// Respond to read command from master
-    /// User must provide enough data to complete the transaction or else
-    ///    we will get stuck in this function
-    pub async fn respond_to_read(&mut self, buf: &[u8]) -> Result<Response> {
-        let i2c = self.base.info.regs;
+    /// Get `buffer.len()` bytes from the master, acknowledging all but the last one in the buffer.
+    pub async fn handle_part(mut self, buffer: &mut [u8]) -> Result<WriteResult<Self>> {
+        let (last, bulk_len) = match buffer.split_last_mut() {
+            Some((last, [])) => (last, 0),
+            Some((last, bulk)) => {
+                match self.handle_part_bulk(bulk).await? {
+                    WriteResult::Partial(this) => self = this,
+                    v => return Ok(v),
+                }
+                (last, bulk.len())
+            }
+            None => {
+                return Ok(WriteResult::Partial(self));
+            }
+        };
 
-        // Verify that we are ready for transmit
-        if !i2c.stat().read().slvstate().is_slave_transmit() {
-            return Err(TransferError::WriteFail.into());
+        match self.handle_single(last, bulk_len == 0).await? {
+            WriteResult::Complete(size) => Ok(WriteResult::Complete(size + bulk_len)),
+            v => Ok(v),
+        }
+    }
+
+    /// Receive `buffer.len()` bytes from the master, acknowledging all of them. Nacks
+    /// any overrun write by the master.
+    pub async fn handle_complete(self, buffer: &mut [u8]) -> Result<usize> {
+        if buffer.len() == 0 {
+            // ack last byte but nack any overrun.
+            self.handle_single(&mut 0, true).await?;
+            Ok(buffer.len())
+        } else {
+            match self.handle_part_bulk(buffer).await? {
+                WriteResult::Partial(_) => Ok(buffer.len()),
+                WriteResult::Complete(size) => Ok(size),
+            }
+        }
+    }
+}
+
+impl Drop for AsyncI2cSlaveWrite<'_> {
+    fn drop(&mut self) {
+        if self.should_ack_addr {
+            self.info.regs.slvctl().modify(|_, w| w.slvnack().set_bit());
+        } else {
+            // Using a critical section makes this code a lot simpler and predictable
+            critical_section::with(|_| {
+                self.info.regs.slvctl().modify(|_, w| w.slvdma().clear_bit());
+                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATON_SLAVE_FINISH_WRITE, Ordering::Acquire);
+                self.info
+                    .regs
+                    .intenset()
+                    .write(|w| w.slvdeselen().enabled().slvpendingen().enabled());
+            });
+        }
+    }
+}
+
+/// Handler for a asynchronous I2C read transaction.
+pub struct AsyncI2cSlaveRead<'a> {
+    info: Info,
+    dma_ch: &'a dma::channel::Channel<'a>,
+    should_ack_addr: bool,
+    _phantom: PhantomData<&'a mut ()>,
+}
+
+impl AsyncI2cSlaveRead<'_> {
+    /// Provide part of the data for the read transaction
+    pub async fn handle_part(mut self, buffer: &[u8]) -> Result<ReadResult<Self>> {
+        // Empty buffer reads succeed trivially
+        if buffer.len() == 0 {
+            return Ok(ReadResult::Partial(self));
         }
 
-        // Enable DMA
-        i2c.slvctl().write(|w| w.slvdma().enabled());
+        let i2c = self.info.regs;
 
-        // Enable interrupts
-        i2c.intenset()
-            .write(|w| w.slvpendingen().enabled().slvdeselen().enabled());
+        // Acknowledge address if needed
+        if self.should_ack_addr {
+            i2c.slvctl()
+                .modify(|_, w| w.slvdma().enabled().slvcontinue().continue_());
+            self.should_ack_addr = false;
+        }
 
-        let options = dma::transfer::TransferOptions::default();
-        // Keep a reference to Transfer so it does not get dropped and aborted the DMA transfer
-        let _transfer =
-            self.dma_ch
-                .as_ref()
-                .unwrap()
-                .write_to_peripheral(buf, i2c.slvdat().as_ptr() as *mut u8, options);
+        // Setup the dma transfer
+        let transfer = self
+            .dma_ch
+            .write_to_peripheral(buffer, i2c.slvdat().as_ptr() as *mut u8, Default::default());
 
-        // Hold guard to disable on cancellation or completion
-        let _dma_guard = OnDrop::new(|| {
-            i2c.slvctl().modify(|_r, w| w.slvdma().disabled());
-        });
+        wait_dma(self.info, self.dma_ch).await;
 
-        poll_fn(|cx| {
-            let i2c = self.base.info.regs;
-            let dma = self.dma_ch.as_ref().unwrap();
-
-            I2C_WAKERS[self.base.info.index].register(cx.waker());
-            dma.get_waker().register(cx.waker());
-
-            let stat = i2c.stat().read();
-            // Master sent a stop or nack
-            if stat.slvdesel().is_deselected() {
-                return Poll::Ready(());
-            }
-            // We need SW intervention
-            if stat.slvpending().is_pending() {
-                return Poll::Ready(());
-            }
-
-            Poll::Pending
-        })
-        .await;
-
-        // Complete DMA transaction and get transfer count
-        let xfer_count = self.abort_dma(buf.len());
-        let stat = i2c.stat().read();
+        let xfer_count = abort_dma(self.dma_ch, buffer.len());
 
         // we got a nack or a stop from master, either way this transaction is
         // completed
-        if stat.slvdesel().is_deselected() {
-            // clear the deselect bit
-            i2c.stat().write(|w| w.slvdesel().deselected());
-            return Ok(Response::Complete(xfer_count));
-        } else if stat.slvpending().is_pending() || stat.slvstate().is_slave_address() {
+        let stat = i2c.stat().read();
+        // We can't use stat.slvstate to (reliably) make a decision as to what the
+        // next step is, since it is unreliable when slvpending is not
+        // in the pending state already. But no deselection and no pending
+        // implies the dma ran out and triggered the end of the wait.
+        if stat.slvdesel().is_deselected() || stat.slvpending().is_pending() {
+            // Something caused us to stop
+            // inhibit our own drop handler
+            core::mem::forget(self);
+            return Ok(ReadResult::Complete(xfer_count));
+        } else {
             // Handle restart after read as well as the cases where
             // slave deselected is not set in response to a master nack
             // then the next transaction starts the slave state goes into
             // pending + addressed.
-            return Ok(Response::Complete(xfer_count));
+            drop(transfer);
+            return Ok(ReadResult::Partial(self));
         }
-
-        // We should not get here
-        Err(TransferError::WriteFail.into())
     }
 
-    async fn poll_sw_action(&self) {
-        let i2c = self.base.info.regs;
-
-        i2c.intenset()
-            .write(|w| w.slvpendingen().enabled().slvdeselen().enabled());
-
-        poll_fn(|cx: &mut core::task::Context<'_>| {
-            I2C_WAKERS[self.base.info.index].register(cx.waker());
-
-            let stat = i2c.stat().read();
-            if stat.slvdesel().is_deselected() {
-                return Poll::Ready(());
+    /// Finish the entire read transaction, providing the overrun character once the buffer runs out
+    pub async fn handle_complete(self, buffer: &[u8], ovc: u8) -> Result<usize> {
+        // Note, this coudl be made a bit more efficient by using the linked transfer functionality
+        // of the dma.
+        match self.handle_part(buffer).await? {
+            ReadResult::Partial(mut this) => {
+                let mut total = buffer.len();
+                loop {
+                    match this.handle_part(&[ovc]).await? {
+                        ReadResult::Partial(handler) => {
+                            this = handler;
+                            total += 1;
+                        }
+                        ReadResult::Complete(extra) => {
+                            return Ok(total + extra);
+                        }
+                    }
+                }
             }
-            if stat.slvpending().is_pending() {
-                return Poll::Ready(());
-            }
-
-            Poll::Pending
-        })
-        .await;
-    }
-
-    /// Complete DMA and return bytes transfer
-    fn abort_dma(&self, xfer_size: usize) -> usize {
-        // abort DMA if DMA is not compelted
-        let dma = self.dma_ch.as_ref().unwrap();
-        let remain_xfer_count = dma.get_xfer_count();
-        let mut xfer_count = xfer_size;
-        if dma.is_active() && remain_xfer_count != 0x3FF {
-            xfer_count -= remain_xfer_count as usize + 1;
-            dma.abort();
+            ReadResult::Complete(size) => Ok(size),
         }
-
-        xfer_count
     }
 }
 
-/// This guard represents that we have started being written to, but without completing
-/// the write. If this guard is dropped without calling [`NakGuard::defuse()`],
-/// then we will signal the interrupt handler to send a NAK the next time that the
-/// I2C peripheral engine is in the PENDING state.
-///
-/// According to 24.6.11 Table 577 of the reference manual, if the I2C peripheral is
-/// NOT in the PENDING state, then it will not accept commands, including the NAK
-/// command. Rather than busy-spin in the drop function for this state to be reached,
-/// or leaving the bus in the un-stopped state, we ask the interrupt handler to do
-/// it for us.
-#[must_use]
-struct NakGuard {
-    info: Info,
-}
-
-impl NakGuard {
-    fn defuse(self) {
-        core::mem::forget(self);
-    }
-}
-
-impl Drop for NakGuard {
+impl Drop for AsyncI2cSlaveRead<'_> {
     fn drop(&mut self) {
-        // This is done in a critical section to ensure that we don't race with the
-        // I2C interrupt. This could potentially be done without a critical section,
-        // however the duration is extremely short, and doesn't require a loop to do
-        // so.
-        critical_section::with(|_| {
-            // Ensure the SLV pending enable interrupt is active, in case we need it
-            self.info.regs.intenset().write(|w| w.slvpendingen().set_bit());
-            // Check if the i2c engine is in a pending state, ready to accept commands
-            let is_pending = self.info.regs.stat().read().slvpending().is_pending();
-
-            if is_pending {
-                // We are pending, we can issue the NAK immediately
-                self.info.regs.slvctl().write(|w| w.slvnack().set_bit());
-            } else {
-                // We are NOT pending, we need to ask the interrupt to send a NAK the next
-                // time the engine is pending. We ensured that the interrupt is active above.
-                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATON_SLAVE_NAK, Ordering::AcqRel);
-            }
-        })
+        if self.should_ack_addr {
+            self.info.regs.slvctl().modify(|_, w| w.slvnack().set_bit());
+        } else {
+            // Using a critical section makes this code a lot simpler and predictable
+            critical_section::with(|_| {
+                self.info.regs.slvctl().modify(|_, w| w.slvdma().clear_bit());
+                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATON_SLAVE_FINISH_READ, Ordering::Acquire);
+                self.info
+                    .regs
+                    .intenset()
+                    .write(|w| w.slvdeselen().enabled().slvpendingen().enabled());
+            });
+        }
     }
 }
