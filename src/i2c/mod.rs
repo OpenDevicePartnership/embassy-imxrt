@@ -128,7 +128,8 @@ static I2C_WAKERS: [AtomicWaker; I2C_COUNT] = [const { AtomicWaker::new() }; I2C
 static I2C_REMEDIATION: [AtomicU8; I2C_COUNT] = [const { AtomicU8::new(0) }; I2C_COUNT];
 const REMEDIATON_NONE: u8 = 0b0000_0000;
 const REMEDIATON_MASTER_STOP: u8 = 0b0000_0001;
-const REMEDIATON_SLAVE_NAK: u8 = 0b0000_0010;
+const REMEDIATON_SLAVE_FINISH_WRITE: u8 = 0b0000_0010;
+const REMEDIATON_SLAVE_FINISH_READ: u8 = 0b0000_0100;
 
 /// Force the remediation state to NONE. To be used when first initializing
 /// a peripheral. This is meant to cover the extremely esoteric state where:
@@ -191,15 +192,41 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         if i2c.intstat().read().slvpending().bit_is_set() {
             // Retrieve and mask off the remediation flags
-            let rem = I2C_REMEDIATION[T::index()].fetch_and(!REMEDIATON_SLAVE_NAK, Ordering::AcqRel);
+            // Note: Don't mask them here since if handled we only do some of the work, not all of it (they're really only finished on a deselect or new address).
+            let rem = I2C_REMEDIATION[T::index()].load(Ordering::Acquire);
+            let mut handled = false;
 
-            if (rem & REMEDIATON_SLAVE_NAK) != 0 {
-                i2c.slvctl().write(|w| w.slvnack().set_bit());
+            if (rem & REMEDIATON_SLAVE_FINISH_WRITE) != 0 && i2c.stat().read().slvstate().is_slave_receive() {
+                handled = true;
+                i2c.slvctl().modify(|_, w| w.slvnack().set_bit());
+            } else if (rem & REMEDIATON_SLAVE_FINISH_READ) != 0 && i2c.stat().read().slvstate().is_slave_transmit() {
+                handled = true;
+                // The read is still going on, provide 0xff as overrun character
+                // Safety: We are in a pending state, so modifying the slvdat register is safe.
+                unsafe {
+                    i2c.slvdat().write(|w| w.data().bits(0xff));
+                }
+                i2c.slvctl().modify(|_, w| w.slvcontinue().continue_());
+            } else if i2c.stat().read().slvstate().is_slave_address() {
+                // We are actually done with these remediations.
+                // Note: this doesn't handle the triggering interrupt!
+                I2C_REMEDIATION[T::index()].fetch_and(
+                    !(REMEDIATON_SLAVE_FINISH_READ | REMEDIATON_SLAVE_FINISH_WRITE),
+                    Ordering::Release,
+                );
             }
-            i2c.intenclr().write(|w| w.slvpendingclr().set_bit());
+
+            if !handled {
+                i2c.intenclr().write(|w| w.slvpendingclr().set_bit());
+            }
         }
 
         if i2c.intstat().read().slvdesel().bit_is_set() {
+            // Remediation to finish a read or write is no longer needed.
+            I2C_REMEDIATION[T::index()].fetch_and(
+                !(REMEDIATON_SLAVE_FINISH_READ | REMEDIATON_SLAVE_FINISH_WRITE),
+                Ordering::Release,
+            );
             i2c.intenclr().write(|w| w.slvdeselclr().set_bit());
         }
 

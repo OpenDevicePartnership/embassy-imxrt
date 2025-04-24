@@ -3,12 +3,12 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_imxrt::i2c::slave::{Address, AsyncI2cSlave, Command, Response};
+use embassy_imxrt::i2c::slave::{Address, AsyncI2cSlave, Transaction, WriteResult};
 use embassy_imxrt::{bind_interrupts, i2c, peripherals};
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
-const SLAVE_ADDR: Option<Address> = Address::new(0x20);
-const BUFLEN: usize = 8;
+const SLAVE_ADDR: Option<Address> = Some(Address::TenBit(0x20));
+const BUFLEN: usize = 16;
 
 bind_interrupts!(struct Irqs {
     FLEXCOMM2 => i2c::InterruptHandler<peripherals::FLEXCOMM2>;
@@ -16,40 +16,58 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::task]
 async fn slave_service(mut i2c: AsyncI2cSlave<'static>) {
+    // Implement a simple i2c RAM, demonstrating the features
+    // of the new interface.
+
+    let mut buf = [0u8; BUFLEN];
+    let mut cur_addr = 0usize;
+
     loop {
-        let mut buf: [u8; BUFLEN] = [0xAA; BUFLEN];
-
-        for (i, e) in buf.iter_mut().enumerate() {
-            *e = i as u8;
-        }
-
         match i2c.listen().await.unwrap() {
-            Command::Probe => {
-                info!("Probe, nothing to do");
+            Transaction::Deselect => {
+                info!("Deselection detected");
             }
-            Command::Read => {
-                info!("Read");
-                loop {
-                    match i2c.respond_to_read(&buf).await.unwrap() {
-                        Response::Complete(n) => {
-                            info!("Response complete read with {} bytes", n);
-                            break;
-                        }
-                        Response::Pending(n) => info!("Response to read got {} bytes, more bytes to fill", n),
-                    }
+            Transaction::Read { handler, .. } => {
+                if cur_addr >= BUFLEN {
+                    // No valid address, so can't facilitate a read, nack it.
+                    info!("Rejected read transaction, no valid start address");
+                    drop(handler);
+                } else {
+                    // Provide the data for the read, and then let go of the bus after.
+                    let size = handler.handle_complete(&buf[cur_addr..], 0xFF).await.unwrap();
+                    info!(
+                        "Read transaction starting at addr {}, provided {} bytes",
+                        cur_addr, size
+                    );
+                    cur_addr = cur_addr.saturating_add(size).min(BUFLEN);
                 }
             }
-            Command::Write => {
-                info!("Write");
-                loop {
-                    match i2c.respond_to_write(&mut buf).await.unwrap() {
-                        Response::Complete(n) => {
-                            info!("Response complete write with {} bytes", n);
-                            break;
+            Transaction::Write { handler, .. } => {
+                info!("Write request");
+                let mut addr_byte = 0u8;
+                match handler
+                    .handle_part(core::slice::from_mut(&mut addr_byte))
+                    .await
+                    .unwrap()
+                {
+                    WriteResult::Partial(handler) => {
+                        if (addr_byte as usize) < BUFLEN {
+                            cur_addr = addr_byte as usize;
+                            info!("Received addr {}", cur_addr);
+
+                            let size_written = handler.handle_complete(&mut buf[cur_addr..]).await.unwrap();
+                            cur_addr += size_written;
+                            info!("Received write of {} bytes to ram", size_written);
+                        } else {
+                            // Invalid address, nack it
+                            drop(handler);
                         }
-                        Response::Pending(n) => info!("Response to write got {} bytes, more bytes pending", n),
                     }
-                }
+                    WriteResult::Complete(size) => {
+                        assert!(size == 0);
+                        info!("Empty write received");
+                    }
+                };
             }
         }
     }
