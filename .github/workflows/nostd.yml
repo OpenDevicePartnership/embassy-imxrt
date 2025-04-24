@@ -40,5 +40,5 @@ jobs:
 
       - name: cargo check
         run: |
-          cargo check --target ${{ matrix.target }} --no-default-features -F mimxrt685s
-          cargo check --target ${{ matrix.target }} --no-default-features -F mimxrt633s
+          cargo check --target ${{ matrix.target }} --no-default-features -F mimxrt685s --locked
+          cargo check --target ${{ matrix.target }} --no-default-features -F mimxrt633s --locked

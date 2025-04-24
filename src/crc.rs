@@ -14,6 +14,7 @@ pub struct Crc<'d> {
 }
 
 /// CRC configuration
+#[derive(Copy, Clone, Debug)]
 pub struct Config {
     /// Polynomial to be used
     pub polynomial: Polynomial,
@@ -81,12 +82,19 @@ impl<'d> Crc<'d> {
             _lifetime: PhantomData,
         };
 
-        instance.reconfigure();
+        instance.configure();
         instance
     }
 
-    /// Reconfigured the CRC peripheral.
-    fn reconfigure(&mut self) {
+    /// Reconfigures the CRC peripheral with a new Config structure.
+    pub fn reconfigure(&mut self, config: Config) {
+        self._config = config;
+
+        self.configure();
+    }
+
+    /// Configure the CRC peripheral registers.
+    fn configure(&mut self) {
         self.info.regs.mode().write(|w| {
             w.crc_poly()
                 .variant(self._config.polynomial)

@@ -187,14 +187,10 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         if i2c.intstat().read().mstpending().bit_is_set() {
             // Retrieve and mask off the remediation flags
-            let mask = !(REMEDIATON_MASTER_STOP | REMEDIATON_SLAVE_NAK);
-            let rem = I2C_REMEDIATION[T::index()].fetch_and(mask, Ordering::AcqRel);
+            let rem = I2C_REMEDIATION[T::index()].fetch_and(!REMEDIATON_MASTER_STOP, Ordering::AcqRel);
 
             if (rem & REMEDIATON_MASTER_STOP) != 0 {
                 i2c.mstctl().write(|w| w.mststop().set_bit());
-            }
-            if (rem & REMEDIATON_SLAVE_NAK) != 0 {
-                i2c.slvctl().write(|w| w.slvnack().set_bit());
             }
 
             i2c.intenclr().write(|w| w.mstpendingclr().set_bit());
@@ -209,6 +205,12 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
         }
 
         if i2c.intstat().read().slvpending().bit_is_set() {
+            // Retrieve and mask off the remediation flags
+            let rem = I2C_REMEDIATION[T::index()].fetch_and(!REMEDIATON_SLAVE_NAK, Ordering::AcqRel);
+
+            if (rem & REMEDIATON_SLAVE_NAK) != 0 {
+                i2c.slvctl().write(|w| w.slvnack().set_bit());
+            }
             i2c.intenclr().write(|w| w.slvpendingclr().set_bit());
         }
 

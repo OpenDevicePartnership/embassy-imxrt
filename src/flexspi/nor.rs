@@ -142,95 +142,6 @@ pub struct FlexspiConfigPortData {
     pub tx_watermark: u8,
 }
 
-/// FlexSPI Pin Configuration for Single Pin Mode
-pub struct SpiSinglePin<'d, T: FlexSpiPin> {
-    /// Data Pin 0
-    pub data0: Peri<'d, T>,
-}
-
-/// FlexSPI Pin Configuration for Dual Pin Mode
-pub struct SpiDualPin<'d, T: FlexSpiPin> {
-    /// Data Pin 0
-    pub data0: Peri<'d, T>,
-    /// Data Pin 1
-    pub data1: Peri<'d, T>,
-}
-
-/// FlexSPI Pin Configuration for Quad Pin Mode
-pub struct SpiQuadPin<'d, T: FlexSpiPin> {
-    /// Data Pin 0
-    pub data0: Peri<'d, T>,
-    /// Data Pin 1
-    pub data1: Peri<'d, T>,
-    /// Data Pin 2
-    pub data2: Peri<'d, T>,
-    /// Data Pin 3
-    pub data3: Peri<'d, T>,
-}
-
-/// FlexSPI Pin Configuration for Octal Pin Mode
-pub struct SpiOctalPin<'d, T: FlexSpiPin> {
-    /// Data Pin 0
-    pub data0: Peri<'d, T>,
-    /// Data Pin 1
-    pub data1: Peri<'d, T>,
-    /// Data Pin 2
-    pub data2: Peri<'d, T>,
-    /// Data Pin 3
-    pub data3: Peri<'d, T>,
-    /// Data Pin 4
-    pub data4: Peri<'d, T>,
-    /// Data Pin 5
-    pub data5: Peri<'d, T>,
-    /// Data Pin 6
-    pub data6: Peri<'d, T>,
-    /// Data Pin 7
-    pub data7: Peri<'d, T>,
-}
-
-/// FlexSPI Pin Configuration
-/// This structure is used to configure the FlexSPI pins for different modes of operation.
-pub enum FlexspiPinConfig<'d, T: FlexSpiPin, CS: FlexSpiPin, CLK: FlexSpiPin> {
-    /// Single SPI Pin Configuration
-    SingleSpiPin {
-        /// Single config
-        data_pins: SpiSinglePin<'d, T>,
-        /// SCK Pin
-        clk: Peri<'d, CLK>,
-        /// Chip select pin
-        cs: Peri<'d, CS>,
-    },
-    /// Dual SPI Pin Configuration
-    DualSpiPin {
-        /// Dual Spi config
-        data_pins: SpiDualPin<'d, T>,
-        /// SCK Pin
-        clk: Peri<'d, T>,
-        /// Chip select pin
-        cs: Peri<'d, T>,
-    },
-    /// Quad SPI Pin Configuration
-    QuadSpiPin {
-        /// Quad Spi config
-        data_pins: SpiQuadPin<'d, T>,
-        /// SCK Pin
-        clk: Peri<'d, T>,
-        /// Chip select pin
-        cs: Peri<'d, T>,
-    },
-    /// Octal SPI Pin Configuration
-    OctalSpiPin {
-        /// Octal Spi config
-        data_pins: SpiOctalPin<'d, T>,
-        /// SCK Pin
-        clk: Peri<'d, T>,
-        /// Chip select pin
-        cs: Peri<'d, T>,
-    },
-    /// XIP boot. We don't configure the pins as its configured by ROM code.
-    RomPinConfig,
-}
-
 #[derive(Clone, Copy, Debug)]
 /// FlexSPI Bus Width Enum.
 pub enum FlexSpiBusWidth {
@@ -1121,8 +1032,6 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
     }
 
     fn read_cmd_data(&mut self, read_data: &mut [u8]) -> Result<(), NorStorageBusError> {
-        let mut bytes_read = 0;
-        let mut total_fifo_slot;
         let num_rx_watermark_slot;
         let mut size = read_data.len() as u32;
 
@@ -1136,74 +1045,54 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         num_rx_watermark_slot = self.rx_watermark / FIFO_SLOT_SIZE as u8;
 
         for watermark_sized_chunk in read_data.chunks_mut(self.rx_watermark as usize) {
-            // If the size is not multiple of rx_watermark, we will break out of the loop without reading the remaining data
-            // We need to read the remaining data in the RX FIFO which is less than rx_watermark
-            #[cfg(feature = "time")]
-            {
-                let start = Instant::now();
-                while self.info.regs.intr().read().iprxwa().bit_is_clear() {
-                    let timedout = is_expired(start, TX_FIFO_FREE_WATERMARK_TIMEOUT);
-                    if timedout {
-                        return Err(NorStorageBusError::StorageBusInternalError);
+            if watermark_sized_chunk.len() < self.rx_watermark as usize {
+                #[cfg(feature = "time")]
+                {
+                    let start = Instant::now();
+                    while ((self.info.regs.iprxfsts().read().fill().bits() * 8) as u32) < size {
+                        let timedout = is_expired(start, DATA_FILL_TIMEOUT);
+                        if timedout {
+                            return Err(NorStorageBusError::StorageBusInternalError);
+                        }
                     }
                 }
+                #[cfg(not(feature = "time"))]
+                {
+                    while ((self.info.regs.iprxfsts().read().fill().bits() * 8) as u32) < size {}
+                }
+            } else {
+                #[cfg(feature = "time")]
+                {
+                    let start = Instant::now();
+                    while self.info.regs.intr().read().iprxwa().bit_is_clear() {
+                        let timedout = is_expired(start, TX_FIFO_FREE_WATERMARK_TIMEOUT);
+                        if timedout {
+                            return Err(NorStorageBusError::StorageBusInternalError);
+                        }
+                    }
+                }
+                #[cfg(not(feature = "time"))]
+                {
+                    while self.info.regs.intr().read().iprxwa().bit_is_clear() {}
+                }
             }
-            #[cfg(not(feature = "time"))]
-            {
-                while self.info.regs.intr().read().iprxwa().bit_is_clear() {}
-            }
-
-            // chunk_iter is a watermark size buffer
             for (chunk, slot) in watermark_sized_chunk
                 .chunks_mut(FIFO_SLOT_SIZE as usize)
                 .zip(0..num_rx_watermark_slot)
             {
                 let data = self.info.regs.rfdr(slot as usize).read().bits();
-                chunk.copy_from_slice(&data.to_le_bytes());
-                bytes_read += chunk.len() as u32;
+                if chunk.len() < FIFO_SLOT_SIZE as usize {
+                    // We cannot do copy from slice as it will cause a panic
+                    for i in 0..chunk.len() {
+                        chunk[i] = (data >> (i * 8)) as u8;
+                    }
+                } else {
+                    chunk.copy_from_slice(&data.to_le_bytes());
+                }
                 size -= chunk.len() as u32;
             }
             self.info.regs.intr().modify(|_, w| w.iprxwa().clear_bit_by_one());
         }
-
-        // Data was not rx_watermark aligned. We need to read the remaining data in the RX FIFO
-        if size > 0 {
-            // Wait for the remaining bytes in RX FIFO to be filled which is less than rx_watermark
-            #[cfg(feature = "time")]
-            {
-                let start = Instant::now();
-                while (self.info.regs.iprxfsts().read().fill().bits() * 8) < size as u8 {
-                    let timedout = is_expired(start, DATA_FILL_TIMEOUT);
-                    if timedout {
-                        return Err(NorStorageBusError::StorageBusInternalError);
-                    }
-                }
-            }
-            #[cfg(not(feature = "time"))]
-            {
-                while (self.info.regs.iprxfsts().read().fill().bits() * 8) < size as u8 {}
-            }
-            // size must be between 1 and rx_watermark by now
-            let mut temp;
-            total_fifo_slot = size / FIFO_SLOT_SIZE;
-
-            if size % FIFO_SLOT_SIZE != 0 {
-                // Data length is not multiple of FLEXSPI_FIFO_ENTRY_SIZE. We want to have 1 more slot to read the data
-                // in the last slot. Hence increment the slot group by 1
-                total_fifo_slot += 1;
-            }
-
-            for (chunk, slot) in read_data[bytes_read as usize..]
-                .chunks_mut(FIFO_SLOT_SIZE as usize)
-                .zip(0..total_fifo_slot)
-            {
-                temp = self.info.regs.rfdr(slot as usize).read().bits();
-                chunk.copy_from_slice(&temp.to_le_bytes());
-            }
-        }
-
-        // Pop out the water mark level data to cleanup the FIFO
-        self.info.regs.intr().modify(|_, w| w.iprxwa().clear_bit_by_one());
 
         Ok(())
     }
@@ -1239,11 +1128,19 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
                 .chunks(FIFO_SLOT_SIZE as usize)
                 .zip(0..num_tx_watermark_slot)
             {
-                let temp = u32::from_ne_bytes(
-                    chunk
-                        .try_into()
-                        .map_err(|_| NorStorageBusError::StorageBusInternalError)?,
-                );
+                let mut temp = 0_u32;
+                if chunk.len() < FIFO_SLOT_SIZE as usize {
+                    // We cannot do copy from slice as it will cause a panic
+                    for i in 0..chunk.len() as u32 {
+                        temp |= (chunk[i as usize] as u32) << (i * 8);
+                    }
+                } else {
+                    temp = u32::from_ne_bytes(
+                        chunk
+                            .try_into()
+                            .map_err(|_| NorStorageBusError::StorageBusInternalError)?,
+                    );
+                }
                 self.info.regs.tfdr(slot as usize).write(|w| unsafe {
                     //SAFETY: Operation is safe as we are programming the data to be sent to the flash device
                     w.bits(temp)
@@ -1555,51 +1452,141 @@ impl FlexSpiConfigurationPort {
 }
 
 impl<'d> FlexspiNorStorageBus<'d, Blocking> {
-    /// Create a new FlexSPI instance in blocking mode with RAM execution
-    pub fn new_blocking<T: Instance, P: FlexSpiPin, CLK: FlexSpiPin, CS: FlexSpiPin>(
+    /// Create a new FlexSPI instance in blocking mode with single configuration
+    pub fn new_blocking_single_config<T: Instance>(
         _inst: Peri<'d, T>,
-        pin_config: FlexspiPinConfig<'d, P, CLK, CS>,
+        data0: Peri<'d, impl FlexSpiPin>,
+        data1: Peri<'d, impl FlexSpiPin>,
+        clk: Peri<'d, impl FlexSpiPin>,
+        cs: Peri<'d, impl FlexSpiPin>,
         config: FlexspiConfigPortData,
     ) -> Self {
-        match pin_config {
-            FlexspiPinConfig::SingleSpiPin { data_pins, clk, cs } => {
-                data_pins.data0.config_pin();
-                clk.config_pin();
-                cs.config_pin();
-            }
-            FlexspiPinConfig::DualSpiPin { data_pins, clk, cs } => {
-                data_pins.data0.config_pin();
-                data_pins.data1.config_pin();
-                clk.config_pin();
-                cs.config_pin();
-            }
-            FlexspiPinConfig::QuadSpiPin { data_pins, clk, cs } => {
-                data_pins.data0.config_pin();
-                data_pins.data1.config_pin();
-                data_pins.data2.config_pin();
-                data_pins.data3.config_pin();
-                clk.config_pin();
-                cs.config_pin();
-            }
-            FlexspiPinConfig::OctalSpiPin { data_pins, clk, cs } => {
-                data_pins.data0.config_pin();
-                data_pins.data1.config_pin();
-                data_pins.data2.config_pin();
-                data_pins.data3.config_pin();
-                data_pins.data4.config_pin();
-                data_pins.data5.config_pin();
-                data_pins.data6.config_pin();
-                data_pins.data7.config_pin();
-                clk.config_pin();
-                cs.config_pin();
-            }
-            FlexspiPinConfig::RomPinConfig => {
-                // Nothing to do as ROM already configured the pins
-            }
+        // Configure the pins
+        data0.config_pin();
+        data1.config_pin();
+        clk.config_pin();
+        cs.config_pin();
+
+        Self {
+            info: T::info(),
+            _mode: core::marker::PhantomData,
+            configport: FlexSpiConfigurationPort {
+                info: T::info(),
+                _bus_width: config.bus_width,
+                device_instance: config.dev_instance,
+                flash_port: config.port,
+            },
+            rx_watermark: config.rx_watermark,
+            tx_watermark: config.tx_watermark,
+            phantom: core::marker::PhantomData,
         }
+    }
 
-        info!("FlexSPI: Cleanup branch");
+    /// Create a new FlexSPI instance in blocking mode with Dual configuration
+    pub fn new_blocking_dual_config<T: Instance>(
+        _inst: Peri<'d, T>,
+        data0: Peri<'d, impl FlexSpiPin>,
+        data1: Peri<'d, impl FlexSpiPin>,
+        clk: Peri<'d, impl FlexSpiPin>,
+        cs: Peri<'d, impl FlexSpiPin>,
+        config: FlexspiConfigPortData,
+    ) -> Self {
+        // Configure the pins
+        data0.config_pin();
+        data1.config_pin();
+        clk.config_pin();
+        cs.config_pin();
+        Self {
+            info: T::info(),
+            _mode: core::marker::PhantomData,
+            configport: FlexSpiConfigurationPort {
+                info: T::info(),
+                _bus_width: config.bus_width,
+                device_instance: config.dev_instance,
+                flash_port: config.port,
+            },
+            rx_watermark: config.rx_watermark,
+            tx_watermark: config.tx_watermark,
+            phantom: core::marker::PhantomData,
+        }
+    }
 
+    /// Create a new FlexSPI instance in blocking mode with Quad configuration
+    pub fn new_blocking_quad_config<T: Instance>(
+        _inst: Peri<'d, T>,
+        data0: Peri<'d, impl FlexSpiPin>,
+        data1: Peri<'d, impl FlexSpiPin>,
+        data2: Peri<'d, impl FlexSpiPin>,
+        data3: Peri<'d, impl FlexSpiPin>,
+        clk: Peri<'d, impl FlexSpiPin>,
+        cs: Peri<'d, impl FlexSpiPin>,
+        config: FlexspiConfigPortData,
+    ) -> Self {
+        // Configure the pins
+        data0.config_pin();
+        data1.config_pin();
+        data2.config_pin();
+        data3.config_pin();
+        clk.config_pin();
+        cs.config_pin();
+        Self {
+            info: T::info(),
+            _mode: core::marker::PhantomData,
+            configport: FlexSpiConfigurationPort {
+                info: T::info(),
+                _bus_width: config.bus_width,
+                device_instance: config.dev_instance,
+                flash_port: config.port,
+            },
+            rx_watermark: config.rx_watermark,
+            tx_watermark: config.tx_watermark,
+            phantom: core::marker::PhantomData,
+        }
+    }
+
+    /// Create a new FlexSPI instance in blocking mode with octal configuration
+    pub fn new_blocking_octal_config<T: Instance>(
+        _inst: Peri<'d, T>,
+        data0: Peri<'d, impl FlexSpiPin>,
+        data1: Peri<'d, impl FlexSpiPin>,
+        data2: Peri<'d, impl FlexSpiPin>,
+        data3: Peri<'d, impl FlexSpiPin>,
+        data4: Peri<'d, impl FlexSpiPin>,
+        data5: Peri<'d, impl FlexSpiPin>,
+        data6: Peri<'d, impl FlexSpiPin>,
+        data7: Peri<'d, impl FlexSpiPin>,
+        clk: Peri<'d, impl FlexSpiPin>,
+        cs: Peri<'d, impl FlexSpiPin>,
+        config: FlexspiConfigPortData,
+    ) -> Self {
+        // Configure the pins
+        data0.config_pin();
+        data1.config_pin();
+        data2.config_pin();
+        data3.config_pin();
+        data4.config_pin();
+        data5.config_pin();
+        data6.config_pin();
+        data7.config_pin();
+        clk.config_pin();
+        cs.config_pin();
+        Self {
+            info: T::info(),
+            _mode: core::marker::PhantomData,
+            configport: FlexSpiConfigurationPort {
+                info: T::info(),
+                _bus_width: config.bus_width,
+                device_instance: config.dev_instance,
+                flash_port: config.port,
+            },
+            rx_watermark: config.rx_watermark,
+            tx_watermark: config.tx_watermark,
+            phantom: core::marker::PhantomData,
+        }
+    }
+
+    /// Create a new FlexSPI instance in blocking mode without pin configuration
+    pub fn new_blocking_no_pin_config<T: Instance>(_inst: Peri<'d, T>, config: FlexspiConfigPortData) -> Self {
         Self {
             info: T::info(),
             _mode: core::marker::PhantomData,

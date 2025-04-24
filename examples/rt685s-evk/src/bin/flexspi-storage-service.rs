@@ -5,7 +5,7 @@ use defmt::info;
 use embassy_executor::Spawner;
 use embassy_imxrt::flexspi::nor::{
     AhbConfig, FlexSpiBusWidth, FlexSpiFlashPort, FlexSpiFlashPortDeviceInstance, FlexspiAhbBufferConfig,
-    FlexspiConfig, FlexspiConfigPortData, FlexspiDeviceConfig, FlexspiNorStorageBus, FlexspiPinConfig, SpiSinglePin,
+    FlexspiConfig, FlexspiConfigPortData, FlexspiDeviceConfig, FlexspiNorStorageBus,
 };
 use embassy_imxrt::pac::flexspi::ahbcr::*;
 use embassy_imxrt::pac::flexspi::flshcr1::*;
@@ -400,13 +400,18 @@ async fn main(_spawner: Spawner) {
         ahb_config,
     };
 
-    let mut flexspi_storage = FlexspiNorStorageBus::new_blocking(
+    let mut flexspi_storage = FlexspiNorStorageBus::new_blocking_octal_config(
         p.FLEXSPI, // FlexSPI peripheral
-        FlexspiPinConfig::SingleSpiPin {
-            data_pins: SpiSinglePin { data0: p.PIO1_11 },
-            clk: p.PIO1_29,
-            cs: p.PIO2_19,
-        },
+        p.PIO1_11,
+        p.PIO1_12,
+        p.PIO1_13,
+        p.PIO1_14,
+        p.PIO2_17,
+        p.PIO2_18,
+        p.PIO2_22,
+        p.PIO2_23,
+        p.PIO1_29,
+        p.PIO2_19,
         FlexspiConfigPortData {
             port: FlexSpiFlashPort::PortB,                                 // FlexSPI port
             bus_width: FlexSpiBusWidth::Octal,                             // FlexSPI bus width

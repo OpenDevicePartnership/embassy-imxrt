@@ -6,6 +6,7 @@
 # - doc: checks that the code can be documented without errors
 # - hack: check combinations of feature flags
 # - msrv: check that the msrv specified in the crate is correct
+# - vet: checks for any new or updated unvetted dependencies
 permissions:
   contents: read
 
@@ -163,8 +164,8 @@ jobs:
 
       - name: cargo doc
         run: |
-          cargo doc --no-deps -F mimxrt685s,rt,defmt,time,time-driver,unstable-pac
-          cargo doc --no-deps -F mimxrt633s,rt,defmt,time,time-driver,unstable-pac
+          cargo doc --no-deps -F mimxrt685s,rt,defmt,time,time-driver,unstable-pac --locked
+          cargo doc --no-deps -F mimxrt633s,rt,defmt,time,time-driver,unstable-pac --locked
         env:
           RUSTDOCFLAGS: --cfg docsrs
 
@@ -241,7 +242,7 @@ jobs:
       # intentionally no target specifier; see https://github.com/jonhoo/rust-ci-conf/pull/4
       # --feature-powerset runs for every combination of features
       - name: cargo manual hack
-        run: cargo check -F ${{ matrix.feature }}
+        run: cargo check -F ${{ matrix.feature }} --locked
 
   deny:
     # cargo-deny checks licenses, advisories, sources, and bans for
@@ -270,7 +271,7 @@ jobs:
           log-level: warn
           manifest-path: ./Cargo.toml
           command: check
-          arguments: --all-features
+          arguments: --all-features --locked
 
   msrv:
     # check that we can build using the minimal rust version that is specified by this crate
@@ -310,5 +311,36 @@ jobs:
 
       - name: cargo +${{ matrix.msrv }} check
         run: |
-          cargo check -F mimxrt685s,rt,defmt,time,time-driver,unstable-pac
-          cargo check -F mimxrt633s,rt,defmt,time,time-driver,unstable-pac
+          cargo check -F mimxrt685s,rt,defmt,time,time-driver,unstable-pac --locked
+          cargo check -F mimxrt633s,rt,defmt,time,time-driver,unstable-pac --locked
+  
+  vet:
+    # cargo-vet checks for unvetted dependencies in the Cargo.lock file
+    # This is to ensure that new dependencies are vetted before they are added to the project
+    name: Vet Dependencies
+    runs-on: ubuntu-latest
+    needs: commit_list
+    env:
+      CARGO_VET_VERSION: 0.10.1
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        commit: ${{ fromJSON(needs.commit_list.outputs.commits) }}
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/cargo-vet
+        key: cargo-vet-bin-${{ env.CARGO_VET_VERSION }}
+
+    - name: Add the tool cache directory to the search path
+      run: echo "${{ runner.tool_cache }}/cargo-vet/bin" >> $GITHUB_PATH
+
+    - name: Ensure that the tool cache is populated with the cargo-vet binary
+      run: cargo install --root ${{ runner.tool_cache }}/cargo-vet --version ${{ env.CARGO_VET_VERSION }} cargo-vet
+
+    - name: Invoke cargo-vet
+      run: cargo vet --locked
