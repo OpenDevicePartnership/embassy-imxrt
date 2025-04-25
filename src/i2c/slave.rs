@@ -23,7 +23,7 @@ pub enum AddressError {
 }
 
 /// I2C address type
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Address {
     /// 7-bit address
     SevenBit(u8),
@@ -137,8 +137,225 @@ impl<R, W> core::fmt::Debug for Transaction<R, W> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Deselect => f.write_str("Deselect"),
-            Self::Read { .. } => f.write_str("Read"),
-            Self::Write { .. } => f.write_str("Write"),
+            Self::Read { address, .. } => f.debug_struct("Read").field("address", address).finish(),
+            Self::Write { address, .. } => f.debug_struct("Write").field("address", address).finish(),
+        }
+    }
+}
+
+/// An I2c transaction received from `listen_expect_read`
+pub enum TransactionExpectRead<R, W> {
+    /// A stop or restart with different address happened since the last
+    /// transaction. This may be emitted multiple times between transactions.
+    Deselect,
+    /// An i2c read transaction (data read by master from the slave)
+    Read {
+        /// Address for which the read was received
+        address: Address,
+        /// Handler to be used in handling the transaction
+        ///
+        /// Dropping this handler nacks the address. Any other interaction
+        /// acknowledges the address.
+        handler: R,
+    },
+    /// An i2c write transaction (data written by master to the slave)
+    Write {
+        /// Address for which the write was received
+        address: Address,
+        /// Handler to be used in handling the transaction
+        ///
+        /// Dropping this handler nacks the address. Any other interaction
+        /// acknowledges the address.
+        handler: W,
+    },
+    /// The expected read occured, but insufficient bytes were provided to handle it completely.
+    ExpectedPartialRead {
+        /// Handler to be used for handling the remainder of the transaction
+        handler: R,
+    },
+    /// The expected read occured and was completed
+    ExpectedCompleteRead {
+        /// Number of bytes read from the buffer.
+        size: usize,
+    },
+}
+
+impl<R, W> core::fmt::Debug for TransactionExpectRead<R, W> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Deselect => write!(f, "Deselect"),
+            Self::Read { address, .. } => f.debug_struct("Read").field("address", address).finish(),
+            Self::Write { address, .. } => f.debug_struct("Write").field("address", address).finish(),
+            Self::ExpectedPartialRead { .. } => write!(f, "ExpectedPartialRead"),
+            Self::ExpectedCompleteRead { size } => f.debug_struct("ExpectedCompleteRead").field("size", size).finish(),
+        }
+    }
+}
+
+impl<R, W> From<Transaction<R, W>> for TransactionExpectRead<R, W> {
+    fn from(value: Transaction<R, W>) -> Self {
+        match value {
+            Transaction::Deselect => Self::Deselect,
+            Transaction::Read { address, handler } => Self::Read { address, handler },
+            Transaction::Write { address, handler } => Self::Write { address, handler },
+        }
+    }
+}
+
+/// An I2c transaction received from `listen_expect_write`
+pub enum TransactionExpectWrite<R, W> {
+    /// A stop or restart with different address happened since the last
+    /// transaction. This may be emitted multiple times between transactions.
+    Deselect,
+    /// An i2c read transaction (data read by master from the slave)
+    Read {
+        /// Address for which the read was received
+        address: Address,
+        /// Handler to be used in handling the transaction
+        ///
+        /// Dropping this handler nacks the address. Any other interaction
+        /// acknowledges the address.
+        handler: R,
+    },
+    /// An i2c write transaction (data written by master to the slave)
+    Write {
+        /// Address for which the write was received
+        address: Address,
+        /// Handler to be used in handling the transaction
+        ///
+        /// Dropping this handler nacks the address. Any other interaction
+        /// acknowledges the address.
+        handler: W,
+    },
+    /// The expected write occured, but insufficient space was provided to handle it completely.
+    ExpectedPartialWrite {
+        /// Handler to be used for handling the remainder of the transaction
+        handler: W,
+    },
+    /// The expected write occured and was completed
+    ExpectedCompleteWrite {
+        /// Number of bytes read from the buffer.
+        size: usize,
+    },
+}
+
+impl<R, W> core::fmt::Debug for TransactionExpectWrite<R, W> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Deselect => write!(f, "Deselect"),
+            Self::Read { address, .. } => f.debug_struct("Read").field("address", address).finish(),
+            Self::Write { address, .. } => f.debug_struct("Write").field("address", address).finish(),
+            Self::ExpectedPartialWrite { .. } => write!(f, "ExpectedPartialWrite"),
+            Self::ExpectedCompleteWrite { size } => {
+                f.debug_struct("ExpectedCompleteWrite").field("size", size).finish()
+            }
+        }
+    }
+}
+
+impl<R, W> From<Transaction<R, W>> for TransactionExpectWrite<R, W> {
+    fn from(value: Transaction<R, W>) -> Self {
+        match value {
+            Transaction::Deselect => Self::Deselect,
+            Transaction::Read { address, handler } => Self::Read { address, handler },
+            Transaction::Write { address, handler } => Self::Write { address, handler },
+        }
+    }
+}
+
+/// An I2c transaction received from either `listen_expect_read` or `listen_expect_write`
+pub enum TransactionExpectEither<R, W> {
+    /// A stop or restart with different address happened since the last
+    /// transaction. This may be emitted multiple times between transactions.
+    Deselect,
+    /// An i2c read transaction (data read by master from the slave)
+    Read {
+        /// Address for which the read was received
+        address: Address,
+        /// Handler to be used in handling the transaction
+        ///
+        /// Dropping this handler nacks the address. Any other interaction
+        /// acknowledges the address.
+        handler: R,
+    },
+    /// An i2c write transaction (data written by master to the slave)
+    Write {
+        /// Address for which the write was received
+        address: Address,
+        /// Handler to be used in handling the transaction
+        ///
+        /// Dropping this handler nacks the address. Any other interaction
+        /// acknowledges the address.
+        handler: W,
+    },
+    /// The expected read occured, but insufficient bytes were provided to handle it completely.
+    ExpectedPartialRead {
+        /// Handler to be used for handling the remainder of the transaction
+        handler: R,
+    },
+    /// The expected read occured and was completed
+    ExpectedCompleteRead {
+        /// Number of bytes read from the buffer.
+        size: usize,
+    },
+    /// The expected write occured, but insufficient space was provided to handle it completely.
+    ExpectedPartialWrite {
+        /// Handler to be used for handling the remainder of the transaction
+        handler: W,
+    },
+    /// The expected write occured and was completed
+    ExpectedCompleteWrite {
+        /// Number of bytes read from the buffer.
+        size: usize,
+    },
+}
+
+impl<R, W> core::fmt::Debug for TransactionExpectEither<R, W> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Deselect => write!(f, "Deselect"),
+            Self::Read { address, .. } => f.debug_struct("Read").field("address", address).finish(),
+            Self::Write { address, .. } => f.debug_struct("Write").field("address", address).finish(),
+            Self::ExpectedPartialRead { .. } => write!(f, "ExpectedPartialRead"),
+            Self::ExpectedCompleteRead { size } => f.debug_struct("ExpectedCompleteRead").field("size", size).finish(),
+            Self::ExpectedPartialWrite { .. } => write!(f, "ExpectedPartialWrite"),
+            Self::ExpectedCompleteWrite { size } => {
+                f.debug_struct("ExpectedCompleteWrite").field("size", size).finish()
+            }
+        }
+    }
+}
+
+impl<R, W> From<Transaction<R, W>> for TransactionExpectEither<R, W> {
+    fn from(value: Transaction<R, W>) -> Self {
+        match value {
+            Transaction::Deselect => Self::Deselect,
+            Transaction::Read { address, handler } => Self::Read { address, handler },
+            Transaction::Write { address, handler } => Self::Write { address, handler },
+        }
+    }
+}
+
+impl<R, W> From<TransactionExpectRead<R, W>> for TransactionExpectEither<R, W> {
+    fn from(value: TransactionExpectRead<R, W>) -> Self {
+        match value {
+            TransactionExpectRead::Deselect => Self::Deselect,
+            TransactionExpectRead::Read { address, handler } => Self::Read { address, handler },
+            TransactionExpectRead::Write { address, handler } => Self::Write { address, handler },
+            TransactionExpectRead::ExpectedPartialRead { handler } => Self::ExpectedPartialRead { handler },
+            TransactionExpectRead::ExpectedCompleteRead { size } => Self::ExpectedCompleteRead { size },
+        }
+    }
+}
+
+impl<R, W> From<TransactionExpectWrite<R, W>> for TransactionExpectEither<R, W> {
+    fn from(value: TransactionExpectWrite<R, W>) -> Self {
+        match value {
+            TransactionExpectWrite::Deselect => Self::Deselect,
+            TransactionExpectWrite::Read { address, handler } => Self::Read { address, handler },
+            TransactionExpectWrite::Write { address, handler } => Self::Write { address, handler },
+            TransactionExpectWrite::ExpectedPartialWrite { handler } => Self::ExpectedPartialWrite { handler },
+            TransactionExpectWrite::ExpectedCompleteWrite { size } => Self::ExpectedCompleteWrite { size },
         }
     }
 }
@@ -871,6 +1088,306 @@ impl<'a> AsyncI2cSlave<'a> {
         match self.base.ten_bit_info {
             Some(ten_bit_info) => self.listen_10bit(ten_bit_info).await,
             None => self.listen_7bit().await,
+        }
+    }
+
+    // Should only be called with buffers of length greater than 0, and
+    // in situations where there is no possible pending deselect from a
+    // previous transaction.
+    async fn listen_expect_read_7bit<'b>(
+        &'b mut self,
+        buffer: &[u8],
+    ) -> Result<TransactionExpectRead<AsyncI2cSlaveRead<'b>, AsyncI2cSlaveWrite<'b>>>
+    where
+        'a: 'b,
+    {
+        debug_assert!(!buffer.is_empty());
+
+        let i2c = self.base.info.regs;
+
+        // Ensure dma is disabled
+        i2c.slvctl().modify(|_, w| w.slvdma().disabled());
+
+        // Prepare dma transfer for expected read
+        let _transfer = self
+            .dma_ch
+            .write_to_peripheral(buffer, i2c.slvdat().as_ptr() as *mut u8, Default::default());
+
+        // Setup auto ack
+        i2c.slvctl()
+            .modify(|_, w| w.automatchread().i2c_read().autoack().automatic_ack());
+
+        wait_dma(self.base.info, &self.dma_ch).await;
+
+        if i2c.slvctl().read().autoack().is_normal() {
+            // Automatic ack triggered, handle it
+            let stat = i2c.stat().read();
+            let size = abort_dma(&self.dma_ch, buffer.len());
+            if stat.slvdesel().is_deselected() || stat.slvpending().is_pending() {
+                // Read completed
+                return Ok(TransactionExpectRead::ExpectedCompleteRead { size });
+            } else {
+                // Partial read, create a handler
+                return Ok(TransactionExpectRead::ExpectedPartialRead {
+                    handler: AsyncI2cSlaveRead {
+                        info: self.base.info,
+                        dma_ch: &self.dma_ch,
+                        should_ack_addr: false,
+                        _phantom: PhantomData,
+                    },
+                });
+            }
+        }
+
+        // Disable automatic ack to avoid accidental triggering of it moving forward
+        i2c.slvctl().modify(|_, w| w.autoack().normal());
+
+        // Normal handling of transaction
+        let stat = i2c.stat().read();
+
+        if stat.slvdesel().is_deselected() {
+            // Should never be reached based on the checks before calling this function,
+            // but just in case handle it in release builds.
+            debug_assert!(false);
+            i2c.stat().modify(|_, w| w.slvdesel().deselected());
+            return Ok(TransactionExpectRead::Deselect);
+        }
+
+        if !stat.slvpending().is_pending() || !stat.slvstate().is_slave_address() {
+            return Err(TransferError::OtherBusError.into());
+            // Unexpected state
+        }
+
+        // Read address
+        let addr = i2c.slvdat().read().data().bits();
+
+        if addr & 1 == 0 {
+            // Write transaction
+            Ok(TransactionExpectRead::Write {
+                address: self.base.address,
+                handler: AsyncI2cSlaveWrite {
+                    info: self.base.info,
+                    dma_ch: &self.dma_ch,
+                    should_ack_addr: true,
+                    ten_bit_read_possible: &mut self.base.ten_bit_read_possible,
+                },
+            })
+        } else {
+            // Unexpected peripheral state
+            Err(TransferError::OtherBusError.into())
+        }
+    }
+
+    async fn listen_expect_read_fallback<'b>(
+        &'b mut self,
+        buffer: &[u8],
+    ) -> Result<TransactionExpectRead<AsyncI2cSlaveRead<'b>, AsyncI2cSlaveWrite<'b>>>
+    where
+        'a: 'b,
+    {
+        match self.listen().await? {
+            Transaction::Read { handler, .. } => match handler.handle_part(buffer).await? {
+                ReadResult::Partial(handler) => Ok(TransactionExpectRead::ExpectedPartialRead { handler }),
+                ReadResult::Complete(size) => Ok(TransactionExpectRead::ExpectedCompleteRead { size }),
+            },
+            v => Ok(v.into()),
+        }
+    }
+
+    /// Listen for a new incoming i2c transaction, expecting a read
+    ///
+    /// If the expectation comes true, the hardware can handle it slightly more efficiently.
+    pub async fn listen_expect_read<'b>(
+        &'b mut self,
+        address: Address,
+        buffer: &[u8],
+    ) -> Result<TransactionExpectRead<AsyncI2cSlaveRead<'b>, AsyncI2cSlaveWrite<'b>>>
+    where
+        'a: 'b,
+    {
+        // Address mismatch, so expected read will never be received
+        if address != self.base.address {
+            return Ok(self.listen().await?.into());
+        }
+
+        // Empty buffers don't interact well with dma, just handle m through fallback
+        if buffer.is_empty() {
+            return self.listen_expect_read_fallback(buffer).await;
+        }
+
+        // Check for potential deselection race conditions
+        let i2c = self.base.info.regs;
+        let stat = i2c.stat().read();
+        if stat.slvdesel().is_deselected() {
+            i2c.stat().modify(|_, w| w.slvdesel().deselected());
+            return Ok(TransactionExpectRead::Deselect);
+        }
+        if stat.slvsel().is_selected() && !stat.slvstate().is_slave_address() {
+            // If we do auto-ack, we may not be able to distinguish
+            // between the scenarios deselect then transaction completed,
+            // or restart and transaction completed then deselect, so handle
+            // it via the fallback.
+            return self.listen_expect_read_fallback(buffer).await;
+        }
+
+        // Note, we can't deal with expected read via auto-ack in the
+        // 10-bit address case, since that would mean a possible deselect
+        // can happen.
+        if self.base.ten_bit_info.is_none() {
+            self.listen_expect_read_7bit(buffer).await
+        } else {
+            self.listen_expect_read_fallback(buffer).await
+        }
+    }
+
+    // Should only be called with buffers of length greater than 0, and
+    // in situations where there is no possible pending deselect from a
+    // previous transaction.
+    async fn listen_expect_write_7bit<'b>(
+        &'b mut self,
+        buffer: &mut [u8],
+    ) -> Result<TransactionExpectWrite<AsyncI2cSlaveRead<'b>, AsyncI2cSlaveWrite<'b>>>
+    where
+        'a: 'b,
+    {
+        debug_assert!(buffer.len() > 1);
+        let i2c = self.base.info.regs;
+
+        // Ensure dma is disabled
+        i2c.slvctl().modify(|_, w| w.slvdma().disabled());
+
+        let (last, bulk) = buffer.split_last_mut().unwrap();
+        let bulk_len = bulk.len();
+
+        // Prepare transfer for expected write
+        let _transfer = self
+            .dma_ch
+            .read_from_peripheral(i2c.slvdat().as_ptr() as *const u8, bulk, Default::default());
+
+        // Setup auto ack
+        i2c.slvctl()
+            .modify(|_, w| w.automatchread().i2c_write().autoack().automatic_ack());
+
+        wait_dma(self.base.info, &self.dma_ch).await;
+
+        if i2c.slvctl().read().autoack().is_normal() {
+            // Automatic ack triggered, handle it
+            let stat = i2c.stat().read();
+            let size = abort_dma(&self.dma_ch, bulk_len);
+            if stat.slvdesel().is_deselected() || stat.slvpending().is_pending() {
+                // Read completed
+                return Ok(TransactionExpectWrite::ExpectedCompleteWrite { size });
+            } else {
+                // Partial read, deal with the last byte.
+                let handler = AsyncI2cSlaveWrite {
+                    info: self.base.info,
+                    dma_ch: &self.dma_ch,
+                    should_ack_addr: false,
+                    ten_bit_read_possible: &mut self.base.ten_bit_read_possible,
+                };
+
+                match handler.handle_single(last, false).await? {
+                    WriteResult::Partial(handler) => {
+                        return Ok(TransactionExpectWrite::ExpectedPartialWrite { handler })
+                    }
+                    WriteResult::Complete(extra) => {
+                        return Ok(TransactionExpectWrite::ExpectedCompleteWrite { size: size + extra })
+                    }
+                }
+            }
+        }
+
+        // Disable automatic ack to avoid accidental triggering of it moving forward
+        i2c.slvctl().modify(|_, w| w.autoack().normal());
+
+        let stat = i2c.stat().read();
+
+        if stat.slvdesel().is_deselected() {
+            i2c.stat().modify(|_, w| w.slvdesel().deselected());
+            return Ok(TransactionExpectWrite::Deselect);
+        }
+
+        if !stat.slvpending().is_pending() || !stat.slvstate().is_slave_address() {
+            return Err(TransferError::OtherBusError.into());
+            // Unexpected state
+        }
+
+        // Read address
+        let addr = i2c.slvdat().read().data().bits();
+
+        if addr & 1 == 0 {
+            // Unexpected peripheral state
+            Err(TransferError::OtherBusError.into())
+        } else {
+            // Read transaction
+            Ok(TransactionExpectWrite::Read {
+                address: self.base.address,
+                handler: AsyncI2cSlaveRead {
+                    info: self.base.info,
+                    should_ack_addr: true,
+                    dma_ch: &self.dma_ch,
+                    _phantom: PhantomData,
+                },
+            })
+        }
+    }
+
+    async fn listen_expect_write_fallback<'b>(
+        &'b mut self,
+        buffer: &mut [u8],
+    ) -> Result<TransactionExpectWrite<AsyncI2cSlaveRead<'b>, AsyncI2cSlaveWrite<'b>>>
+    where
+        'a: 'b,
+    {
+        match self.listen().await? {
+            Transaction::Write { handler, .. } => match handler.handle_part(buffer).await? {
+                WriteResult::Partial(handler) => Ok(TransactionExpectWrite::ExpectedPartialWrite { handler }),
+                WriteResult::Complete(size) => Ok(TransactionExpectWrite::ExpectedCompleteWrite { size }),
+            },
+            v => Ok(v.into()),
+        }
+    }
+
+    /// Listen for a new incoming i2c transaction, expecting a write
+    ///
+    /// If the expectation comes true, the hardware can handle it slightly more efficiently.
+    pub async fn listen_expect_write<'b>(
+        &'b mut self,
+        address: Address,
+        buffer: &mut [u8],
+    ) -> Result<TransactionExpectWrite<AsyncI2cSlaveRead<'b>, AsyncI2cSlaveWrite<'b>>>
+    where
+        'a: 'b,
+    {
+        // Address mismatch, so expected write will never be received
+        if address != self.base.address {
+            return Ok(self.listen().await?.into());
+        }
+
+        // Small buffers don't interact well with dma, just handle m through fallback
+        if buffer.len() <= 1 {
+            return self.listen_expect_write_fallback(buffer).await;
+        }
+
+        // Check for potential deselection race conditions
+        let i2c = self.base.info.regs;
+        let stat = i2c.stat().read();
+        if stat.slvdesel().is_deselected() {
+            i2c.stat().modify(|_, w| w.slvdesel().deselected());
+            return Ok(TransactionExpectWrite::Deselect);
+        }
+        if stat.slvsel().is_selected() && !stat.slvstate().is_slave_address() {
+            // If we do auto-ack, we may not be able to distinguish
+            // between the scenarios deselect then transaction completed,
+            // or restart and transaction completed then deselect, so handle
+            // it via the fallback.
+            return self.listen_expect_write_fallback(buffer).await;
+        }
+
+        if self.base.ten_bit_info.is_some() {
+            self.listen_expect_write_fallback(buffer).await
+        } else {
+            self.listen_expect_write_7bit(buffer).await
         }
     }
 }
