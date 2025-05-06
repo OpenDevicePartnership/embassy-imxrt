@@ -3,9 +3,9 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_imxrt::flexspi_nor_storage_bus::{
-    AhbConfig, FlexSpiBusWidth, FlexSpiFlashPort, FlexSpiFlashPortDeviceInstance, FlexspiAhbBufferConfig,
-    FlexspiConfig, FlexspiDeviceConfig, FlexspiNorStorageBus,
+use embassy_imxrt::flexspi::nor::{
+    AhbConfig, FlexSpiFlashPort, FlexSpiFlashPortDeviceInstance, FlexspiAhbBufferConfig, FlexspiConfig,
+    FlexspiConfigPortData, FlexspiDeviceConfig, FlexspiNorStorageBus,
 };
 use embassy_imxrt::pac::flexspi::ahbcr::*;
 use embassy_imxrt::pac::flexspi::flshcr1::*;
@@ -397,26 +397,27 @@ async fn main(_spawner: Spawner) {
         enable_same_config_for_all: Samedeviceen::Samedeviceen0,
         seq_timeout_cycle: 0xFFFF,
         ip_grant_timeout_cycle: 0xff,
-        tx_watermark: 0x08,
-        rx_watermark: 0x08,
         ahb_config,
     };
 
-    let mut flexspi_storage = FlexspiNorStorageBus::new_blocking(
-        p.FLEXSPI,       // FlexSPI peripheral
-        Some(p.PIO1_11), // FlexSPI DATA 0 pin
-        Some(p.PIO1_12),
-        Some(p.PIO1_13),
-        Some(p.PIO1_14),
-        Some(p.PIO2_17),
-        Some(p.PIO2_18),
-        Some(p.PIO2_22),
-        Some(p.PIO2_23),
+    let mut flexspi_storage = FlexspiNorStorageBus::new_blocking_octal_config(
+        p.FLEXSPI, // FlexSPI peripheral
+        p.PIO1_11,
+        p.PIO1_12,
+        p.PIO1_13,
+        p.PIO1_14,
+        p.PIO2_17,
+        p.PIO2_18,
+        p.PIO2_22,
+        p.PIO2_23,
         p.PIO1_29,
         p.PIO2_19,
-        FlexSpiFlashPort::PortB,                         // FlexSPI port
-        FlexSpiBusWidth::Octal,                          // FlexSPI bus width
-        FlexSpiFlashPortDeviceInstance::DeviceInstance0, // FlexSPI device instance
+        FlexspiConfigPortData {
+            port: FlexSpiFlashPort::PortB,                                 // FlexSPI port
+            dev_instance: FlexSpiFlashPortDeviceInstance::DeviceInstance0, // FlexSPI device instance
+            rx_watermark: 0x8,
+            tx_watermark: 0x8,
+        },
     );
 
     // Configure the Flexspi controller
