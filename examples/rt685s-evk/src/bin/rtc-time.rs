@@ -5,7 +5,7 @@ extern crate embassy_imxrt_examples;
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_imxrt::time_driver::*;
+use embassy_imxrt::rtc::*;
 use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 

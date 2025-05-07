@@ -44,6 +44,11 @@ time-driver-os-timer = ["_time-driver", "embassy-time-driver?/tick-hz-1_000_000"
 
 _time-driver = ["dep:embassy-time-driver", "dep:embassy-time-queue-utils", "embassy-embedded-hal/time"]
 
+## DEPRECATED FEATURE!!! Kept only for the purposes of backwards
+## compatibility. DO NOT use, make sure to choose a time driver
+## explicitly
+time-driver = ["time-driver-rtc"]
+
 ## Reexport the PAC for the currently enabled chip at `embassy_imxrt::pac` (unstable)
 unstable-pac = []
 
