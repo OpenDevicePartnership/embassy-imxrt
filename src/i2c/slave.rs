@@ -106,6 +106,7 @@ impl TenBitAddressInfo {
     }
 }
 
+#[must_use]
 /// An I2c transaction received from `listen`
 pub enum Transaction<R, W> {
     /// A stop or restart with different address happened since the last
@@ -143,6 +144,7 @@ impl<R, W> core::fmt::Debug for Transaction<R, W> {
     }
 }
 
+#[must_use]
 /// An I2c transaction received from `listen_expect_read`
 pub enum TransactionExpectRead<R, W> {
     /// A stop or restart with different address happened since the last
@@ -202,6 +204,7 @@ impl<R, W> From<Transaction<R, W>> for TransactionExpectRead<R, W> {
     }
 }
 
+#[must_use]
 /// An I2c transaction received from `listen_expect_write`
 pub enum TransactionExpectWrite<R, W> {
     /// A stop or restart with different address happened since the last
@@ -263,6 +266,7 @@ impl<R, W> From<Transaction<R, W>> for TransactionExpectWrite<R, W> {
     }
 }
 
+#[must_use]
 /// An I2c transaction received from either `listen_expect_read` or `listen_expect_write`
 pub enum TransactionExpectEither<R, W> {
     /// A stop or restart with different address happened since the last
@@ -360,6 +364,7 @@ impl<R, W> From<TransactionExpectWrite<R, W>> for TransactionExpectEither<R, W> 
     }
 }
 
+/// Shared logic for i2c slave operations
 struct BaseI2cSlave<'a> {
     info: Info,
     address: Address,
@@ -444,6 +449,15 @@ impl<'a> BaseI2cSlave<'a> {
     }
 }
 
+impl Drop for BaseI2cSlave<'_> {
+    fn drop(&mut self) {
+        // Disable the slave. This will release the bus completely, so any remaining
+        // transactions will automatically nack if it was a write, or provide an overrun
+        // character of 0xff on read.
+        self.info.regs.cfg().modify(|_, w| w.slven().disabled());
+    }
+}
+
 enum PendingRemediation {
     Write,
     Read,
@@ -470,6 +484,9 @@ impl<'a> BlockingI2cSlave<'a> {
         })
     }
 
+    /// Handle remediations needed from the end of the last transaction.
+    ///
+    /// This code is used to keep the amount of time spent in drop functions short.
     fn handle_remediations(&mut self) {
         let i2c = self.base.info.regs;
 
@@ -623,6 +640,7 @@ impl<'a> BlockingI2cSlave<'a> {
                     // Not selected, mark us as such
                     if self.base.ten_bit_read_possible {
                         // We were selected, so need to signal deselect to user.
+                        // Handle nacking via remediation to return quickly
                         self.base.ten_bit_read_possible = false;
                         self.pending_remediation = Some(PendingRemediation::Write);
                         return Ok(Transaction::Deselect);
@@ -638,6 +656,7 @@ impl<'a> BlockingI2cSlave<'a> {
                             }
                         }
 
+                        // Continue waiting for an actual transaction
                         continue;
                     }
                 }
@@ -657,7 +676,10 @@ impl<'a> BlockingI2cSlave<'a> {
                         },
                     });
                 } else {
-                    // Not for us, nack address
+                    // Not for us, nack address. Note that we don't need to do anything
+                    // for the individual bytes in the read transaction, as the address
+                    // nack ensures that the peripheral goes into a deselected state
+                    // and doesn't hog the bus.
                     i2c.slvctl().modify(|_, w| w.slvnack().nack());
                     continue;
                 }
@@ -1178,6 +1200,7 @@ impl<'a> AsyncI2cSlave<'a> {
         }
     }
 
+    /// Handle a listen_expect_read when auto-ack cannot be used.
     async fn listen_expect_read_fallback<'b>(
         &'b mut self,
         buffer: &[u8],
@@ -1215,7 +1238,10 @@ impl<'a> AsyncI2cSlave<'a> {
             return self.listen_expect_read_fallback(buffer).await;
         }
 
-        // Check for potential deselection race conditions
+        // Check for potential deselection race conditions. These can occur when there
+        // is still a transaction ongoing, because in that case we may not be able to
+        // distinguish between (stop, start, addr, read, nack, stop)
+        // and (restart, addr, read, nack, stop)
         let i2c = self.base.info.regs;
         let stat = i2c.stat().read();
         if stat.slvdesel().is_deselected() {
@@ -1369,7 +1395,10 @@ impl<'a> AsyncI2cSlave<'a> {
             return self.listen_expect_write_fallback(buffer).await;
         }
 
-        // Check for potential deselection race conditions
+        // Check for potential deselection race conditions. These can occur when there
+        // is still a transaction ongoing, because in that case we may not be able to
+        // distinguish between (stop, start, addr, write, stop)
+        // and (restart, addr, write, stop).
         let i2c = self.base.info.regs;
         let stat = i2c.stat().read();
         if stat.slvdesel().is_deselected() {
