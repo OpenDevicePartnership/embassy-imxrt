@@ -12,13 +12,13 @@ documentation = "https://docs.embassy.dev/embassy-imxrt"
 [package.metadata.embassy_docs]
 src_base = "https://github.com/embassy-rs/embassy/blob/embassy-imxrt-v$VERSION/embassy-imxrt/src/"
 src_base_git = "https://github.com/embassy-rs/embassy/blob/$COMMIT/embassy-imxrt/src/"
-features = ["time", "defmt", "unstable-pac", "time-driver"]
+features = ["time", "defmt", "unstable-pac", "time-driver-os-timer"]
 flavors = [
     { regex_feature = "mimxrt6.*", target = "thumbv8m.main-none-eabihf" }
 ]
 
 [package.metadata.docs.rs]
-features = ["time", "defmt", "unstable-pac", "time-driver"]
+features = ["time", "defmt", "unstable-pac", "time-driver-os-timer"]
 
 [features]
 default = ["rt", "time"]
@@ -34,14 +34,15 @@ rt = [
 defmt = ["dep:defmt", "embassy-hal-internal/defmt", "embassy-sync/defmt", "mimxrt685s-pac?/defmt", "mimxrt633s-pac?/defmt"]
 
 ## Enable features requiring `embassy-time`
-time = ["dep:embassy-time"]
+time = ["dep:embassy-time", "embassy-embedded-hal/time"]
 
-## Enable custom embassy time-driver implementation, using 1kHz RTC
-time-driver = [
-    "dep:embassy-time-driver",
-    "embassy-time-driver?/tick-hz-1_000",
-    "dep:embassy-time-queue-utils",
-]
+## Enable custom embassy time-driver implementation, using 32KHz RTC
+time-driver-rtc = ["_time-driver", "embassy-time-driver?/tick-hz-1_000"]
+
+## Enable custom embassy time-driver implementation, using 32KHz RTC
+time-driver-os-timer = ["_time-driver", "embassy-time-driver?/tick-hz-1_000_000"]
+
+_time-driver = ["dep:embassy-time-driver", "dep:embassy-time-queue-utils", "embassy-embedded-hal/time"]
 
 ## Reexport the PAC for the currently enabled chip at `embassy_imxrt::pac` (unstable)
 unstable-pac = []
@@ -67,6 +68,7 @@ embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
 embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", optional = true }
 embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", optional = true }
 embassy-time = { git = "https://github.com/embassy-rs/embassy", optional = true}
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", default-features = false }
 embassy-futures = { git = "https://github.com/embassy-rs/embassy" }
 embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", features = [
     "cortex-m",

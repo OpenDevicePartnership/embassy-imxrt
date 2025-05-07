@@ -115,8 +115,8 @@ jobs:
 
       - name: cargo doc
         run: |
-          cargo doc --no-deps -F mimxrt685s,rt,defmt,time,time-driver,unstable-pac --locked
-          cargo doc --no-deps -F mimxrt633s,rt,defmt,time,time-driver,unstable-pac --locked
+          cargo doc --no-deps -F mimxrt685s,rt,defmt,time,time-driver-os-timer,unstable-pac --locked
+          cargo doc --no-deps -F mimxrt633s,rt,defmt,time,time-driver-os-timer,unstable-pac --locked
         env:
           RUSTDOCFLAGS: --cfg docsrs
 
@@ -130,51 +130,51 @@ jobs:
       fail-fast: false
       matrix:
         feature: [ "mimxrt633s", "mimxrt633s,rt", "mimxrt633s,defmt",
-          "mimxrt633s,time", "mimxrt633s,time-driver",
+          "mimxrt633s,time", "mimxrt633s,time-driver-os-timer",
           "mimxrt633s,unstable-pac", "mimxrt633s,rt,defmt",
-          "mimxrt633s,rt,time", "mimxrt633s,rt,time-driver",
+          "mimxrt633s,rt,time", "mimxrt633s,rt,time-driver-os-timer",
           "mimxrt633s,rt,unstable-pac", "mimxrt633s,defmt,time",
-          "mimxrt633s,defmt,time-driver", "mimxrt633s,defmt,unstable-pac",
-          "mimxrt633s,time,time-driver", "mimxrt633s,time,unstable-pac",
-          "mimxrt633s,time-driver,unstable-pac",
-          "mimxrt633s,rt,defmt,time", "mimxrt633s,rt,defmt,time-driver",
+          "mimxrt633s,defmt,time-driver-os-timer", "mimxrt633s,defmt,unstable-pac",
+          "mimxrt633s,time,time-driver-os-timer", "mimxrt633s,time,unstable-pac",
+          "mimxrt633s,time-driver-os-timer,unstable-pac",
+          "mimxrt633s,rt,defmt,time", "mimxrt633s,rt,defmt,time-driver-os-timer",
           "mimxrt633s,rt,defmt,unstable-pac",
-          "mimxrt633s,rt,time,time-driver",
+          "mimxrt633s,rt,time,time-driver-os-timer",
           "mimxrt633s,rt,time,unstable-pac",
-          "mimxrt633s,rt,time-driver,unstable-pac",
-          "mimxrt633s,defmt,time,time-driver",
+          "mimxrt633s,rt,time-driver-os-timer,unstable-pac",
+          "mimxrt633s,defmt,time,time-driver-os-timer",
           "mimxrt633s,defmt,time,unstable-pac",
-          "mimxrt633s,defmt,time-driver,unstable-pac",
-          "mimxrt633s,time,time-driver,unstable-pac",
-          "mimxrt633s,rt,defmt,time,time-driver",
+          "mimxrt633s,defmt,time-driver-os-timer,unstable-pac",
+          "mimxrt633s,time,time-driver-os-timer,unstable-pac",
+          "mimxrt633s,rt,defmt,time,time-driver-os-timer",
           "mimxrt633s,rt,defmt,time,unstable-pac",
-          "mimxrt633s,rt,defmt,time-driver,unstable-pac",
-          "mimxrt633s,rt,time,time-driver,unstable-pac",
-          "mimxrt633s,defmt,time,time-driver,unstable-pac",
-          "mimxrt633s,rt,defmt,time,time-driver,unstable-pac",
+          "mimxrt633s,rt,defmt,time-driver-os-timer,unstable-pac",
+          "mimxrt633s,rt,time,time-driver-os-timer,unstable-pac",
+          "mimxrt633s,defmt,time,time-driver-os-timer,unstable-pac",
+          "mimxrt633s,rt,defmt,time,time-driver-os-timer,unstable-pac",
           "mimxrt685s", "mimxrt685s,rt", "mimxrt685s,defmt",
-          "mimxrt685s,time", "mimxrt685s,time-driver",
+          "mimxrt685s,time", "mimxrt685s,time-driver-os-timer",
           "mimxrt685s,unstable-pac", "mimxrt685s,rt,defmt",
-          "mimxrt685s,rt,time", "mimxrt685s,rt,time-driver",
+          "mimxrt685s,rt,time", "mimxrt685s,rt,time-driver-os-timer",
           "mimxrt685s,rt,unstable-pac", "mimxrt685s,defmt,time",
-          "mimxrt685s,defmt,time-driver", "mimxrt685s,defmt,unstable-pac",
-          "mimxrt685s,time,time-driver", "mimxrt685s,time,unstable-pac",
-          "mimxrt685s,time-driver,unstable-pac",
-          "mimxrt685s,rt,defmt,time", "mimxrt685s,rt,defmt,time-driver",
+          "mimxrt685s,defmt,time-driver-os-timer", "mimxrt685s,defmt,unstable-pac",
+          "mimxrt685s,time,time-driver-os-timer", "mimxrt685s,time,unstable-pac",
+          "mimxrt685s,time-driver-os-timer,unstable-pac",
+          "mimxrt685s,rt,defmt,time", "mimxrt685s,rt,defmt,time-driver-os-timer",
           "mimxrt685s,rt,defmt,unstable-pac",
-          "mimxrt685s,rt,time,time-driver",
+          "mimxrt685s,rt,time,time-driver-os-timer",
           "mimxrt685s,rt,time,unstable-pac",
-          "mimxrt685s,rt,time-driver,unstable-pac",
-          "mimxrt685s,defmt,time,time-driver",
+          "mimxrt685s,rt,time-driver-os-timer,unstable-pac",
+          "mimxrt685s,defmt,time,time-driver-os-timer",
           "mimxrt685s,defmt,time,unstable-pac",
-          "mimxrt685s,defmt,time-driver,unstable-pac",
-          "mimxrt685s,time,time-driver,unstable-pac",
-          "mimxrt685s,rt,defmt,time,time-driver",
+          "mimxrt685s,defmt,time-driver-os-timer,unstable-pac",
+          "mimxrt685s,time,time-driver-os-timer,unstable-pac",
+          "mimxrt685s,rt,defmt,time,time-driver-os-timer",
           "mimxrt685s,rt,defmt,time,unstable-pac",
-          "mimxrt685s,rt,defmt,time-driver,unstable-pac",
-          "mimxrt685s,rt,time,time-driver,unstable-pac",
-          "mimxrt685s,defmt,time,time-driver,unstable-pac",
-          "mimxrt685s,rt,defmt,time,time-driver,unstable-pac" ]
+          "mimxrt685s,rt,defmt,time-driver-os-timer,unstable-pac",
+          "mimxrt685s,rt,time,time-driver-os-timer,unstable-pac",
+          "mimxrt685s,defmt,time,time-driver-os-timer,unstable-pac",
+          "mimxrt685s,rt,defmt,time,time-driver-os-timer,unstable-pac" ]
 
     steps:
       - uses: actions/checkout@v4
@@ -249,5 +249,5 @@ jobs:
 
       - name: cargo +${{ matrix.msrv }} check
         run: |
-          cargo check -F mimxrt685s,rt,defmt,time,time-driver,unstable-pac --locked
-          cargo check -F mimxrt633s,rt,defmt,time,time-driver,unstable-pac --locked
+          cargo check -F mimxrt685s,rt,defmt,time,time-driver-os-timer,unstable-pac --locked
+          cargo check -F mimxrt633s,rt,defmt,time,time-driver-os-timer,unstable-pac --locked

@@ -1,4 +1,5 @@
-use core::cell::{Cell, RefCell};
+//! RTC Driver.
+use core::cell::RefCell;
 use core::sync::atomic::{compiler_fence, AtomicU32, Ordering};
 
 use critical_section::CriticalSection;
@@ -7,6 +8,7 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_time_driver::Driver;
 use embassy_time_queue_utils::Queue;
 
+use super::AlarmState;
 use crate::interrupt::InterruptExt;
 use crate::{interrupt, pac, peripherals, Peri};
 
@@ -24,25 +26,20 @@ fn rtc() -> &'static pac::rtc::RegisterBlock {
 /// the 1kHz RTC counter is 16 bits and RTC doesn't have separate compare channels,
 /// so using a 32 bit GPREG0-2 as counter, compare, and int_en
 /// `period` is a 32bit integer, gpreg 'counter' is 31 bits plus the parity bit for overflow detection
+#[cfg(feature = "time-driver-rtc")]
 fn calc_now(period: u32, counter: u32) -> u64 {
     ((period as u64) << 31) + ((counter ^ ((period & 1) << 31)) as u64)
 }
 
-struct AlarmState {
-    timestamp: Cell<u64>,
-}
+#[cfg(feature = "time-driver-rtc")]
+embassy_time_driver::time_driver_impl!(static DRIVER: Rtc = Rtc {
+    period: AtomicU32::new(0),
+    alarms:  Mutex::const_new(CriticalSectionRawMutex::new(), AlarmState::new()),
+    queue: Mutex::new(RefCell::new(Queue::new())),
+});
 
-unsafe impl Send for AlarmState {}
-
-impl AlarmState {
-    const fn new() -> Self {
-        Self {
-            timestamp: Cell::new(u64::MAX),
-        }
-    }
-}
-
-struct TimerDriver {
+#[cfg(feature = "time-driver-rtc")]
+struct Rtc {
     /// Number of 2^31 periods elapsed since boot.
     period: AtomicU32,
     /// Timestamp at which to fire alarm. u64::MAX if no alarm is scheduled.
@@ -50,13 +47,8 @@ struct TimerDriver {
     queue: Mutex<CriticalSectionRawMutex, RefCell<Queue>>,
 }
 
-embassy_time_driver::time_driver_impl!(static DRIVER: TimerDriver = TimerDriver {
-    period: AtomicU32::new(0),
-    alarms:  Mutex::const_new(CriticalSectionRawMutex::new(), AlarmState::new()),
-    queue: Mutex::new(RefCell::new(Queue::new())),
-});
-
-impl TimerDriver {
+#[cfg(feature = "time-driver-rtc")]
+impl Rtc {
     /// Access the GPREG0 register to use it as a 31-bit counter.
     #[inline]
     fn counter_reg(&self) -> &pac::rtc::Gpreg {
@@ -218,7 +210,8 @@ impl TimerDriver {
     }
 }
 
-impl Driver for TimerDriver {
+#[cfg(feature = "time-driver-rtc")]
+impl Driver for Rtc {
     fn now(&self) -> u64 {
         // `period` MUST be read before `counter`, see comment at the top for details.
         let period = self.period.load(Ordering::Acquire);
@@ -272,10 +265,12 @@ impl Default for Datetime {
         }
     }
 }
+
 /// Represents a real-time clock datetime.
 pub struct RtcDatetime<'r> {
     _p: Peri<'r, peripherals::RTC>,
 }
+
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(PartialEq, Debug)]
 /// Represents the result of a datetime validation.
@@ -514,7 +509,7 @@ impl<'r> RtcDatetime<'r> {
     }
 }
 
-#[cfg(feature = "rt")]
+#[cfg(all(feature = "rt", feature = "time-driver-rtc"))]
 #[allow(non_snake_case)]
 #[interrupt]
 fn RTC() {
