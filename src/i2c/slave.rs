@@ -496,7 +496,7 @@ impl<'a> BlockingI2cSlave<'a> {
                 blocking_poll(self.base.info);
                 let stat = i2c.stat().read();
                 if stat.slvpending().is_pending() && stat.slvstate().is_slave_receive() {
-                    i2c.slvctl().modify(|_, w| w.slvnack().nack());
+                    i2c.slvctl().modify(|_, w| w.slvnack().nack().slvcontinue().no_effect());
                 } else {
                     break;
                 }
@@ -511,7 +511,8 @@ impl<'a> BlockingI2cSlave<'a> {
                     unsafe {
                         i2c.slvdat().write(|w| w.data().bits(0xff));
                     }
-                    i2c.slvctl().modify(|_, w| w.slvcontinue().continue_());
+                    i2c.slvctl()
+                        .modify(|_, w| w.slvcontinue().continue_().slvnack().no_effect());
                 }
             }
             None => {}
@@ -612,7 +613,8 @@ impl<'a> BlockingI2cSlave<'a> {
 
             if addr & 1 == 0 {
                 // Write transaction, read next byte and check 10 bit address
-                i2c.slvctl().write(|w| w.slvcontinue().continue_());
+                i2c.slvctl()
+                    .write(|w| w.slvcontinue().continue_().slvnack().no_effect());
                 blocking_poll(self.base.info);
                 if !i2c.stat().read().slvstate().is_slave_receive() || !i2c.stat().read().slvpending().is_pending() {
                     if i2c.stat().read().slvdesel().is_deselected() {
@@ -649,7 +651,7 @@ impl<'a> BlockingI2cSlave<'a> {
                         loop {
                             let stat = i2c.stat().read();
                             if stat.slvpending().is_pending() && stat.slvstate().is_slave_receive() {
-                                i2c.slvctl().modify(|_, w| w.slvnack().nack());
+                                i2c.slvctl().modify(|_, w| w.slvnack().nack().slvcontinue().no_effect());
                                 blocking_poll(self.base.info);
                             } else {
                                 break;
@@ -680,7 +682,7 @@ impl<'a> BlockingI2cSlave<'a> {
                     // for the individual bytes in the read transaction, as the address
                     // nack ensures that the peripheral goes into a deselected state
                     // and doesn't hog the bus.
-                    i2c.slvctl().modify(|_, w| w.slvnack().nack());
+                    i2c.slvctl().modify(|_, w| w.slvnack().nack().slvcontinue().no_effect());
                     continue;
                 }
             }
@@ -736,7 +738,8 @@ impl<'a> BlockingI2cSlaveWrite<'a> {
             if !i2c.stat().read().slvpending().is_pending() {
                 return Err(TransferError::OtherBusError.into());
             }
-            i2c.slvctl().modify(|_, w| w.slvcontinue().continue_());
+            i2c.slvctl()
+                .modify(|_, w| w.slvcontinue().continue_().slvnack().no_effect());
 
             // At this point the address has definitely been acknowledged
             self.should_ack_addr = false;
@@ -801,7 +804,7 @@ impl Drop for BlockingI2cSlaveWrite<'_> {
         let i2c = self.info.regs;
         if self.should_ack_addr {
             // No need to wait, by construction we are already in pending state
-            i2c.slvctl().modify(|_, w| w.slvnack().nack());
+            i2c.slvctl().modify(|_, w| w.slvnack().nack().slvcontinue().no_effect());
         } else {
             *self.pending_remediation = Some(PendingRemediation::Write);
         }
@@ -831,7 +834,8 @@ impl<'a> BlockingI2cSlaveRead<'a> {
         // Ack address if needed
         if self.should_ack_addr {
             self.should_ack_addr = false;
-            i2c.slvctl().modify(|_, w| w.slvcontinue().continue_());
+            i2c.slvctl()
+                .modify(|_, w| w.slvcontinue().continue_().slvnack().no_effect());
         }
 
         let mut xfer_count = 0;
@@ -858,7 +862,8 @@ impl<'a> BlockingI2cSlaveRead<'a> {
             i2c.slvdat().write(|w|
                 // SAFETY: unsafe only here due to use of bits()
                 unsafe{w.data().bits(*b)});
-            i2c.slvctl().write(|w| w.slvcontinue().continue_());
+            i2c.slvctl()
+                .write(|w| w.slvcontinue().continue_().slvnack().no_effect());
             xfer_count += 1;
         }
 
@@ -907,7 +912,7 @@ impl Drop for BlockingI2cSlaveRead<'_> {
     fn drop(&mut self) {
         let i2c = self.info.regs;
         if self.should_ack_addr {
-            i2c.slvctl().modify(|_, w| w.slvnack().nack());
+            i2c.slvctl().modify(|_, w| w.slvnack().nack().slvcontinue().no_effect());
         } else {
             *self.pending_remediation = Some(PendingRemediation::Read);
         }
@@ -951,7 +956,8 @@ impl<'a> AsyncI2cSlave<'a> {
         let i2c = self.base.info.regs;
 
         // Ensure dma is disabled
-        i2c.slvctl().modify(|_, w| w.slvdma().disabled());
+        i2c.slvctl()
+            .modify(|_, w| w.slvdma().disabled().slvcontinue().no_effect().slvnack().no_effect());
 
         wait_no_dma(self.base.info).await;
 
@@ -1005,7 +1011,8 @@ impl<'a> AsyncI2cSlave<'a> {
         let i2c = self.base.info.regs;
 
         // Ensure dma is disabled
-        i2c.slvctl().modify(|_, w| w.slvdma().disabled());
+        i2c.slvctl()
+            .modify(|_, w| w.slvdma().disabled().slvcontinue().no_effect().slvnack().no_effect());
 
         loop {
             wait_no_dma(self.base.info).await;
@@ -1034,7 +1041,8 @@ impl<'a> AsyncI2cSlave<'a> {
 
             if addr & 1 == 0 {
                 // Write transaction, read next byte and check 10 bit address
-                i2c.slvctl().write(|w| w.slvcontinue().continue_());
+                i2c.slvctl()
+                    .write(|w| w.slvcontinue().continue_().slvnack().no_effect());
                 wait_no_dma(self.base.info).await;
 
                 if !i2c.stat().read().slvstate().is_slave_receive() || !i2c.stat().read().slvpending().is_pending() {
@@ -1095,7 +1103,7 @@ impl<'a> AsyncI2cSlave<'a> {
                     });
                 } else {
                     // Not for us, nack address
-                    i2c.slvctl().modify(|_, w| w.slvnack().nack());
+                    i2c.slvctl().modify(|_, w| w.slvnack().nack().slvcontinue().no_effect());
                     continue;
                 }
             }
@@ -1128,7 +1136,8 @@ impl<'a> AsyncI2cSlave<'a> {
         let i2c = self.base.info.regs;
 
         // Ensure dma is disabled
-        i2c.slvctl().modify(|_, w| w.slvdma().disabled());
+        i2c.slvctl()
+            .modify(|_, w| w.slvdma().disabled().slvcontinue().no_effect().slvnack().no_effect());
 
         // Prepare dma transfer for expected read
         let _transfer = self
@@ -1136,8 +1145,16 @@ impl<'a> AsyncI2cSlave<'a> {
             .write_to_peripheral(buffer, i2c.slvdat().as_ptr() as *mut u8, Default::default());
 
         // Setup auto ack
-        i2c.slvctl()
-            .modify(|_, w| w.automatchread().i2c_read().autoack().automatic_ack());
+        i2c.slvctl().modify(|_, w| {
+            w.automatchread()
+                .i2c_read()
+                .autoack()
+                .automatic_ack()
+                .slvcontinue()
+                .no_effect()
+                .slvnack()
+                .no_effect()
+        });
 
         wait_dma(self.base.info, &self.dma_ch).await;
 
@@ -1162,7 +1179,8 @@ impl<'a> AsyncI2cSlave<'a> {
         }
 
         // Disable automatic ack to avoid accidental triggering of it moving forward
-        i2c.slvctl().modify(|_, w| w.autoack().normal());
+        i2c.slvctl()
+            .modify(|_, w| w.autoack().normal().slvcontinue().no_effect().slvnack().no_effect());
 
         // Normal handling of transaction
         let stat = i2c.stat().read();
@@ -1280,7 +1298,8 @@ impl<'a> AsyncI2cSlave<'a> {
         let i2c = self.base.info.regs;
 
         // Ensure dma is disabled
-        i2c.slvctl().modify(|_, w| w.slvdma().disabled());
+        i2c.slvctl()
+            .modify(|_, w| w.slvdma().disabled().slvcontinue().no_effect().slvnack().no_effect());
 
         let (last, bulk) = buffer.split_last_mut().unwrap();
         let bulk_len = bulk.len();
@@ -1291,8 +1310,16 @@ impl<'a> AsyncI2cSlave<'a> {
             .read_from_peripheral(i2c.slvdat().as_ptr() as *const u8, bulk, Default::default());
 
         // Setup auto ack
-        i2c.slvctl()
-            .modify(|_, w| w.automatchread().i2c_write().autoack().automatic_ack());
+        i2c.slvctl().modify(|_, w| {
+            w.automatchread()
+                .i2c_write()
+                .autoack()
+                .automatic_ack()
+                .slvcontinue()
+                .no_effect()
+                .slvnack()
+                .no_effect()
+        });
 
         wait_dma(self.base.info, &self.dma_ch).await;
 
@@ -1324,7 +1351,8 @@ impl<'a> AsyncI2cSlave<'a> {
         }
 
         // Disable automatic ack to avoid accidental triggering of it moving forward
-        i2c.slvctl().modify(|_, w| w.autoack().normal());
+        i2c.slvctl()
+            .modify(|_, w| w.autoack().normal().slvcontinue().no_effect().slvnack().no_effect());
 
         let stat = i2c.stat().read();
 
@@ -1503,13 +1531,15 @@ impl AsyncI2cSlaveWrite<'_> {
         *self.ten_bit_read_possible = true;
 
         // Acknowledge address if needed, otherwise ack last byte
-        i2c.slvctl().modify(|_, w| w.slvcontinue().continue_());
+        i2c.slvctl()
+            .modify(|_, w| w.slvcontinue().continue_().slvnack().no_effect());
         if self.should_ack_addr {
             self.should_ack_addr = false;
         }
 
         // Setup the dma transfer
-        i2c.slvctl().modify(|_, w| w.slvdma().enabled());
+        i2c.slvctl()
+            .modify(|_, w| w.slvdma().enabled().slvcontinue().no_effect().slvnack().no_effect());
         let transfer = self
             .dma_ch
             .read_from_peripheral(i2c.slvdat().as_ptr() as *const u8, buffer, Default::default());
@@ -1546,15 +1576,18 @@ impl AsyncI2cSlaveWrite<'_> {
 
         // Acknowledge address if needed
         if self.should_ack_addr {
-            i2c.slvctl().modify(|_, w| w.slvcontinue().continue_());
+            i2c.slvctl()
+                .modify(|_, w| w.slvcontinue().continue_().slvnack().no_effect());
             self.should_ack_addr = false;
         } else if should_ack_prev {
             // Acknowledge last byte of previous block, since that wasn't done by bulk.
-            i2c.slvctl().modify(|_, w| w.slvcontinue().continue_());
+            i2c.slvctl()
+                .modify(|_, w| w.slvcontinue().continue_().slvnack().no_effect());
         }
 
         // Disable dma and wait for read to be ready
-        i2c.slvctl().modify(|_, w| w.slvdma().disabled());
+        i2c.slvctl()
+            .modify(|_, w| w.slvdma().disabled().slvcontinue().no_effect().slvnack().no_effect());
         wait_no_dma(self.info).await;
 
         let stat = i2c.stat().read();
@@ -1614,11 +1647,17 @@ impl AsyncI2cSlaveWrite<'_> {
 impl Drop for AsyncI2cSlaveWrite<'_> {
     fn drop(&mut self) {
         if self.should_ack_addr {
-            self.info.regs.slvctl().modify(|_, w| w.slvnack().set_bit());
+            self.info
+                .regs
+                .slvctl()
+                .modify(|_, w| w.slvnack().set_bit().slvcontinue().no_effect());
         } else {
             // Using a critical section makes this code a lot simpler and predictable
             critical_section::with(|_| {
-                self.info.regs.slvctl().modify(|_, w| w.slvdma().clear_bit());
+                self.info
+                    .regs
+                    .slvctl()
+                    .modify(|_, w| w.slvdma().clear_bit().slvcontinue().no_effect().slvnack().no_effect());
                 I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATION_SLAVE_FINISH_WRITE, Ordering::Acquire);
                 self.info
                     .regs
@@ -1650,7 +1689,7 @@ impl AsyncI2cSlaveRead<'_> {
         // Acknowledge address if needed
         if self.should_ack_addr {
             i2c.slvctl()
-                .modify(|_, w| w.slvdma().enabled().slvcontinue().continue_());
+                .modify(|_, w| w.slvdma().enabled().slvcontinue().continue_().slvnack().no_effect());
             self.should_ack_addr = false;
         }
 
@@ -1712,11 +1751,17 @@ impl AsyncI2cSlaveRead<'_> {
 impl Drop for AsyncI2cSlaveRead<'_> {
     fn drop(&mut self) {
         if self.should_ack_addr {
-            self.info.regs.slvctl().modify(|_, w| w.slvnack().set_bit());
+            self.info
+                .regs
+                .slvctl()
+                .modify(|_, w| w.slvnack().set_bit().slvcontinue().no_effect());
         } else {
             // Using a critical section makes this code a lot simpler and predictable
             critical_section::with(|_| {
-                self.info.regs.slvctl().modify(|_, w| w.slvdma().clear_bit());
+                self.info
+                    .regs
+                    .slvctl()
+                    .modify(|_, w| w.slvdma().clear_bit().slvcontinue().no_effect().slvnack().no_effect());
                 I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATION_SLAVE_FINISH_READ, Ordering::Acquire);
                 self.info
                     .regs
