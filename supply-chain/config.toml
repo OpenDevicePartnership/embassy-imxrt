@@ -4,6 +4,9 @@
 [cargo-vet]
 version = "0.10"
 
+[imports.OpenDevicePartnership]
+url = "https://raw.githubusercontent.com/OpenDevicePartnership/rust-crate-audits/main/audits.toml"
+
 [imports.google]
 url = "https://raw.githubusercontent.com/google/rust-crate-audits/main/audits.toml"
 
