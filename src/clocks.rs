@@ -937,6 +937,15 @@ impl MainPllClkConfig {
 }
 
 impl MainClkConfig {
+    /// Configure the FFRO/4 as the main clock source.
+    ///
+    /// This is the same as the reset value.
+    fn reset_main_clk() {
+        let clkctl0 = unsafe { crate::pac::Clkctl0::steal() };
+        clkctl0.mainclksela().write(|w| w.sel().ffro_div_4());
+        clkctl0.mainclkselb().write(|w| w.sel().main_1st_clk());
+    }
+
     fn init_main_clk() {
         // SAFETY:: unsafe needed to take pointers to Clkctl0 and Clkctl1
         // used to set the right HW frequency
@@ -1480,6 +1489,14 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
     if let Err(e) = config.sys_osc.enable_and_reset() {
         return Err(e);
     }
+
+    // Switch the main clock source to FFRO divided by 4 (the reset default).
+    // This is done in case a bootloader already configured the main clock to use the PLL.
+    // We must make sure we're not using the PLL as main clock source while we reset it.
+    //
+    // We already switched on the FFRO clock above, in case the bootloader turned it off,
+    // so this should be fine.
+    MainClkConfig::reset_main_clk();
 
     if let Err(e) = config.main_pll_clk.enable_and_reset() {
         return Err(e);
