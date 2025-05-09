@@ -128,53 +128,6 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix:
-        feature: [ "mimxrt633s", "mimxrt633s,rt", "mimxrt633s,defmt",
-          "mimxrt633s,time", "mimxrt633s,time-driver-os-timer",
-          "mimxrt633s,unstable-pac", "mimxrt633s,rt,defmt",
-          "mimxrt633s,rt,time", "mimxrt633s,rt,time-driver-os-timer",
-          "mimxrt633s,rt,unstable-pac", "mimxrt633s,defmt,time",
-          "mimxrt633s,defmt,time-driver-os-timer", "mimxrt633s,defmt,unstable-pac",
-          "mimxrt633s,time,time-driver-os-timer", "mimxrt633s,time,unstable-pac",
-          "mimxrt633s,time-driver-os-timer,unstable-pac",
-          "mimxrt633s,rt,defmt,time", "mimxrt633s,rt,defmt,time-driver-os-timer",
-          "mimxrt633s,rt,defmt,unstable-pac",
-          "mimxrt633s,rt,time,time-driver-os-timer",
-          "mimxrt633s,rt,time,unstable-pac",
-          "mimxrt633s,rt,time-driver-os-timer,unstable-pac",
-          "mimxrt633s,defmt,time,time-driver-os-timer",
-          "mimxrt633s,defmt,time,unstable-pac",
-          "mimxrt633s,defmt,time-driver-os-timer,unstable-pac",
-          "mimxrt633s,time,time-driver-os-timer,unstable-pac",
-          "mimxrt633s,rt,defmt,time,time-driver-os-timer",
-          "mimxrt633s,rt,defmt,time,unstable-pac",
-          "mimxrt633s,rt,defmt,time-driver-os-timer,unstable-pac",
-          "mimxrt633s,rt,time,time-driver-os-timer,unstable-pac",
-          "mimxrt633s,defmt,time,time-driver-os-timer,unstable-pac",
-          "mimxrt633s,rt,defmt,time,time-driver-os-timer,unstable-pac",
-          "mimxrt685s", "mimxrt685s,rt", "mimxrt685s,defmt",
-          "mimxrt685s,time", "mimxrt685s,time-driver-os-timer",
-          "mimxrt685s,unstable-pac", "mimxrt685s,rt,defmt",
-          "mimxrt685s,rt,time", "mimxrt685s,rt,time-driver-os-timer",
-          "mimxrt685s,rt,unstable-pac", "mimxrt685s,defmt,time",
-          "mimxrt685s,defmt,time-driver-os-timer", "mimxrt685s,defmt,unstable-pac",
-          "mimxrt685s,time,time-driver-os-timer", "mimxrt685s,time,unstable-pac",
-          "mimxrt685s,time-driver-os-timer,unstable-pac",
-          "mimxrt685s,rt,defmt,time", "mimxrt685s,rt,defmt,time-driver-os-timer",
-          "mimxrt685s,rt,defmt,unstable-pac",
-          "mimxrt685s,rt,time,time-driver-os-timer",
-          "mimxrt685s,rt,time,unstable-pac",
-          "mimxrt685s,rt,time-driver-os-timer,unstable-pac",
-          "mimxrt685s,defmt,time,time-driver-os-timer",
-          "mimxrt685s,defmt,time,unstable-pac",
-          "mimxrt685s,defmt,time-driver-os-timer,unstable-pac",
-          "mimxrt685s,time,time-driver-os-timer,unstable-pac",
-          "mimxrt685s,rt,defmt,time,time-driver-os-timer",
-          "mimxrt685s,rt,defmt,time,unstable-pac",
-          "mimxrt685s,rt,defmt,time-driver-os-timer,unstable-pac",
-          "mimxrt685s,rt,time,time-driver-os-timer,unstable-pac",
-          "mimxrt685s,defmt,time,time-driver-os-timer,unstable-pac",
-          "mimxrt685s,rt,defmt,time,time-driver-os-timer,unstable-pac" ]
 
     steps:
       - uses: actions/checkout@v4
@@ -184,13 +137,14 @@ jobs:
       - name: Install stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: cargo install cargo-hack
-        uses: taiki-e/install-action@cargo-hack
+      - name: rustup target add thumbv8m.main-none-eabihf
+        run: rustup target add thumbv8m.main-none-eabihf
 
-      # intentionally no target specifier; see https://github.com/jonhoo/rust-ci-conf/pull/4
-      # --feature-powerset runs for every combination of features
+      - name: cargo install cargo-batch
+        run: cargo install --git https://github.com/embassy-rs/cargo-batch cargo --bin cargo-batch --locked
+
       - name: cargo manual hack
-        run: cargo check -F ${{ matrix.feature }} --locked
+        run: ./ci.sh
 
   deny:
     # cargo-deny checks licenses, advisories, sources, and bans for
