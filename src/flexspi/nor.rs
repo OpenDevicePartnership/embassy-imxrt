@@ -1,7 +1,5 @@
 //! FlexSPI NOR Storage Bus Driver module for the NXP RT6xx family of microcontrollers
 //!
-use core::cmp::min;
-
 use embassy_hal_internal::{Peri, PeripheralType};
 #[cfg(feature = "time")]
 use embassy_time::Instant;
@@ -92,9 +90,11 @@ macro_rules! configure_ports_b {
 }
 
 const FIFO_SLOT_SIZE: u32 = 4; // 4 bytes
-const MAX_TRANSFER_SIZE: u32 = 128;
 const OPERATION_SEQ_NUMBER: u8 = 0;
 const LUT_UNLOCK_CODE: u32 = 0x5AF05AF0;
+
+const MAX_TRANSMIT_SIZE: u32 = 1024; // 1024 bytes
+const MAX_RECEIVE_SIZE: u32 = 512; // 512 bytes
 
 #[cfg(feature = "time")]
 const CMD_COMPLETION_TIMEOUT: u64 = 10; // 10 millisecond
@@ -593,7 +593,8 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
         read_buf: Option<&mut [u8]>,
         write_buf: Option<&[u8]>,
     ) -> Result<(), NorStorageBusError> {
-        // Setup the transfer to be sent of the FlexSPI IP Port
+        let regs = self.info.regs;
+
         self.setup_ip_transfer(OPERATION_SEQ_NUMBER, cmd.addr, cmd.data_bytes);
 
         // Program the LUT instructions for the command
@@ -617,19 +618,45 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
             <FlexSpiError as Into<FlexSpiError>>::into(e)
         })?;
 
-        // For data transfer commands, read/write the data
         if let Some(data_cmd) = cmd.cmdtype {
             match data_cmd {
                 NorStorageCmdType::Read => {
                     let buffer = read_buf.ok_or(NorStorageBusError::StorageBusInternalError)?;
+                    if cmd.data_bytes.unwrap() > MAX_RECEIVE_SIZE {
+                        return Err(NorStorageBusError::StorageBusInternalError);
+                    }
                     self.read_data(cmd, buffer)?;
                 }
                 NorStorageCmdType::Write => {
                     let buffer = write_buf.ok_or(NorStorageBusError::StorageBusInternalError)?;
+                    if cmd.data_bytes.unwrap() > MAX_TRANSMIT_SIZE {
+                        return Err(NorStorageBusError::StorageBusInternalError);
+                    }
                     self.write_data(cmd, buffer)?;
                 }
             }
         }
+
+        // It is possible that IP command completes but the FlexSPI backend
+        // is still processing the data from TX/RX FIFO. Unless we wait for the
+        // Sequence engine to become idle, we could see Command grant error for
+        // subsequent commands post data read/write command
+        #[cfg(feature = "time")]
+        {
+            let start = Instant::now();
+
+            while !(regs.sts0().read().arbidle().bit_is_set() && regs.sts0().read().seqidle().bit_is_set()) {
+                let timedout = is_expired(start, IDLE_TIMEOUT);
+                if timedout {
+                    return Err(NorStorageBusError::StorageBusIoError);
+                }
+            }
+        }
+        #[cfg(not(feature = "time"))]
+        {
+            while !(regs.sts0().read().arbidle().bit_is_set() && regs.sts0().read().seqidle().bit_is_set()) {}
+        }
+
         Ok(())
     }
 }
@@ -677,7 +704,7 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
         if let Some(size) = size {
             self.info.regs.ipcr1().modify(|_, w| unsafe {
                 // SAFETY: Operation is safe as we are programming the size of the transfer
-                w.idatsz().bits(min(size, MAX_TRANSFER_SIZE) as u16)
+                w.idatsz().bits(size as u16)
             });
         }
     }
@@ -987,9 +1014,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusInternalError);
         }
 
-        for chunk in read_buf.chunks_mut(MAX_TRANSFER_SIZE as usize) {
-            self.read_cmd_data(chunk)?;
-        }
+        self.read_cmd_data(read_buf)?;
 
         Ok(())
     }
@@ -1001,9 +1026,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusInternalError);
         }
 
-        for chunk in write_buf.chunks(MAX_TRANSFER_SIZE as usize) {
-            self.write_cmd_data(chunk)?;
-        }
+        self.write_cmd_data(write_buf)?;
 
         Ok(())
     }
