@@ -1,4 +1,8 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.mimxrt633s-pac]]
+who = "Felipe Balbi <febalbi@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "0.4.1"
+notes = "New version of mimxrt633s-pac merely introduces safe enum variants for IRULESTAT register. No new unsafe blocks are introduced."
