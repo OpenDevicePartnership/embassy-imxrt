@@ -646,27 +646,16 @@ impl<'d> Espi<'d> {
         let length = datain.data_len().bits() as usize + 1;
         let direction = datain.dir().bit_is_set();
 
-        // By default set base address to RAMBASE
-        let mut address = self.config.ram_base as u32;
-
         match self.config.ports_config[port] {
             PortConfig::AcpiEndpoint { base_sel, offset, .. }
             | PortConfig::MailboxSingle { base_sel, offset, .. }
             | PortConfig::MailboxShared { base_sel, offset, .. }
             | PortConfig::MailboxSplit { base_sel, offset, .. } => {
-                match base_sel {
-                    BaseOrAsz::UseBase0 => {
-                        address = self.config.base0_addr;
-                    }
-                    BaseOrAsz::UseBase1 => {
-                        address = self.config.base1_addr;
-                    }
-                    _ => {
-                        // Default to ram_base
-                    }
-                }
-                // For mailbox also add in offset ADDR/RAMUSE
-                address = address + offset as u32;
+                let address = match base_sel {
+                    BaseOrAsz::UseBase0 => self.config.base0_addr + offset as u32,
+                    BaseOrAsz::UseBase1 => self.config.base1_addr + offset as u32,
+                    _ => self.config.ram_base + offset as u32,
+                };
 
                 Poll::Ready(Ok(Event::PeripheralEvent(PortEvent {
                     port: port,
@@ -677,7 +666,7 @@ impl<'d> Espi<'d> {
                 })))
             }
             PortConfig::MailboxSplitOOB { offset, .. } => {
-                address = self.config.ram_base + offset as u32;
+                let address = self.config.ram_base + offset as u32;
                 Poll::Ready(Ok(Event::OOBEvent(PortEvent {
                     port: port,
                     base_addr: address,
