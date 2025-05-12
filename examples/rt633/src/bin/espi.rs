@@ -53,7 +53,7 @@ async fn main(_spawner: Spawner) {
             ports_config: [
                 PortConfig::MailboxSplit {
                     direction: Direction::BidirectionalUnenforced,
-                    basesel: BaseOrAsz::OffsetFrom0,
+                    base_sel: BaseOrAsz::OffsetFrom0,
                     offset: 0,
                     // RAM use will be 2x length, one half for each
                     // direction.
