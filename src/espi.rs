@@ -39,6 +39,9 @@ pub enum Error {
 
     /// Invalid Port Error
     InvalidPort,
+
+    /// Invalid Parameter Error
+    InvalidParameter,
 }
 
 /// eSPI Command Length
@@ -106,7 +109,7 @@ pub enum PortConfig {
         direction: Direction,
 
         /// Base memory to select for port base
-        basesel: BaseOrAsz,
+        base_sel: BaseOrAsz,
 
         /// 12-bit Word-aligned offset from selected base
         offset: u16,
@@ -121,7 +124,7 @@ pub enum PortConfig {
         direction: Direction,
 
         /// Base memory to select for port base
-        basesel: BaseOrAsz,
+        base_sel: BaseOrAsz,
 
         /// 12-bit Word-aligned offset from selected base
         offset: u16,
@@ -136,7 +139,7 @@ pub enum PortConfig {
         direction: Direction,
 
         /// Base memory to select for port base
-        basesel: BaseOrAsz,
+        base_sel: BaseOrAsz,
 
         /// 12-bit Word-aligned offset from selected base
         offset: u16,
@@ -152,7 +155,7 @@ pub enum PortConfig {
         direction: Direction,
 
         /// Base memory to select for port base
-        basesel: BaseOrAsz,
+        base_sel: BaseOrAsz,
 
         /// 12-bit Word-aligned offset from selected base
         offset: u16,
@@ -561,37 +564,37 @@ impl<'d> Espi<'d> {
         match config {
             PortConfig::AcpiEndpoint {
                 direction,
-                basesel,
+                base_sel,
                 offset,
             } => {
-                self.mailbox(port, config.into(), direction, basesel, offset, Len::Len4);
+                self.mailbox(port, config.into(), direction, base_sel, offset, Len::Len4);
             }
 
             PortConfig::MailboxShared {
                 direction,
-                basesel,
+                base_sel,
                 offset,
                 length,
             } => {
-                self.mailbox(port, config.into(), direction, basesel, offset, length);
+                self.mailbox(port, config.into(), direction, base_sel, offset, length);
             }
 
             PortConfig::MailboxSingle {
                 direction,
-                basesel,
+                base_sel,
                 offset,
                 length,
             } => {
-                self.mailbox(port, config.into(), direction, basesel, offset, length);
+                self.mailbox(port, config.into(), direction, base_sel, offset, length);
             }
 
             PortConfig::MailboxSplit {
                 direction,
-                basesel,
+                base_sel,
                 offset,
                 length,
             } => {
-                self.mailbox(port, config.into(), direction, basesel, offset, length);
+                self.mailbox(port, config.into(), direction, base_sel, offset, length);
             }
 
             PortConfig::MailboxSplitOOB { offset, length } => {
@@ -647,11 +650,11 @@ impl<'d> Espi<'d> {
         let mut address = self.config.ram_base as u32;
 
         match self.config.ports_config[port] {
-            PortConfig::AcpiEndpoint { basesel, offset, .. }
-            | PortConfig::MailboxSingle { basesel, offset, .. }
-            | PortConfig::MailboxShared { basesel, offset, .. }
-            | PortConfig::MailboxSplit { basesel, offset, .. } => {
-                match basesel {
+            PortConfig::AcpiEndpoint { base_sel, offset, .. }
+            | PortConfig::MailboxSingle { base_sel, offset, .. }
+            | PortConfig::MailboxShared { base_sel, offset, .. }
+            | PortConfig::MailboxSplit { base_sel, offset, .. } => {
+                match base_sel {
                     BaseOrAsz::UseBase0 => {
                         address = self.config.base0_addr;
                     }
@@ -835,10 +838,16 @@ impl<'d> Espi<'d> {
         self.block_for_vwire_done();
     }
 
-    /// Return pointer to OOB buffer buffer
+    /// Return pointer to OOB write buffer
     ///
-    /// Warning: Writes to this buffer are unsafe as it is a direct mapped memory address
-    /// The length specified in config and location must be carved out in memory.x
+    /// Warning: This directly returns memory buffer based on port config, memory.x
+    /// must have memory properly carved out to prevent back access
+    ///
+    /// SAFETY: OOB port config must point to valid memory region that has been carved
+    /// out in memory.x to prevent access to code region. After calling oob_write_data
+    /// must wait for Event::OOBEvent with direction: true to indicate previous write
+    /// has completed. Not waiting for previous transaction can lead to corruption of
+    /// OOB packets
     pub unsafe fn oob_get_write_buffer(&mut self, port: usize) -> Result<&mut [u8]> {
         match self.config.ports_config[port] {
             PortConfig::MailboxSplitOOB { offset, length, .. } => {
@@ -851,24 +860,25 @@ impl<'d> Espi<'d> {
         }
     }
 
-    /// Write OOB data from device to host
-    /// When this completes it will send a INTWR event on OOB port
-    /// Maximum len is 64
-    pub fn oob_write_data(&mut self, port: usize, length: u8) {
-        assert!(length > 0);
-        // SAFETY: length can be any value in bits 6:0, bit 7 is reserved 0
-        self.info
-            .regs
-            .port(port)
-            .omflen()
-            .write(|w| unsafe { w.len().bits(length - 1) });
-        // SAFETY: 0x2 = Completed by MCU in SSCTL register
-        // PAC definition is being updated to expose enum of valid values
-        self.info
-            .regs
-            .port(port)
-            .irulestat()
-            .modify(|_, w| unsafe { w.sstcl().bits(0x2) });
+    /// Write OOB data from device to host in OOB write buffer
+    /// This starts a transfer, upon completion INTWR event on OOB port is triggered
+    ///
+    /// Length must be between 1 and 73
+    pub fn oob_write_data(&mut self, port: usize, length: u8) -> Result<()> {
+        // Maximum length of raw OOB = 3 + 5 + 64 + 1
+        if (1..73).contains(&length) {
+            // SAFETY: Valid length range 1-73 checked previous
+            self.info
+                .regs
+                .port(port)
+                .omflen()
+                .write(|w| unsafe { w.len().bits(length - 1) });
+            self.info.regs.port(port).irulestat().modify(|_, w| w.sstcl().mcudone());
+        } else {
+            return Err(Error::InvalidParameter);
+        }
+
+        Ok(())
     }
 
     /// Generate WAKE# event to wake Host up from Sx on any
@@ -1037,7 +1047,7 @@ impl Espi<'_> {
         port: usize,
         port_type: Type,
         direction: Direction,
-        basesel: BaseOrAsz,
+        base_sel: BaseOrAsz,
         offset: u16,
         length: Len,
     ) {
@@ -1075,7 +1085,7 @@ impl Espi<'_> {
             .regs
             .port(port)
             .addr()
-            .write(|w| w.base_or_asz().variant(basesel));
+            .write(|w| w.base_or_asz().variant(base_sel));
 
         // Set port RAM use
         self.info
