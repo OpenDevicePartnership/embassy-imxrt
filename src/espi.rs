@@ -2,6 +2,7 @@
 
 use core::future::poll_fn;
 use core::marker::PhantomData;
+use core::slice;
 use core::task::Poll;
 
 use embassy_sync::waitqueue::AtomicWaker;
@@ -11,6 +12,7 @@ use crate::clocks::{enable_and_reset, SysconPeripheral};
 use crate::gpio::{DriveMode, DriveStrength, Function, GpioPin as Pin, Inverter, Pull, SlewRate};
 use crate::interrupt::typelevel::Interrupt;
 pub use crate::pac::espi::espicap::{Flashmx, Maxspd, Safera, Spicap};
+pub use crate::pac::espi::port::addr::BaseOrAsz;
 pub use crate::pac::espi::port::cfg::Direction;
 use crate::pac::espi::port::cfg::Type;
 pub use crate::pac::espi::port::ramuse::Len;
@@ -34,6 +36,12 @@ pub enum Error {
 
     /// HStall Error
     HStall,
+
+    /// Invalid Port Error
+    InvalidPort,
+
+    /// Invalid Parameter Error
+    InvalidParameter,
 }
 
 /// eSPI Command Length
@@ -100,9 +108,11 @@ pub enum PortConfig {
         /// Port Direction
         direction: Direction,
 
-        /// Offset from 0 or the selected mapped base for matching
-        /// memory or IO
-        addr: u16,
+        /// Base memory to select for port base
+        base_sel: BaseOrAsz,
+
+        /// 12-bit Word-aligned offset from selected base
+        offset: u16,
     },
 
     /// ACPI-style Index/Data
@@ -113,10 +123,10 @@ pub enum PortConfig {
         /// Port Direction
         direction: Direction,
 
-        /// Port address to the host
-        addr: u16,
+        /// Base memory to select for port base
+        base_sel: BaseOrAsz,
 
-        /// Offset into RAM space
+        /// 12-bit Word-aligned offset from selected base
         offset: u16,
 
         /// Length of the mailbox or mastering area per direction.
@@ -128,11 +138,10 @@ pub enum PortConfig {
         /// Port Direction
         direction: Direction,
 
-        /// Offset from 0 or the selected mapped base for matching
-        /// memory or IO
-        addr: u16,
+        /// Base memory to select for port base
+        base_sel: BaseOrAsz,
 
-        /// Word-aligned offset into the RAM
+        /// 12-bit Word-aligned offset from selected base
         offset: u16,
 
         /// This is the length of the mailbox or mastering area per
@@ -145,11 +154,10 @@ pub enum PortConfig {
         /// Port Direction
         direction: Direction,
 
-        /// Offset from 0 or the selected mapped base for matching
-        /// memory or IO
-        addr: u16,
+        /// Base memory to select for port base
+        base_sel: BaseOrAsz,
 
-        /// Word-aligned offset into the RAM
+        /// 12-bit Word-aligned offset from selected base
         offset: u16,
 
         /// This is the length of the mailbox or mastering area per
@@ -162,10 +170,7 @@ pub enum PortConfig {
 
     /// Mailbox Split OOB
     MailboxSplitOOB {
-        /// Port address to the host
-        addr: u16,
-
-        /// Offset into RAM space
+        /// 12-bit Word-aligned offset from selected base
         offset: u16,
 
         /// Length of the mailbox or mastering area per direction.
@@ -290,7 +295,13 @@ impl Default for Config {
 
 /// Port event data
 pub struct PortEvent {
-    /// Offset accessed by Host
+    /// Port that event occurred on
+    pub port: usize,
+
+    /// Base address of buffer
+    pub base_addr: u32,
+
+    /// Offset into buffer
     pub offset: usize,
 
     /// Size of access
@@ -400,20 +411,11 @@ impl WireChangeEvent {
 
 /// eSPI events.
 pub enum Event {
-    /// Port 0 has pending events
-    Port0(PortEvent),
+    ///  OOB event on port 0-4
+    OOBEvent(PortEvent),
 
-    /// Port 1 has pending events
-    Port1(PortEvent),
-
-    /// Port 2 has pending events
-    Port2(PortEvent),
-
-    /// Port 3 has pending events
-    Port3(PortEvent),
-
-    /// Port 4 has pending events
-    Port4(PortEvent),
+    /// Peripheral event on port 0-4
+    PeripheralEvent(PortEvent),
 
     /// Port 80 has pending events
     Port80,
@@ -443,6 +445,7 @@ impl From<BootStatus> for bool {
 /// eSPI driver.
 pub struct Espi<'d> {
     info: Info,
+    config: Config,
     _phantom: PhantomData<&'d ()>,
 }
 
@@ -475,11 +478,15 @@ impl<'d> Espi<'d> {
 
         let mut instance = Espi::<'d> {
             info: T::info(),
+            config: config,
             _phantom: PhantomData,
         };
 
         // Set ESPI mode
         instance.info.regs.mctrl().modify(|_, w| w.enable().espi());
+
+        // Save configuration for future reference
+        instance.config = config;
 
         // Configure ports
         for port in 0..ESPI_PORTS {
@@ -555,43 +562,47 @@ impl<'d> Espi<'d> {
     /// Configure the port to a given mode
     pub fn configure(&mut self, port: usize, config: PortConfig) {
         match config {
-            PortConfig::AcpiEndpoint { direction, addr } => {
-                self.acpi_endpoint(port, direction, addr);
+            PortConfig::AcpiEndpoint {
+                direction,
+                base_sel,
+                offset,
+            } => {
+                self.mailbox(port, config.into(), direction, base_sel, offset, Len::Len4);
             }
 
             PortConfig::MailboxShared {
                 direction,
-                addr,
+                base_sel,
                 offset,
                 length,
             } => {
-                self.mailbox(port, config.into(), direction, addr, offset, length);
+                self.mailbox(port, config.into(), direction, base_sel, offset, length);
             }
 
             PortConfig::MailboxSingle {
                 direction,
-                addr,
+                base_sel,
                 offset,
                 length,
             } => {
-                self.mailbox(port, config.into(), direction, addr, offset, length);
+                self.mailbox(port, config.into(), direction, base_sel, offset, length);
             }
 
             PortConfig::MailboxSplit {
                 direction,
-                addr,
+                base_sel,
                 offset,
                 length,
             } => {
-                self.mailbox(port, config.into(), direction, addr, offset, length);
+                self.mailbox(port, config.into(), direction, base_sel, offset, length);
             }
 
-            PortConfig::MailboxSplitOOB { addr, offset, length } => {
+            PortConfig::MailboxSplitOOB { offset, length } => {
                 self.mailbox(
                     port,
                     config.into(),
                     Direction::BidirectionalUnenforced,
-                    addr,
+                    BaseOrAsz::OffsetFrom0,
                     offset,
                     length,
                 );
@@ -623,65 +634,67 @@ impl<'d> Espi<'d> {
         });
     }
 
+    fn get_port_event(&mut self, port: usize) -> Poll<Result<Event>> {
+        // If port is not configured ignore and return Poll::Pending
+        if self.config.ports_config[port] == PortConfig::Unconfigured {
+            return Poll::Pending;
+        }
+
+        // Common registers for all ports
+        let datain = self.info.regs.port(port).datain().read();
+        let idxoff = datain.idx().bits() as usize;
+        let length = datain.data_len().bits() as usize + 1;
+        let direction = datain.dir().bit_is_set();
+
+        match self.config.ports_config[port] {
+            PortConfig::AcpiEndpoint { base_sel, offset, .. }
+            | PortConfig::MailboxSingle { base_sel, offset, .. }
+            | PortConfig::MailboxShared { base_sel, offset, .. }
+            | PortConfig::MailboxSplit { base_sel, offset, .. } => {
+                let address = match base_sel {
+                    BaseOrAsz::UseBase0 => self.config.base0_addr + offset as u32,
+                    BaseOrAsz::UseBase1 => self.config.base1_addr + offset as u32,
+                    _ => self.config.ram_base + offset as u32,
+                };
+
+                Poll::Ready(Ok(Event::PeripheralEvent(PortEvent {
+                    port: port,
+                    base_addr: address,
+                    offset: idxoff,
+                    length: length,
+                    direction: direction,
+                })))
+            }
+            PortConfig::MailboxSplitOOB { offset, .. } => {
+                let address = self.config.ram_base + offset as u32;
+                Poll::Ready(Ok(Event::OOBEvent(PortEvent {
+                    port: port,
+                    base_addr: address,
+                    offset: 0,
+                    length: length,
+                    direction: direction,
+                })))
+            }
+            _ => {
+                return Poll::Pending;
+            }
+        }
+    }
+
     /// Wait for controller event
     pub async fn wait_for_event(&mut self) -> Result<Event> {
         self.wait_for(
             |me| {
                 if me.info.regs.mstat().read().port_int0().bit_is_set() {
-                    let datain = self.info.regs.port(0).datain().read();
-                    let offset = datain.idx().bits() as usize;
-                    let length = datain.data_len().bits() as usize + 1;
-                    let direction = datain.dir().bit_is_set();
-
-                    Poll::Ready(Ok(Event::Port0(PortEvent {
-                        offset,
-                        length,
-                        direction,
-                    })))
+                    me.get_port_event(0)
                 } else if me.info.regs.mstat().read().port_int1().bit_is_set() {
-                    let datain = self.info.regs.port(1).datain().read();
-                    let offset = datain.idx().bits() as usize;
-                    let length = datain.data_len().bits() as usize + 1;
-                    let direction = datain.dir().bit_is_set();
-
-                    Poll::Ready(Ok(Event::Port1(PortEvent {
-                        offset,
-                        length,
-                        direction,
-                    })))
+                    me.get_port_event(1)
                 } else if me.info.regs.mstat().read().port_int2().bit_is_set() {
-                    let datain = self.info.regs.port(2).datain().read();
-                    let offset = datain.idx().bits() as usize;
-                    let length = datain.data_len().bits() as usize + 1;
-                    let direction = datain.dir().bit_is_set();
-
-                    Poll::Ready(Ok(Event::Port2(PortEvent {
-                        offset,
-                        length,
-                        direction,
-                    })))
+                    me.get_port_event(2)
                 } else if me.info.regs.mstat().read().port_int3().bit_is_set() {
-                    let datain = self.info.regs.port(3).datain().read();
-                    let offset = datain.idx().bits() as usize;
-                    let length = datain.data_len().bits() as usize + 1;
-                    let direction = datain.dir().bit_is_set();
-
-                    Poll::Ready(Ok(Event::Port3(PortEvent {
-                        offset,
-                        length,
-                        direction,
-                    })))
+                    me.get_port_event(3)
                 } else if me.info.regs.mstat().read().port_int4().bit_is_set() {
-                    let datain = self.info.regs.port(4).datain().read();
-                    let offset = datain.idx().bits() as usize;
-                    let length = datain.data_len().bits() as usize + 1;
-                    let direction = datain.dir().bit_is_set();
-
-                    Poll::Ready(Ok(Event::Port4(PortEvent {
-                        offset,
-                        length,
-                        direction,
-                    })))
+                    me.get_port_event(4)
                 } else if me.info.regs.mstat().read().p80int().bit_is_set() {
                     Poll::Ready(Ok(Event::Port80))
                 } else if me.info.regs.mstat().read().wire_chg().bit_is_set() {
@@ -814,23 +827,47 @@ impl<'d> Espi<'d> {
         self.block_for_vwire_done();
     }
 
-    /// Trigger OOB read from host
-    /// When this completes it will send a INTWR event on OOB port
-    /// Maximum len is 64
-    pub fn oob_read_start(&mut self, port: usize, length: u8) {
-        // SAFETY: length can be any value in bits 6:0, bit 7 is reserved 0
-        self.info
-            .regs
-            .port(port)
-            .omflen()
-            .write(|w| unsafe { w.len().bits(length) });
-        // SAFETY: 0x2 = Completed by MCU in SSCTL register
-        // PAC definition is being updated to expose enum of valid values
-        self.info
-            .regs
-            .port(port)
-            .irulestat()
-            .modify(|_, w| unsafe { w.sstcl().bits(0x2) });
+    /// Return pointer to OOB write buffer
+    ///
+    /// Warning: This directly returns memory buffer based on port config, memory.x
+    /// must have memory properly carved out to prevent back access
+    ///
+    /// SAFETY: OOB port config must point to valid memory region that has been carved
+    /// out in memory.x to prevent access to code region. After calling oob_write_data
+    /// must wait for Event::OOBEvent with direction: true to indicate previous write
+    /// has completed. Not waiting for previous transaction can lead to corruption of
+    /// OOB packets
+    pub unsafe fn oob_get_write_buffer(&mut self, port: usize) -> Result<&mut [u8]> {
+        match self.config.ports_config[port] {
+            PortConfig::MailboxSplitOOB { offset, length, .. } => {
+                // All OOB is split so add offset from read buffer
+                let buf_len = (1 << (<Len as Into<u8>>::into(length) + 2)) as u32;
+                let buf_addr = (self.config.ram_base + offset as u32 + buf_len) as *mut u8;
+                Ok(slice::from_raw_parts_mut(buf_addr, buf_len as usize))
+            }
+            _ => Err(Error::InvalidPort),
+        }
+    }
+
+    /// Write OOB data from device to host in OOB write buffer
+    /// This starts a transfer, upon completion INTWR event on OOB port is triggered
+    ///
+    /// Length must be between 1 and 73
+    pub fn oob_write_data(&mut self, port: usize, length: u8) -> Result<()> {
+        // Maximum length of raw OOB = 3 + 5 + 64 + 1
+        if (1..73).contains(&length) {
+            // SAFETY: Valid length range 1-73 checked previous
+            self.info
+                .regs
+                .port(port)
+                .omflen()
+                .write(|w| unsafe { w.len().bits(length - 1) });
+            self.info.regs.port(port).irulestat().modify(|_, w| w.sstcl().mcudone());
+        } else {
+            return Err(Error::InvalidParameter);
+        }
+
+        Ok(())
     }
 
     /// Generate WAKE# event to wake Host up from Sx on any
@@ -994,51 +1031,15 @@ impl<'d> Espi<'d> {
 }
 
 impl Espi<'_> {
-    fn acpi_endpoint(&mut self, port: usize, direction: Direction, addr: u16) {
-        self.info
-            .regs
-            .port(port)
-            .cfg()
-            .write(|w| w.type_().acpi_end().direction().variant(direction));
-
-        // Set port interrupt rules
-        self.info.regs.port(port).irulestat().write(|w| {
-            unsafe { w.ustat().bits(0x1b) }
-                .interr()
-                .set_bit()
-                .intrd()
-                .set_bit()
-                .intwr()
-                .set_bit()
-                .intspc0()
-                .set_bit()
-                .intspc1()
-                .set_bit()
-                .intspc2()
-                .set_bit()
-                .intspc3()
-                .set_bit()
-        });
-
-        // Set port mapped address
-        self.info
-            .regs
-            .port(port)
-            .addr()
-            .write(|w| unsafe { w.off().bits(addr) });
-
-        // Enable the port
-        self.info.regs.mctrl().modify(|_, w| w.pena(port as u8).enabled());
-
-        // write 0x44 to data out
-        self.info
-            .regs
-            .port(port)
-            .dataout()
-            .write(|w| unsafe { w.data().bits(0x44) });
-    }
-
-    fn mailbox(&mut self, port: usize, port_type: Type, direction: Direction, addr: u16, offset: u16, length: Len) {
+    fn mailbox(
+        &mut self,
+        port: usize,
+        port_type: Type,
+        direction: Direction,
+        base_sel: BaseOrAsz,
+        offset: u16,
+        length: Len,
+    ) {
         // Set port type,direction and interrupt configuration
         self.info.regs.port(port).cfg().write(|w| {
             w.type_()
@@ -1073,7 +1074,7 @@ impl Espi<'_> {
             .regs
             .port(port)
             .addr()
-            .write(|w| unsafe { w.off().bits(addr) });
+            .write(|w| w.base_or_asz().variant(base_sel));
 
         // Set port RAM use
         self.info
