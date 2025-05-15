@@ -1,0 +1,60 @@
+[package]
+name = "embassy-imxrt-perf-examples"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+resolver = "2"
+
+[profile.release]
+lto = true # better optimizations
+debug = 2  # enough information for defmt/rtt
+
+[dependencies]
+
+panic-probe = { version = "0.3.1", features = ["print-defmt"] }
+cortex-m = { version = "0.7.7", features = [
+    "inline-asm",
+    "critical-section-single-core",
+] }
+defmt = "0.3.6"
+cortex-m-rt = "0.7.3"
+embassy-imxrt = { version = "0.1.0", path = "../../", features = [
+    "defmt",
+    "time-driver",
+    "time",
+    "mimxrt685s",
+    "unstable-pac",
+] }
+
+embassy-sync = { git = "https://github.com/embassy-rs/embassy", features = [
+    "defmt",
+] }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", features = [
+    "arch-cortex-m",
+    "executor-thread",
+    "executor-interrupt",
+    "defmt",
+] }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", features = [
+    "defmt",
+] }
+storage_bus = { git = "https://github.com/OpenDevicePartnership/embedded-services", version = "0.1.1" }
+embedded-hal-1 = { package = "embedded-hal", version = "1.0" }
+embedded-hal-async = "1.0.0"
+futures = { version = "0.3.30", default-features = false, features = [
+    "async-await",
+] }
+embedded-storage = { version = "0.3" }
+embedded-storage-async = { version = "0.4.1" }
+mimxrt600-fcb = "0.2.2"
+rand = { version = "0.8.5", default-features = false }
+systemview-tracing = { git = "https://github.com/OpenDevicePartnership/systemview-tracing" }
+defmt-rtt = "1.0.0"
+
+[features]
+systemview-tracing = [
+    "systemview-tracing/tracing-enabled",
+    "embassy-executor/rtos-trace",
+    "embassy-imxrt/systemview-tracing",
+]
