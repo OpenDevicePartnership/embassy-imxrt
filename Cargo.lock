@@ -259,6 +259,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "defmt-rtt"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2cac3b8a5644a9e02b75085ebad3b6deafdbdbdec04bb25086523828aa4dfd1"
+dependencies = [
+ "critical-section",
+ "defmt 1.0.1",
+]
+
+[[package]]
 name = "document-features"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -361,9 +371,9 @@ dependencies = [
  "nb 1.1.0",
  "paste",
  "rand_core",
- "rtos-trace",
  "static_cell",
  "storage_bus",
+ "systemview-tracing",
 ]
 
 [[package]]
@@ -836,12 +846,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 
 [[package]]
-name = "rtos-trace"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdb6bcec3374f2049b3979112fa2e6c49b2a37f08de9b9759c6aa76531fb8097"
-
-[[package]]
 name = "rustc_version"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -956,6 +960,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "systemview-tracing"
+version = "0.1.0"
+source = "git+https://github.com/OpenDevicePartnership/systemview-tracing#3f7c639244ad45b621807984bfefafa86fd21043"
+dependencies = [
+ "defmt-rtt",
 ]
 
 [[package]]
