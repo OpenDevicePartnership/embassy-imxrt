@@ -9,7 +9,8 @@ use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_imxrt::bind_interrupts;
 use embassy_imxrt::espi::{
-    Base, BootStatus, Capabilities, Config, Direction, Espi, Event, InterruptHandler, Len, Maxspd, PortConfig,
+    Base, BaseOrAsz, BootStatus, Capabilities, Config, Direction, Espi, Event, InterruptHandler, Len, Maxspd,
+    PortConfig,
 };
 use embassy_imxrt::peripherals::ESPI;
 use {defmt_rtt as _, panic_probe as _};
@@ -42,23 +43,26 @@ async fn main(_spawner: Spawner) {
             caps: Capabilities {
                 max_speed: Maxspd::SmallThan20m,
                 alert_as_a_pin: true,
+                allow_oob: true,
+                allow_128b_payload: true,
                 ..Default::default()
             },
             ram_base: 0x2000_0000,
-            base0_addr: 0x2002_0000,
-            base1_addr: 0x2003_0000,
             status_addr: Some(0x480),
             status_base: Base::OffsetFrom0,
             ports_config: [
                 PortConfig::MailboxSplit {
                     direction: Direction::BidirectionalUnenforced,
-                    addr: 0,
+                    base_sel: BaseOrAsz::OffsetFrom0,
                     offset: 0,
                     // RAM use will be 2x length, one half for each
                     // direction.
                     length: Len::Len256,
                 },
-                Default::default(),
+                PortConfig::MailboxSplitOOB {
+                    offset: 512,
+                    length: Len::Len256,
+                },
                 Default::default(),
                 Default::default(),
                 Default::default(),
@@ -87,9 +91,19 @@ async fn main(_spawner: Spawner) {
         let event = espi.wait_for_event().await;
 
         match event {
-            Ok(Event::Port0(_port_event)) => {
-                info!("Port 0: Contents: {:08x}", &data[..64]);
-                espi.complete_port(0).await;
+            Ok(Event::PeripheralEvent(port_event)) => {
+                info!(
+                    "eSPI PeripheralEvent Port: {}, direction: {}, address: {}, offset: {}, length: {}",
+                    port_event.port, port_event.direction, port_event.offset, port_event.base_addr, port_event.length,
+                );
+                espi.complete_port(port_event.port).await;
+            }
+            Ok(Event::OOBEvent(port_event)) => {
+                info!(
+                    "eSPI OOBEvent Port: {}, direction: {}, address: {}, offset: {}, length: {}",
+                    port_event.port, port_event.direction, port_event.offset, port_event.base_addr, port_event.length,
+                );
+                espi.complete_port(port_event.port).await;
             }
             Ok(Event::WireChange(event)) => {
                 info!("Wire Change! {}", event);
