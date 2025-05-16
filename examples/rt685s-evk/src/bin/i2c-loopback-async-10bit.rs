@@ -10,6 +10,7 @@ use embassy_imxrt::i2c::slave::{Address, Command, I2cSlave, Response};
 use embassy_imxrt::i2c::{self, Async};
 use embassy_imxrt::{bind_interrupts, peripherals};
 use embedded_hal_async::i2c::I2c;
+use {defmt_rtt as _, panic_probe as _};
 
 const ADDR: u16 = 0x0123;
 const MASTER_BUFLEN: usize = 8;

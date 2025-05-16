@@ -9,6 +9,7 @@ use embassy_imxrt::pac;
 use embassy_imxrt::pwm::{CentiPercent, Channel, MicroSeconds, SCTClockSource, SCTPwm};
 use embassy_imxrt::timer::{CTimerPwm, CTimerPwmPeriodChannel};
 use embassy_time::Timer;
+use {defmt_rtt as _, panic_probe as _};
 
 // TODO: connect with GPIO port when that is ready
 fn setup_gpio() {
