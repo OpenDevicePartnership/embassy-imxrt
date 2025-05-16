@@ -1,8 +1,6 @@
 #![no_std]
 #![no_main]
 
-use rt633_examples as _;
-
 use core::slice;
 
 use defmt::{error, info};
@@ -13,7 +11,7 @@ use embassy_imxrt::espi::{
     PortConfig,
 };
 use embassy_imxrt::peripherals::ESPI;
-use {defmt_rtt as _, panic_probe as _};
+use {defmt_rtt as _, panic_probe as _, rt633_examples as _};
 
 bind_interrupts!(struct Irqs {
     ESPI => InterruptHandler<ESPI>;

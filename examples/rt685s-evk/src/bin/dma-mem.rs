@@ -1,14 +1,12 @@
 #![no_std]
 #![no_main]
 
-use embassy_imxrt_examples as _;
-
-use defmt::{info, error};
+use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_imxrt::dma::transfer::{Priority, Transfer, TransferOptions, Width};
 use embassy_imxrt::dma::Dma;
 use embassy_imxrt::Peri;
-use {defmt_rtt as _, panic_probe as _};
+use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 const TEST_LEN: usize = 16;
 

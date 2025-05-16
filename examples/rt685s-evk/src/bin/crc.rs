@@ -1,11 +1,9 @@
 #![no_std]
 #![no_main]
 
-use embassy_imxrt_examples as _;
-
 use embassy_executor::Spawner;
 use embassy_imxrt::crc::{Config, Crc, Polynomial};
-use {defmt_rtt as _, panic_probe as _};
+use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
