@@ -1,7 +1,7 @@
 #![no_main]
 #![no_std]
 
-extern crate embassy_imxrt_examples;
+use embassy_imxrt_examples as _;
 
 use defmt::{error, info};
 use embassy_executor::Spawner;

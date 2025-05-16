@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use embassy_imxrt_examples as _;
+
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_imxrt::clocks::ClockConfig;

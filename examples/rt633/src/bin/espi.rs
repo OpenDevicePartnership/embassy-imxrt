@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-extern crate rt633_examples;
+use rt633_examples as _;
 
 use core::slice;
 
