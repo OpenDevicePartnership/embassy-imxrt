@@ -7,12 +7,12 @@ use embassy_imxrt::flexspi::nor::{
     AhbConfig, FlexSpiFlashPort, FlexSpiFlashPortDeviceInstance, FlexspiAhbBufferConfig, FlexspiConfig,
     FlexspiConfigPortData, FlexspiDeviceConfig, FlexspiNorStorageBus,
 };
-use embassy_imxrt::pac::flexspi::ahbcr::*;
-use embassy_imxrt::pac::flexspi::flshcr1::*;
-use embassy_imxrt::pac::flexspi::flshcr2::*;
-use embassy_imxrt::pac::flexspi::flshcr4::*;
-use embassy_imxrt::pac::flexspi::mcr0::*;
-use embassy_imxrt::pac::flexspi::mcr2::*;
+use embassy_imxrt::pac::flexspi::ahbcr::{Bufferableen, Cachableen, Readaddropt};
+use embassy_imxrt::pac::flexspi::flshcr1::Csintervalunit;
+use embassy_imxrt::pac::flexspi::flshcr2::Awrwaitunit;
+use embassy_imxrt::pac::flexspi::flshcr4::{Wmena, Wmenb};
+use embassy_imxrt::pac::flexspi::mcr0::{Dozeen, Hsen, Rxclksrc, Sckfreerunen};
+use embassy_imxrt::pac::flexspi::mcr2::{Clrahbbufopt, Samedeviceen, Sckbdiffopt};
 use embassy_time::Timer;
 use embedded_storage::nor_flash::{
     ErrorType, NorFlash as BlockingNorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash as BlockingReadNorFlash,

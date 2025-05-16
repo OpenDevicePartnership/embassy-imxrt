@@ -5,7 +5,7 @@ use embassy_imxrt_examples as _;
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_imxrt::rtc::*;
+use embassy_imxrt::rtc::{Datetime, RtcDatetime};
 use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 

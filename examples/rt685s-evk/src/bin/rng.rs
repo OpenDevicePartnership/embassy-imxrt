@@ -3,7 +3,7 @@
 
 use embassy_imxrt_examples as _;
 
-use defmt::*;
+use defmt::{info, unwrap};
 use embassy_executor::Spawner;
 use embassy_imxrt::rng::Rng;
 use embassy_imxrt::{bind_interrupts, peripherals, rng};

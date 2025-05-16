@@ -3,19 +3,18 @@
 
 use embassy_imxrt_examples as _;
 
-use defmt::*;
+use defmt::{info, error};
 use embassy_executor::Spawner;
 use embassy_imxrt::dma::channel::Channel;
 use embassy_imxrt::dma::transfer::{Priority, Transfer, TransferOptions, Width};
 use embassy_imxrt::dma::Dma;
-use embassy_imxrt::peripherals::*;
 use {defmt_rtt as _, panic_probe as _};
 
 const TEST_LEN: usize = 16;
 
 macro_rules! test_dma_channel {
     ($peripherals:expr, $instance:ident, $number:expr) => {
-        let ch = Dma::reserve_channel::<$instance>($peripherals.$instance).unwrap();
+        let ch = Dma::reserve_channel($peripherals.$instance).unwrap();
         dma_test(ch, $number).await;
     };
 }

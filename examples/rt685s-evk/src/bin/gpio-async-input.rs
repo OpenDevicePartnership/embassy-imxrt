@@ -3,7 +3,7 @@
 
 use embassy_imxrt_examples as _;
 
-use defmt::*;
+use defmt::debug;
 use embassy_executor::Spawner;
 use embassy_imxrt::gpio;
 use embassy_time::{Duration, Ticker};
