@@ -30,7 +30,8 @@ mod sealed {
     pub trait Sealed {}
 }
 
-impl<T> sealed::Sealed for T {}
+impl sealed::Sealed for Blocking {}
+impl sealed::Sealed for Async {}
 
 /// Driver mode.
 #[allow(private_bounds)]
