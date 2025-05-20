@@ -761,9 +761,9 @@ dependencies = [
 
 [[package]]
 name = "mimxrt633s-pac"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a1edd8317cebedee09f61910c2a5612576254367b1ca74375ee987b4db20df2"
+checksum = "843c1c63c367293e4fa270cc161b5bdfef55b4c6a0a18768f737241fb24be70c"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
