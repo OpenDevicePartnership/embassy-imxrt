@@ -71,7 +71,7 @@ Follow the process below to ensure compliance:
 ---
 
 ## Audit criteria
-`cargo vet` comes pre-equipped with two build in criteria but supports adding new criteria to suit our needs.  
+`cargo vet` comes pre-equipped with two built-in criteria but supports adding new criteria to suit our needs.  
 As defined [here](https://mozilla.github.io/cargo-vet/built-in-criteria.html), the default criteria are:
 
 - **safe-to-run**  
