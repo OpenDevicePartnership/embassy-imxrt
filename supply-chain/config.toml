@@ -13,6 +13,9 @@ url = "https://raw.githubusercontent.com/google/rust-crate-audits/main/audits.to
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
+[policy.embassy-embedded-hal]
+audit-as-crates-io = false
+
 [policy.embassy-executor]
 audit-as-crates-io = false
 
@@ -38,6 +41,12 @@ audit-as-crates-io = false
 audit-as-crates-io = false
 
 [policy.embassy-time-queue-utils]
+audit-as-crates-io = false
+
+[policy.embedded-batteries]
+audit-as-crates-io = false
+
+[policy.embedded-batteries-async]
 audit-as-crates-io = false
 
 [[exemptions.atomic-polyfill]]
