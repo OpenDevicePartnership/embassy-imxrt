@@ -4,6 +4,29 @@
 
 These examples illustrates how to use the embassy-imxrt HAL with performance tracing in SystemView
 
+## Toolchain Setup
+
+Before building the project, you need to install the required toolchains and configure your environment.
+
+### Prequisites
+
+1. Install LLVM toolchain
+- Download and install LLVM toolchain from https://github.com/llvm/llvm-project/releases. For Windows, you can download the installer such as LLVM-20.1.5-win64.exe and follow the default installation path.
+
+2. Install ARM GNU Toolchain
+- Download and install the ARM GNU toolchain from https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads
+- Select the version which has "arm-none-eabi" for your host architecture. Example for 64-bit Windows: arm-gnu-toolchain-14.2.rel1-mingw-w64-x86_64-arm-none-eabi.exe
+
+3. Configure Environment Variables
+- After installing both toolchains, set the CC environment variable in PowerShell:
+``` powershell
+$env:CC = "C:\Program Files (x86)\Arm GNU Toolchain arm-none-eabi\14.2 rel1\bin\arm-none-eabi-gcc.exe"
+```
+- Note: the above is only temporary so if you want to make it permanent you can either:
+  - Add it to your PowerShell profile
+  - Set it as a system environment variable through Windows Settings
+  - Run the command each time you open a new PowerShell session for building
+
 ## Adding Examples
 Add uniquely named example to `src/bin` like `adc.rs`
 
