@@ -1282,8 +1282,23 @@ impl ConfigurableClock for SysOscConfig {
 }
 
 /// Method to delay for a certain number of microseconds given a clock rate
-pub fn delay_loop_clocks(usec: u64, freq_mhz: u64) {
-    let mut ticks = usec * freq_mhz / 1_000_000 / 4;
+///
+/// Given `usec` and `freq_hz`, this method will compute the number of
+/// ticks to be passed to `cortex_m::asm::delay()` such that we reach
+/// the amount of microseconds requested by the caller.
+pub fn delay_loop_clocks(usec: u64, freq_hz: u64) {
+    // NOTICE: The correct math would be:
+    //
+    //     usec * 1_000 / 1_000_000_000 / freq_hz
+    //
+    // Which simplifies to:
+    //
+    //     usec * freq_hz / 1_000_000;
+    //
+    // However, testing shows that we're always about 50% over the
+    // requested target. Adding that extra 50% to the divisor gets us
+    // very close to what was requested.
+    let mut ticks = usec * freq_hz / 1_500_000;
     if ticks > u64::from(u32::MAX) {
         ticks = u64::from(u32::MAX);
     }
