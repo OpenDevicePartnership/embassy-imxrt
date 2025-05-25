@@ -802,11 +802,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     }
 
     fn program_cmd_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie) {
-        let mut cmd_mode: FlexSpiLutOpcode = CMD_DDR;
-
-        if cmd.mode == NorStorageCmdMode::SDR {
-            cmd_mode = CMD_SDR;
-        }
+        let cmd_mode = match cmd.mode {
+            NorStorageCmdMode::SDR => FlexSpiLutOpcode::CMD_SDR,
+            NorStorageCmdMode::DDR => FlexSpiLutOpcode::CMD_DDR,
+        };
         let bus_width = match cmd.bus_width {
             NorStorageBusWidth::Single => 0,
             NorStorageBusWidth::Dual => 1,
@@ -825,11 +824,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     }
 
     fn program_addr_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie) {
-        let mut cmd_mode: FlexSpiLutOpcode = RADDR_DDR;
-
-        if cmd.mode == NorStorageCmdMode::SDR {
-            cmd_mode = RADDR_SDR;
-        }
+        let cmd_mode = match cmd.mode {
+            NorStorageCmdMode::SDR => FlexSpiLutOpcode::RADDR_SDR,
+            NorStorageCmdMode::DDR => FlexSpiLutOpcode::RADDR_DDR,
+        };
         let bus_width = match cmd.bus_width {
             NorStorageBusWidth::Single => 0,
             NorStorageBusWidth::Dual => 1,
@@ -842,11 +840,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     }
 
     fn program_dummy_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie) {
-        let mut cmd_mode: FlexSpiLutOpcode = DUMMY_DDR;
-
-        if cmd.mode == NorStorageCmdMode::SDR {
-            cmd_mode = DUMMY_SDR;
-        }
+        let cmd_mode = match cmd.mode {
+            NorStorageCmdMode::SDR => FlexSpiLutOpcode::DUMMY_SDR,
+            NorStorageCmdMode::DDR => FlexSpiLutOpcode::DUMMY_DDR,
+        };
         let bus_width = match cmd.bus_width {
             NorStorageBusWidth::Single => 0,
             NorStorageBusWidth::Dual => 1,
@@ -868,11 +865,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     }
 
     fn program_read_data_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie, data_length: u8) {
-        let mut cmd_mode: FlexSpiLutOpcode = READ_DDR;
-
-        if cmd.mode == NorStorageCmdMode::SDR {
-            cmd_mode = READ_SDR;
-        }
+        let cmd_mode = match cmd.mode {
+            NorStorageCmdMode::SDR => FlexSpiLutOpcode::READ_SDR,
+            NorStorageCmdMode::DDR => FlexSpiLutOpcode::READ_DDR,
+        };
         let bus_width = match cmd.bus_width {
             NorStorageBusWidth::Single => 0,
             NorStorageBusWidth::Dual => 1,
@@ -886,11 +882,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     }
 
     fn program_write_data_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie, data_length: u8) {
-        let mut cmd_mode: FlexSpiLutOpcode = WRITE_DDR;
-
-        if cmd.mode == NorStorageCmdMode::SDR {
-            cmd_mode = WRITE_SDR;
-        }
+        let cmd_mode = match cmd.mode {
+            NorStorageCmdMode::SDR => FlexSpiLutOpcode::WRITE_SDR,
+            NorStorageCmdMode::DDR => FlexSpiLutOpcode::WRITE_DDR,
+        };
         let bus_width = match cmd.bus_width {
             NorStorageBusWidth::Single => 0,
             NorStorageBusWidth::Dual => 1,
