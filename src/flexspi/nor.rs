@@ -93,7 +93,7 @@ macro_rules! configure_ports_b {
 
 const FIFO_SLOT_SIZE: u32 = 4; // 4 bytes
 const MAX_TRANSFER_SIZE: u32 = 128;
-const OPERATION_SEQ_NUMBER: u8 = 0;
+const OPERATION_SEQ_NUMBER: u8 = 14;
 const LUT_UNLOCK_CODE: u32 = 0x5AF05AF0;
 
 #[cfg(feature = "time")]
