@@ -45,6 +45,7 @@ embedded-hal-async = "1.0.0"
 futures = { version = "0.3.30", default-features = false, features = [
     "async-await",
 ] }
+embedded-hal-i2c = { git = "https://github.com/tweedegolf/embedded-hal-i2c.git", branch = "main" }
 embedded-storage = { version = "0.3" }
 embedded-storage-async = { version = "0.4.1" }
 mimxrt600-fcb = "0.2.2"
