@@ -3,11 +3,14 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_imxrt::i2c::slave::{Address, AsyncI2cSlave, TransactionExpectEither, WriteResult};
+use embassy_imxrt::i2c::slave::AsyncI2cSlave;
 use embassy_imxrt::{bind_interrupts, i2c, peripherals};
+use embedded_hal_i2c::{
+    AnyAddress, AsyncI2cTarget, AsyncReadTransaction, AsyncWriteTransaction, TransactionExpectEither, WriteResult,
+};
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
-const SLAVE_ADDR: Option<Address> = Some(Address::SevenBit(0x20));
+const SLAVE_ADDR: Option<AnyAddress> = Some(AnyAddress::Seven(0x20));
 const BUFLEN: usize = 512;
 
 bind_interrupts!(struct Irqs {

@@ -7,13 +7,15 @@ use cortex_m::asm::delay;
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_imxrt::gpio::{DriveMode, DriveStrength, Flex, GpioPin, SenseEnabled, SlewRate};
-use embassy_imxrt::i2c::slave::{
-    Address, AsyncI2cSlave, ReadResult, Transaction, TransactionExpectRead, TransactionExpectWrite, WriteResult,
-};
+use embassy_imxrt::i2c::slave::AsyncI2cSlave;
 use embassy_imxrt::peripherals::{DMA0_CH4, FLEXCOMM2, PIO0_17, PIO0_18, PIO0_29, PIO0_30};
 use embassy_imxrt::{bind_interrupts, i2c, peripherals, Peri};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::semaphore::{GreedySemaphore, Semaphore as _};
+use embedded_hal_i2c::{
+    AnyAddress, AsyncI2cTarget, AsyncReadTransaction, AsyncWriteTransaction, ReadResult, Transaction,
+    TransactionExpectRead, TransactionExpectWrite, WriteResult,
+};
 
 bind_interrupts!(struct Irqs {
     FLEXCOMM2 => i2c::InterruptHandler<peripherals::FLEXCOMM2>;
@@ -149,7 +151,7 @@ test_cases!(
         //
         // 7 bit write
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -173,7 +175,7 @@ test_cases!(
         ),
         // 7 bit read
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Read { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -195,7 +197,7 @@ test_cases!(
         ),
         // 7 bit write then read with restart (should give single deselect)
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -229,7 +231,7 @@ test_cases!(
         ),
         // 7 bit write then read with stop and start inbetween (should give two deselect)
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -267,7 +269,7 @@ test_cases!(
         ),
         // 7bit write then write with restart
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -303,7 +305,7 @@ test_cases!(
         ),
         // 7bit write then write with start stop
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -343,7 +345,7 @@ test_cases!(
         ),
         // 10 bit write
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -368,7 +370,7 @@ test_cases!(
         ),
         // 10 bit read with only a zero sized write beforehand
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -397,7 +399,7 @@ test_cases!(
         ),
         // 10 bit write then read with restart
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -432,7 +434,7 @@ test_cases!(
         ),
         // 10bit write then write with restart
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -470,7 +472,7 @@ test_cases!(
         ),
         // 10bit write then write with start stop
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -513,7 +515,7 @@ test_cases!(
         // 10 bit read without write first (should nack)
         // additional zero byte write after to end listen
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -536,7 +538,7 @@ test_cases!(
         // 10 bit read after write with start stop in between (should nack)
         // additional zero byte write after to end listen
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -579,7 +581,7 @@ test_cases!(
 
         // Nack address on handler drop (write)
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -596,7 +598,7 @@ test_cases!(
         ),
         // Nack address on handler drop (read)
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Read { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -611,7 +613,7 @@ test_cases!(
         ),
         // Nack multiple bytes on write handler drop after accepting a byte
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -634,7 +636,7 @@ test_cases!(
         ),
         // Provide overrun on dropping a read handler after providing a byte
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Read { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -659,7 +661,7 @@ test_cases!(
         ),
         // Nack first transaction, then ack second
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -694,11 +696,11 @@ test_cases!(
 
         // 7bit Expect write, receive a matching write
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let mut data = [0u8; 4];
                 let TransactionExpectWrite::ExpectedPartialWrite { handler } = i2c
-                    .listen_expect_write(Address::SevenBit(0x20), &mut data)
+                    .listen_expect_write(AnyAddress::Seven(0x20), &mut data)
                     .await
                     .unwrap()
                 else {
@@ -722,10 +724,10 @@ test_cases!(
         ),
         // 7bit Expect read, receive a matching read
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let TransactionExpectRead::ExpectedCompleteRead { size: 4 } = i2c
-                    .listen_expect_read(Address::SevenBit(0x20), &[1, 2, 3, 4])
+                    .listen_expect_read(AnyAddress::Seven(0x20), &[1, 2, 3, 4])
                     .await
                     .unwrap()
                 else {
@@ -747,11 +749,11 @@ test_cases!(
         ),
         // 7bit Expect write, receive read
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let mut data = [0u8; 4];
                 let TransactionExpectWrite::Read { handler, .. } = i2c
-                    .listen_expect_write(Address::SevenBit(0x20), &mut data)
+                    .listen_expect_write(AnyAddress::Seven(0x20), &mut data)
                     .await
                     .unwrap()
                 else {
@@ -775,10 +777,10 @@ test_cases!(
         ),
         // 7bit Expect read, receive write
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let TransactionExpectRead::Write { handler, .. } = i2c
-                    .listen_expect_read(Address::SevenBit(0x20), &[5, 6, 7, 8])
+                    .listen_expect_read(AnyAddress::Seven(0x20), &[5, 6, 7, 8])
                     .await
                     .unwrap()
                 else {
@@ -803,18 +805,18 @@ test_cases!(
         ),
         // 10bit Expected write-read transaction
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let mut data = [0u8; 4];
                 let TransactionExpectWrite::ExpectedPartialWrite { handler, .. } =
-                    i2c.listen_expect_write(Address::TenBit(0x20), &mut data).await.unwrap()
+                    i2c.listen_expect_write(AnyAddress::Ten(0x20), &mut data).await.unwrap()
                 else {
                     panic!("Unexpected transaction");
                 };
                 assert_eq!(data, [1, 2, 3, 4]);
                 assert_eq!(handler.handle_complete(&mut []).await.unwrap(), 0);
                 let TransactionExpectRead::ExpectedCompleteRead { size: 4 } = i2c
-                    .listen_expect_read(Address::TenBit(0x20), &[5, 6, 7, 8])
+                    .listen_expect_read(AnyAddress::Ten(0x20), &[5, 6, 7, 8])
                     .await
                     .unwrap()
                 else {
@@ -843,18 +845,18 @@ test_cases!(
         ),
         // 10bit Expected write-write transaction
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let mut data = [0u8; 4];
                 let TransactionExpectWrite::ExpectedPartialWrite { handler, .. } =
-                    i2c.listen_expect_write(Address::TenBit(0x20), &mut data).await.unwrap()
+                    i2c.listen_expect_write(AnyAddress::Ten(0x20), &mut data).await.unwrap()
                 else {
                     panic!("Unexpected transaction");
                 };
                 assert_eq!(data, [1, 2, 3, 4]);
                 assert_eq!(handler.handle_complete(&mut []).await.unwrap(), 0);
                 let TransactionExpectWrite::ExpectedPartialWrite { handler, .. } =
-                    i2c.listen_expect_write(Address::TenBit(0x20), &mut data).await.unwrap()
+                    i2c.listen_expect_write(AnyAddress::Ten(0x20), &mut data).await.unwrap()
                 else {
                     panic!("Unexpected transaction");
                 };
@@ -884,18 +886,18 @@ test_cases!(
         ),
         // 10bit Expected write-read transaction, got write-write
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let mut data = [0u8; 4];
                 let TransactionExpectWrite::ExpectedPartialWrite { handler, .. } =
-                    i2c.listen_expect_write(Address::TenBit(0x20), &mut data).await.unwrap()
+                    i2c.listen_expect_write(AnyAddress::Ten(0x20), &mut data).await.unwrap()
                 else {
                     panic!("Unexpected transaction");
                 };
                 assert_eq!(data, [1, 2, 3, 4]);
                 assert_eq!(handler.handle_complete(&mut []).await.unwrap(), 0);
                 let TransactionExpectRead::Write { handler, .. } = i2c
-                    .listen_expect_read(Address::TenBit(0x20), &[5, 6, 7, 8])
+                    .listen_expect_read(AnyAddress::Ten(0x20), &[5, 6, 7, 8])
                     .await
                     .unwrap()
                 else {
@@ -927,18 +929,18 @@ test_cases!(
         ),
         // 10bit Expected write-write transaction, got write-read
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let mut data = [0u8; 4];
                 let TransactionExpectWrite::ExpectedPartialWrite { handler, .. } =
-                    i2c.listen_expect_write(Address::TenBit(0x20), &mut data).await.unwrap()
+                    i2c.listen_expect_write(AnyAddress::Ten(0x20), &mut data).await.unwrap()
                 else {
                     panic!("Unexpected transaction");
                 };
                 assert_eq!(data, [1, 2, 3, 4]);
                 assert_eq!(handler.handle_complete(&mut []).await.unwrap(), 0);
                 let TransactionExpectWrite::Read { handler, .. } =
-                    i2c.listen_expect_write(Address::TenBit(0x20), &mut data).await.unwrap()
+                    i2c.listen_expect_write(AnyAddress::Ten(0x20), &mut data).await.unwrap()
                 else {
                     panic!("Unexpected transaction");
                 };
@@ -971,7 +973,7 @@ test_cases!(
 
         // handle_part small sizes
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -1036,7 +1038,7 @@ test_cases!(
         ),
         // handle part of size 0 doesn't ack address or last byte
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -1086,7 +1088,7 @@ test_cases!(
         ),
         // handle_complete small sizes
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -1192,10 +1194,10 @@ test_cases!(
         ),
         // listen_expect small sizes
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let TransactionExpectWrite::ExpectedPartialWrite { handler, .. } =
-                    i2c.listen_expect_write(Address::SevenBit(0x20), &mut []).await.unwrap()
+                    i2c.listen_expect_write(AnyAddress::Seven(0x20), &mut []).await.unwrap()
                 else {
                     panic!("Unexpected transaction");
                 };
@@ -1203,7 +1205,7 @@ test_cases!(
 
                 let mut data1 = [0u8; 1];
                 let TransactionExpectWrite::ExpectedPartialWrite { handler, .. } = i2c
-                    .listen_expect_write(Address::SevenBit(0x20), &mut data1)
+                    .listen_expect_write(AnyAddress::Seven(0x20), &mut data1)
                     .await
                     .unwrap()
                 else {
@@ -1217,7 +1219,7 @@ test_cases!(
 
                 let mut data2 = [0u8; 2];
                 let TransactionExpectWrite::ExpectedPartialWrite { handler, .. } = i2c
-                    .listen_expect_write(Address::SevenBit(0x20), &mut data2)
+                    .listen_expect_write(AnyAddress::Seven(0x20), &mut data2)
                     .await
                     .unwrap()
                 else {
@@ -1230,14 +1232,14 @@ test_cases!(
                 };
 
                 let TransactionExpectRead::ExpectedPartialRead { handler, .. } =
-                    i2c.listen_expect_read(Address::SevenBit(0x20), &[]).await.unwrap()
+                    i2c.listen_expect_read(AnyAddress::Seven(0x20), &[]).await.unwrap()
                 else {
                     panic!("Unexpected transaction");
                 };
                 drop(handler);
 
                 let TransactionExpectRead::ExpectedPartialRead { handler, .. } =
-                    i2c.listen_expect_read(Address::SevenBit(0x20), &[1]).await.unwrap()
+                    i2c.listen_expect_read(AnyAddress::Seven(0x20), &[1]).await.unwrap()
                 else {
                     panic!("Unexpected transaction");
                 };
@@ -1247,7 +1249,7 @@ test_cases!(
                 };
 
                 let TransactionExpectRead::ExpectedPartialRead { handler, .. } =
-                    i2c.listen_expect_read(Address::SevenBit(0x20), &[1, 2]).await.unwrap()
+                    i2c.listen_expect_read(AnyAddress::Seven(0x20), &[1, 2]).await.unwrap()
                 else {
                     panic!("Unexpected transaction");
                 };
@@ -1303,7 +1305,7 @@ test_cases!(
 
         // Handle part near boundaries
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -1426,7 +1428,7 @@ test_cases!(
         ),
         // handle complete near boundaries
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -1534,11 +1536,11 @@ test_cases!(
         ),
         // listen_expect near boundaries
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let mut data = [0u8; 4];
                 let TransactionExpectWrite::ExpectedCompleteWrite { size: 3 } = i2c
-                    .listen_expect_write(Address::SevenBit(0x20), &mut data)
+                    .listen_expect_write(AnyAddress::Seven(0x20), &mut data)
                     .await
                     .unwrap()
                 else {
@@ -1551,7 +1553,7 @@ test_cases!(
 
                 let mut data = [0u8; 4];
                 let TransactionExpectWrite::ExpectedPartialWrite { handler } = i2c
-                    .listen_expect_write(Address::SevenBit(0x20), &mut data)
+                    .listen_expect_write(AnyAddress::Seven(0x20), &mut data)
                     .await
                     .unwrap()
                 else {
@@ -1565,7 +1567,7 @@ test_cases!(
 
                 let mut data = [0u8; 4];
                 let TransactionExpectWrite::ExpectedPartialWrite { handler } = i2c
-                    .listen_expect_write(Address::SevenBit(0x20), &mut data)
+                    .listen_expect_write(AnyAddress::Seven(0x20), &mut data)
                     .await
                     .unwrap()
                 else {
@@ -1578,7 +1580,7 @@ test_cases!(
                 };
 
                 let TransactionExpectRead::ExpectedCompleteRead { size: 3 } = i2c
-                    .listen_expect_read(Address::SevenBit(0x20), &[1, 2, 3, 4])
+                    .listen_expect_read(AnyAddress::Seven(0x20), &[1, 2, 3, 4])
                     .await
                     .unwrap()
                 else {
@@ -1589,7 +1591,7 @@ test_cases!(
                 };
 
                 let TransactionExpectRead::ExpectedCompleteRead { size: 4 } = i2c
-                    .listen_expect_read(Address::SevenBit(0x20), &[1, 2, 3, 4])
+                    .listen_expect_read(AnyAddress::Seven(0x20), &[1, 2, 3, 4])
                     .await
                     .unwrap()
                 else {
@@ -1600,7 +1602,7 @@ test_cases!(
                 };
 
                 let TransactionExpectRead::ExpectedPartialRead { handler } = i2c
-                    .listen_expect_read(Address::SevenBit(0x20), &[1, 2, 3, 4])
+                    .listen_expect_read(AnyAddress::Seven(0x20), &[1, 2, 3, 4])
                     .await
                     .unwrap()
                 else {
@@ -1667,7 +1669,7 @@ test_cases!(
 
         // Dropping peripheral during write releases bus
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -1692,7 +1694,7 @@ test_cases!(
         ),
         // Dropping peripheral during read releases bus
         (
-            Address::SevenBit(0x20),
+            AnyAddress::Seven(0x20),
             {
                 let Transaction::Read { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -1719,7 +1721,7 @@ test_cases!(
         // 10 bit write to slave with partial overlapping address
         // An additional write of size 0 is done after to ensure listen finishes
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -1748,7 +1750,7 @@ test_cases!(
         // to different slave with partial overlapping address, then restart and
         // ten bit write to us (should provide deselect event)
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");
@@ -1797,7 +1799,7 @@ test_cases!(
         // ten bit read (we should nack read)
         // An additional write of size 0 is done after to ensure listen finishes
         (
-            Address::TenBit(0x20),
+            AnyAddress::Ten(0x20),
             {
                 let Transaction::Write { handler, .. } = i2c.listen().await.unwrap() else {
                     panic!("Unexpected transaction");

@@ -4,10 +4,13 @@
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_imxrt::i2c::master::I2cMaster;
-use embassy_imxrt::i2c::slave::{Address, AsyncI2cSlave, ReadResult, Transaction, WriteResult};
+use embassy_imxrt::i2c::slave::AsyncI2cSlave;
 use embassy_imxrt::i2c::{self, Async};
 use embassy_imxrt::{bind_interrupts, peripherals};
 use embedded_hal_async::i2c::I2c;
+use embedded_hal_i2c::{
+    AnyAddress, AsyncI2cTarget, AsyncReadTransaction, AsyncWriteTransaction, ReadResult, Transaction, WriteResult,
+};
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 const ADDR: u16 = 0x0123;
@@ -15,7 +18,7 @@ const MASTER_BUFLEN: usize = 8;
 // slave buffer has to be 1 bigger than master buffer because master does not
 // handle end of read properly
 const SLAVE_BUFLEN: usize = MASTER_BUFLEN + 1;
-const SLAVE_ADDR: Option<Address> = Address::new_10bit(ADDR);
+const SLAVE_ADDR: Option<AnyAddress> = Some(AnyAddress::Ten(ADDR));
 
 bind_interrupts!(struct Irqs {
     FLEXCOMM2 => i2c::InterruptHandler<peripherals::FLEXCOMM2>;
