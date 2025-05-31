@@ -14,8 +14,6 @@ use storage_bus::nor::{
 };
 
 use crate::clocks::enable_and_reset;
-#[cfg(feature = "time")]
-use crate::flexspi::is_expired;
 use crate::iopctl::IopctlPin as Pin;
 use crate::pac::flexspi::ahbcr::*;
 use crate::pac::flexspi::flshcr1::*;
@@ -24,6 +22,11 @@ use crate::pac::flexspi::flshcr4::*;
 use crate::pac::flexspi::mcr0::*;
 use crate::pac::flexspi::mcr2::*;
 use crate::{interrupt, peripherals};
+
+#[cfg(feature = "time")]
+pub(crate) fn is_expired(start: Instant, timeout: u64) -> bool {
+    Instant::now().duration_since(start).as_millis() > timeout
+}
 
 macro_rules! configure_ports_a {
     ($port:expr, $regs: ident, $device_config: ident, $flash_size: ident) => {
