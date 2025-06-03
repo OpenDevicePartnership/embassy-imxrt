@@ -1,4 +1,4 @@
-# embassy-imxrt-examples with SystemView performance tracing
+# embassy-imxrt-perf-examples with SystemView performance tracing
 
 ## Introduction
 
@@ -18,7 +18,7 @@ Before building the project, you need to install the required toolchains and con
 - Download and install the ARM GNU toolchain from https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads
 - Select the version which has "arm-none-eabi" for your host architecture. Example for 64-bit Windows: arm-gnu-toolchain-14.2.rel1-mingw-w64-x86_64-arm-none-eabi.exe
 - On this screen, make sure to check the box that says "Add path to environment variable"
-!(arm-gnu-toolchain-env-variable.png)
+![arm gnu toolchain environment variable](arm-gnu-toolchain-env-variable.png)
 
 3. Configure Environment Variables
 - If you didn't select "Add path to environment variable" for the LLVM toolchain and ARM GNU Toolchain with the installation wizard, you'll have to do it manually
