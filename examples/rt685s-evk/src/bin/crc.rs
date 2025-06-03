@@ -1,19 +1,16 @@
 #![no_std]
 #![no_main]
 
-extern crate embassy_imxrt_examples;
-
-use defmt::*;
 use embassy_executor::Spawner;
 use embassy_imxrt::crc::{Config, Crc, Polynomial};
-use {defmt_rtt as _, panic_probe as _};
+use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let mut p = embassy_imxrt::init(Default::default());
     let data = b"123456789";
 
-    info!("Initializing CRC");
+    defmt::info!("Initializing CRC");
 
     // CRC-CCITT
     let mut crc = Crc::new(p.CRC.reborrow(), Default::default());

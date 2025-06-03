@@ -1,8 +1,6 @@
 #![no_std]
 #![no_main]
 
-extern crate embassy_imxrt_examples;
-
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_imxrt::i2c::master::I2cMaster;
@@ -10,6 +8,7 @@ use embassy_imxrt::i2c::slave::{Address, Command, I2cSlave, Response};
 use embassy_imxrt::i2c::{self, Async};
 use embassy_imxrt::{bind_interrupts, peripherals};
 use embedded_hal_async::i2c::I2c;
+use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 const ADDR: u16 = 0x0123;
 const MASTER_BUFLEN: usize = 8;
