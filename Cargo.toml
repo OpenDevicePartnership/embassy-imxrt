@@ -108,5 +108,6 @@ mimxrt685s-pac = { version = "0.4.0", optional = true, features = ["rt", "critic
 mimxrt633s-pac = { version = "0.4.1", optional = true, features = ["rt", "critical-section"] }
 
 [dev-dependencies]
+assert2 = "0.3.15"
 embassy-executor = { git = "https://github.com/embassy-rs/embassy" }
 static_cell = { version = "2" }
