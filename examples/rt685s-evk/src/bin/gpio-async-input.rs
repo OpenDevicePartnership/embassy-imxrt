@@ -1,13 +1,11 @@
 #![no_std]
 #![no_main]
 
-extern crate embassy_imxrt_examples;
-
-use defmt::*;
+use defmt::debug;
 use embassy_executor::Spawner;
 use embassy_imxrt::gpio;
 use embassy_time::{Duration, Ticker};
-use {defmt_rtt as _, panic_probe as _};
+use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 #[embassy_executor::task]
 async fn monitor_task(mut monitor: gpio::Input<'static>) {

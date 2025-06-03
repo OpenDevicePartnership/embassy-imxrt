@@ -1,15 +1,13 @@
 #![no_std]
 #![no_main]
 
-extern crate embassy_imxrt_examples;
-
 use cortex_m::peripheral::NVIC;
 use defmt::{info, warn};
 use embassy_executor::Spawner;
 use embassy_imxrt::pac::{interrupt, Interrupt};
 use embassy_imxrt::wwdt::WindowedWatchdog;
 use embassy_time::Timer;
-use {defmt_rtt as _, panic_probe as _};
+use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {

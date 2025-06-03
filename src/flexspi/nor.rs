@@ -93,7 +93,11 @@ macro_rules! configure_ports_b {
 
 const FIFO_SLOT_SIZE: u32 = 4; // 4 bytes
 const MAX_TRANSFER_SIZE: u32 = 128;
-const OPERATION_SEQ_NUMBER: u8 = 0;
+/// The default command sequence number to use.
+///
+/// All commands sent over the FlexSPI bus are first programmed into a lookup table at a specific index.
+/// By default, we'll use sequence 14, since it is not used by the ROM bootloader or the mimxrt600_fcb crate.
+const DEFAULT_COMMAND_SEQUENCE_NUMBER: u8 = 14;
 const LUT_UNLOCK_CODE: u32 = 0x5AF05AF0;
 
 #[cfg(feature = "time")]
@@ -377,6 +381,8 @@ pub struct FlexspiNorStorageBus<'d, M: Mode> {
     _mode: core::marker::PhantomData<M>,
     /// FlexSPI Configuration Port
     pub configport: FlexSpiConfigurationPort,
+    /// Command sequence number of the LUT to use.
+    command_sequence_number: u8,
     phantom: core::marker::PhantomData<&'d ()>,
 }
 
@@ -594,10 +600,10 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
         write_buf: Option<&[u8]>,
     ) -> Result<(), NorStorageBusError> {
         // Setup the transfer to be sent of the FlexSPI IP Port
-        self.setup_ip_transfer(OPERATION_SEQ_NUMBER, cmd.addr, cmd.data_bytes);
+        self.setup_ip_transfer(self.command_sequence_number, cmd.addr, cmd.data_bytes);
 
         // Program the LUT instructions for the command
-        self.program_lut(&cmd, OPERATION_SEQ_NUMBER as u8);
+        self.program_lut(&cmd, self.command_sequence_number as u8);
 
         // Start the transfer
         self.execute_ip_cmd();
@@ -635,6 +641,22 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
 }
 
 impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
+    /// Set the command sequence in the FlexSPI LUT to use.
+    ///
+    /// All commands sent over the FlexSPI bus are first programmed into a lookup-table.
+    /// You should make sure that the driver uses a command sequence that is not already used for other purposes.
+    ///
+    /// By default, we use command sequence 14, because it not used by the bootloader ROM or the `mimxrt600_fcb` crate (in the default configuration).
+    /// However, if you are on a platform where sequence 14 is already in use, you should select a different one.
+    pub fn set_command_sequence_number(&mut self, value: u8) {
+        self.command_sequence_number = value;
+    }
+
+    /// Get the command sequence in the FlexSPI LUT to use.
+    pub fn command_sequence_number(&self) -> u8 {
+        self.command_sequence_number
+    }
+
     fn setup_ip_transfer(&mut self, seq_id: u8, addr: Option<u32>, size: Option<u32>) {
         self.info.regs.ipcr0().modify(|_, w| unsafe {
             //SAFETY - We are writing the address register. There is no issue from safety perspective
@@ -802,11 +824,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     }
 
     fn program_cmd_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie) {
-        let mut cmd_mode: FlexSpiLutOpcode = CMD_DDR;
-
-        if cmd.mode == NorStorageCmdMode::SDR {
-            cmd_mode = CMD_SDR;
-        }
+        let cmd_mode = match cmd.mode {
+            NorStorageCmdMode::SDR => FlexSpiLutOpcode::CMD_SDR,
+            NorStorageCmdMode::DDR => FlexSpiLutOpcode::CMD_DDR,
+        };
         let bus_width = match cmd.bus_width {
             NorStorageBusWidth::Single => 0,
             NorStorageBusWidth::Dual => 1,
@@ -825,11 +846,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     }
 
     fn program_addr_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie) {
-        let mut cmd_mode: FlexSpiLutOpcode = RADDR_DDR;
-
-        if cmd.mode == NorStorageCmdMode::SDR {
-            cmd_mode = RADDR_SDR;
-        }
+        let cmd_mode = match cmd.mode {
+            NorStorageCmdMode::SDR => FlexSpiLutOpcode::RADDR_SDR,
+            NorStorageCmdMode::DDR => FlexSpiLutOpcode::RADDR_DDR,
+        };
         let bus_width = match cmd.bus_width {
             NorStorageBusWidth::Single => 0,
             NorStorageBusWidth::Dual => 1,
@@ -842,11 +862,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     }
 
     fn program_dummy_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie) {
-        let mut cmd_mode: FlexSpiLutOpcode = DUMMY_DDR;
-
-        if cmd.mode == NorStorageCmdMode::SDR {
-            cmd_mode = DUMMY_SDR;
-        }
+        let cmd_mode = match cmd.mode {
+            NorStorageCmdMode::SDR => FlexSpiLutOpcode::DUMMY_SDR,
+            NorStorageCmdMode::DDR => FlexSpiLutOpcode::DUMMY_DDR,
+        };
         let bus_width = match cmd.bus_width {
             NorStorageBusWidth::Single => 0,
             NorStorageBusWidth::Dual => 1,
@@ -868,11 +887,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     }
 
     fn program_read_data_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie, data_length: u8) {
-        let mut cmd_mode: FlexSpiLutOpcode = READ_DDR;
-
-        if cmd.mode == NorStorageCmdMode::SDR {
-            cmd_mode = READ_SDR;
-        }
+        let cmd_mode = match cmd.mode {
+            NorStorageCmdMode::SDR => FlexSpiLutOpcode::READ_SDR,
+            NorStorageCmdMode::DDR => FlexSpiLutOpcode::READ_DDR,
+        };
         let bus_width = match cmd.bus_width {
             NorStorageBusWidth::Single => 0,
             NorStorageBusWidth::Dual => 1,
@@ -886,11 +904,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     }
 
     fn program_write_data_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie, data_length: u8) {
-        let mut cmd_mode: FlexSpiLutOpcode = WRITE_DDR;
-
-        if cmd.mode == NorStorageCmdMode::SDR {
-            cmd_mode = WRITE_SDR;
-        }
+        let cmd_mode = match cmd.mode {
+            NorStorageCmdMode::SDR => FlexSpiLutOpcode::WRITE_SDR,
+            NorStorageCmdMode::DDR => FlexSpiLutOpcode::WRITE_DDR,
+        };
         let bus_width = match cmd.bus_width {
             NorStorageBusWidth::Single => 0,
             NorStorageBusWidth::Dual => 1,
@@ -1473,6 +1490,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             },
             rx_watermark: config.rx_watermark,
             tx_watermark: config.tx_watermark,
+            command_sequence_number: DEFAULT_COMMAND_SEQUENCE_NUMBER,
             phantom: core::marker::PhantomData,
         }
     }
@@ -1501,6 +1519,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             },
             rx_watermark: config.rx_watermark,
             tx_watermark: config.tx_watermark,
+            command_sequence_number: DEFAULT_COMMAND_SEQUENCE_NUMBER,
             phantom: core::marker::PhantomData,
         }
     }
@@ -1533,6 +1552,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             },
             rx_watermark: config.rx_watermark,
             tx_watermark: config.tx_watermark,
+            command_sequence_number: DEFAULT_COMMAND_SEQUENCE_NUMBER,
             phantom: core::marker::PhantomData,
         }
     }
@@ -1573,6 +1593,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             },
             rx_watermark: config.rx_watermark,
             tx_watermark: config.tx_watermark,
+            command_sequence_number: DEFAULT_COMMAND_SEQUENCE_NUMBER,
             phantom: core::marker::PhantomData,
         }
     }
@@ -1589,6 +1610,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             },
             rx_watermark: config.rx_watermark,
             tx_watermark: config.tx_watermark,
+            command_sequence_number: DEFAULT_COMMAND_SEQUENCE_NUMBER,
             phantom: core::marker::PhantomData,
         }
     }
