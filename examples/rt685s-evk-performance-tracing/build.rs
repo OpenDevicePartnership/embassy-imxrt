@@ -41,5 +41,5 @@ static BOOT_IMAGE_VERSION: u32 = 0x{:02x}{:02x}{:02x}00;
             )
             .as_bytes(),
         )
-        .unwrap();
+        .expect("failed to create memory.x in OUT_DIR")
 }
