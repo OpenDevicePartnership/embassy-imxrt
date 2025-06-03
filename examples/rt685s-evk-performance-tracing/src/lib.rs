@@ -1,7 +1,6 @@
 #![no_std]
 
 use mimxrt600_fcb::FlexSPIFlashConfigurationBlock;
-use panic_probe as _;
 
 // auto-generated version information from Cargo.toml
 include!(concat!(env!("OUT_DIR"), "/biv.rs"));
