@@ -537,8 +537,8 @@ pub struct InvalidCommandSequence {
 /// the last word will be padded with zeros in the most significant bytes.
 ///
 /// # Safety:
-/// The destination pointer must point to a region of writable memory.
-/// The size of the region must be at-least `source.len()` rounded up to a multiple of 4 bytes.
+/// The destination pointer must point to an region of writable memory properly aligned for `u32` access.
+/// The size in bytes of the region must be at-least `source.len()` rounded up to a multiple of 4 bytes.
 /// There may be no reference in existence to the destination region.
 /// This also means that the destination may not overlap with the source.
 unsafe fn read_u8_write_u32_volatile(source: &[u8], dest: *mut u32) {
@@ -548,17 +548,15 @@ unsafe fn read_u8_write_u32_volatile(source: &[u8], dest: *mut u32) {
 
         // Write whole words.
         for i in 0..word_count {
-            let source: &[u8; 4] = core::mem::transmute(&source[i * 4]);
-            let dst = dest.add(i);
+            let source: &[u8; 4] = &*source[i * 4..][..4].as_ptr().cast();
             let word = u32::from_ne_bytes(*source);
-            dst.write_volatile(word);
+            dest.add(i).write_volatile(word);
         }
 
         // Write remainder, zero padded.
         if remainder > 0 {
             let mut word = [0; 4];
-            let source = &source[word_count * 4..];
-            word[..remainder].copy_from_slice(&source[word_count..]);
+            word[..remainder].copy_from_slice(&source[word_count * 4..][..remainder]);
             let word = u32::from_ne_bytes(word);
             dest.add(word_count).write_volatile(word);
         }
@@ -574,8 +572,8 @@ unsafe fn read_u8_write_u32_volatile(source: &[u8], dest: *mut u32) {
 /// the unneeded most significant bytes of the last word will be discarded.
 ///
 /// # Safety:
-/// The source pointer must point to a readable memory region.
-/// The size must be atleast `dest.len()` rounded up to a multiple of 4.
+/// The source pointer must point to a readable memory region propperly aligned for `u32` access.
+/// The size in bytes of the region must be atleast `dest.len()` rounded up to a multiple of 4.
 /// The source region may not overlap with the `dest` slice.
 unsafe fn read_u32_volatile_write_u8(source: *const u32, dest: &mut [u8]) {
     unsafe {
@@ -584,7 +582,7 @@ unsafe fn read_u32_volatile_write_u8(source: *const u32, dest: &mut [u8]) {
 
         // Read whole words.
         for i in 0..word_count {
-            let dest: &mut [u8; 4] = core::mem::transmute(&mut dest[i * 4]);
+            let dest: &mut [u8; 4] = &mut *dest[i * 4..].as_mut_ptr().cast();
             let source = source.add(i);
             let word = source.read_volatile();
             *dest = word.to_ne_bytes();
@@ -595,6 +593,128 @@ unsafe fn read_u32_volatile_write_u8(source: *const u32, dest: &mut [u8]) {
             let word = source.add(word_count).read_volatile();
             let word = word.to_ne_bytes();
             dest[word_count * 4..].copy_from_slice(&word[..remainder]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::cell::Cell;
+
+    use super::*;
+
+    #[test]
+    fn test_read_u8_write_u32_volatile() {
+        {
+            let source = [1];
+            let dest = Cell::new(0xCAFECAFE);
+            unsafe { read_u8_write_u32_volatile(&source, dest.as_ptr()) };
+            assert!(dest.get().to_le_bytes() == [0x01, 0x00, 0x00, 0x00]);
+        }
+
+        {
+            let source = [1, 2];
+            let dest = Cell::new(0xCAFECAFE);
+            unsafe { read_u8_write_u32_volatile(&source, dest.as_ptr()) };
+            assert!(dest.get().to_le_bytes() == [0x01, 0x02, 0x00, 0x00]);
+        }
+        {
+            let source = [1, 2, 3];
+            let dest = Cell::new(0xCAFECAFE);
+            unsafe { read_u8_write_u32_volatile(&source, dest.as_ptr()) };
+            assert!(dest.get().to_le_bytes() == [0x01, 0x02, 0x03, 0x00]);
+        }
+        {
+            let source = [1, 2, 3, 4];
+            let dest = Cell::new(0xCAFECAFE);
+            unsafe { read_u8_write_u32_volatile(&source, dest.as_ptr()) };
+            assert!(dest.get().to_le_bytes() == [0x01, 0x02, 0x03, 0x04]);
+        }
+        {
+            let source = [1, 2, 3, 4, 5];
+            let mut dest = Cell::new([0xCAFECAFEu32; 2]);
+            unsafe { read_u8_write_u32_volatile(&source, dest.get_mut().as_mut_ptr()) };
+            assert!(dest.get()[0].to_le_bytes() == [0x01, 0x02, 0x03, 0x04]);
+            assert!(dest.get()[1].to_le_bytes() == [0x05, 0x00, 0x00, 0x00]);
+        }
+        {
+            let source = [1, 2, 3, 4, 5, 6, 7];
+            let mut dest = Cell::new([0xCAFECAFEu32; 2]);
+            unsafe { read_u8_write_u32_volatile(&source, dest.get_mut().as_mut_ptr()) };
+            assert!(dest.get()[0].to_le_bytes() == [0x01, 0x02, 0x03, 0x04]);
+            assert!(dest.get()[1].to_le_bytes() == [0x05, 0x06, 0x07, 0x00]);
+        }
+        {
+            let source = [1, 2, 3, 4, 5, 6, 7, 8];
+            let mut dest = Cell::new([0xCAFECAFEu32; 2]);
+            unsafe { read_u8_write_u32_volatile(&source, dest.get_mut().as_mut_ptr()) };
+            assert!(dest.get()[0].to_le_bytes() == [0x01, 0x02, 0x03, 0x04]);
+            assert!(dest.get()[1].to_le_bytes() == [0x05, 0x06, 0x07, 0x08]);
+        }
+    }
+
+    #[test]
+    fn test_read_u32_volatile_write_u8() {
+        let source = [
+            u32::from_ne_bytes([0x01, 0x23, 0x45, 0x67]),
+            u32::from_ne_bytes([0x89, 0xAB, 0xCD, 0xEF]),
+        ];
+
+        {
+            let mut dest = [0xFF];
+            unsafe {
+                read_u32_volatile_write_u8(source.as_ptr(), &mut dest);
+            }
+            assert!(dest == [0x01]);
+        }
+        {
+            let mut dest = [0xFF; 2];
+            unsafe {
+                read_u32_volatile_write_u8(source.as_ptr(), &mut dest);
+            }
+            assert!(dest == [0x01, 0x23]);
+        }
+        {
+            let mut dest = [0xFF; 3];
+            unsafe {
+                read_u32_volatile_write_u8(source.as_ptr(), &mut dest);
+            }
+            assert!(dest == [0x01, 0x23, 0x45]);
+        }
+        {
+            let mut dest = [0xFF; 4];
+            unsafe {
+                read_u32_volatile_write_u8(source.as_ptr(), &mut dest);
+            }
+            assert!(dest == [0x01, 0x23, 0x45, 0x67]);
+        }
+        {
+            let mut dest = [0xFF; 5];
+            unsafe {
+                read_u32_volatile_write_u8(source.as_ptr(), &mut dest);
+            }
+            assert!(dest == [0x01, 0x23, 0x45, 0x67, 0x89]);
+        }
+        {
+            let mut dest = [0xFF; 6];
+            unsafe {
+                read_u32_volatile_write_u8(source.as_ptr(), &mut dest);
+            }
+            assert!(dest == [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB]);
+        }
+        {
+            let mut dest = [0xFF; 7];
+            unsafe {
+                read_u32_volatile_write_u8(source.as_ptr(), &mut dest);
+            }
+            assert!(dest == [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD]);
+        }
+        {
+            let mut dest = [0xFF; 8];
+            unsafe {
+                read_u32_volatile_write_u8(source.as_ptr(), &mut dest);
+            }
+            assert!(dest == [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]);
         }
     }
 }
