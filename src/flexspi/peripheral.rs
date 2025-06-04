@@ -52,6 +52,35 @@ impl<'a> FlexSpi<'a> {
         Self { flex_spi }
     }
 
+    /// Write a command sequence to the LUT.
+    ///
+    /// This function will overwrite one single LUT sequence,
+    /// which consists of 4 words, where each word contains two instructions.
+    ///
+    /// See the [`mimxrt600-fcb`] crate for utilities to create LUT commnad sequences.
+    ///
+    /// # Safety
+    /// Altering the LUT will potentiall change the behaviour of memory mapped flash access.
+    /// You must ensure that memory mapped flash access still behaves properly.
+    /// The easiest way to do this is to only modify LUT sequences that are NOT used for memory mapped flash access.
+    pub unsafe fn write_lut_sequence(&mut self, index: usize, data: [u32; 4]) {
+        let flexspi = pac::Flexspi::steal();
+
+        // Unlock the LUT.
+        flexspi.lutkey().modify(|_, w| w.key().bits(0x5AF05AF0));
+        flexspi.lutcr().write(|w| w.unlock().set_bit());
+
+        // Write the LUT entries.
+        flexspi.lut(index * 4 + 0).write(|w| w.bits(data[0]));
+        flexspi.lut(index * 4 + 1).write(|w| w.bits(data[1]));
+        flexspi.lut(index * 4 + 2).write(|w| w.bits(data[2]));
+        flexspi.lut(index * 4 + 3).write(|w| w.bits(data[3]));
+
+        // Lock the LUT.
+        flexspi.lutkey().modify(|_, w| w.key().bits(0x5AF05AF0));
+        flexspi.lutcr().write(|w| w.lock().set_bit());
+    }
+
     /// Start a command sequence from the LUT using the IP interface.
     ///
     /// Does not wait for the sequence to finish, as you may need to write to the TX FIFO or read from the RX FIFO..
