@@ -1,5 +1,5 @@
 [target.thumbv8m.main-none-eabihf]
-runner = 'probe-rs download --chip MIMXRT685SFVKB'
+runner = 'probe-rs run --chip MIMXRT685SFVKB'
 
 rustflags = [
   "-C",
