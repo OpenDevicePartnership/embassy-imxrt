@@ -84,7 +84,7 @@ impl<'a> FlexSpi<'a> {
     /// Start a command sequence from the LUT using the IP interface.
     ///
     /// Does not wait for the sequence to finish, as you may need to write to the TX FIFO or read from the RX FIFO..
-    pub fn start_command_sequence(&mut self, sequence: CommandSequence) -> Result<(), InvalidCommandSequence> {
+    pub unsafe fn start_command_sequence(&mut self, sequence: CommandSequence) -> Result<(), InvalidCommandSequence> {
         // Check if the sequence start and end fall within the valid range (0..32).
         if sequence.start >= 32 || sequence.count >= 32 || sequence.start + sequence.count >= 32 {
             return Err(InvalidCommandSequence {
@@ -362,8 +362,7 @@ impl<'a> FlexSpi<'a> {
 
     /// Check the interrupt register for command errors, and clear them.
     ///
-    /// Performs one read of the interrupt register and clears only the set bits that indicate that command failed.
-    /// Only set bits will be cleared, and only if the interrupt flags indicate the command failed.
+    /// Performs one read of the interrupt register and clears only the set bits that indicate the command failed.
     /// If this function returns `Ok`, no interrupt flags have been cleared.
     ///
     /// Returns the value of the interrupt register if no error is detected.
