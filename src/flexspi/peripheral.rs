@@ -113,7 +113,6 @@ impl<'a> FlexSpi<'a> {
                 w.iseqid().bits(sequence.start);
                 w.iseqnum().bits(sequence.count.saturating_sub(1));
                 w.iparen().variant(parallel);
-                w.iseqid().bits(0); // TODO
                 w
             });
             flex_spi.ipcmd().write(|w| w.trg().bit(true));
