@@ -369,13 +369,12 @@ impl<'a> FlexSpiNorFlash<'a> {
 
     /// Wait for a write to not be in progress.
     fn wait_write_not_in_progress(&mut self) -> Result<(), WriteError> {
-        let status = self.read_status().map_err(WriteError::ReadStatus)?;
-        while status.is_write_in_progress() {
-            // We can not use the WFE instruction here,
-            // as the write is handled by the flash chip.
-            // There will not be a CPU event to wake us up.
+        loop {
+            let status = self.read_status().map_err(WriteError::ReadStatus)?;
+            if !status.is_write_in_progress() {
+                return Ok(());
+            }
         }
-        Ok(())
     }
 }
 
