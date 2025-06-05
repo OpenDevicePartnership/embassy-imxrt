@@ -965,7 +965,7 @@ dependencies = [
 [[package]]
 name = "systemview-tracing"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/systemview-tracing#3f7c639244ad45b621807984bfefafa86fd21043"
+source = "git+https://github.com/OpenDevicePartnership/systemview-tracing#c0fceabd18509d62cd9c0047194838c60a14a2c8"
 dependencies = [
  "defmt-rtt",
 ]
