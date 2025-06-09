@@ -84,23 +84,24 @@ impl<'a> FlexSpiNorFlash<'a> {
         me.flex_spi.set_rx_fifo_watermark_u64_words(16);
         me.flex_spi.set_tx_fifo_watermark_u64_words(16);
 
-        // Read the FCB from flash.
-        let mut fcb = [0; 512];
-        if let Err(e) = me.read(0x400, &mut fcb) {
-            panic!("Failed to read FCB: {}", e);
-        }
-
         // TODO: Validate FCB header and version number.
+        // TODO: Report error instead of panicking.
+        let mut fcb_header = [0; 8];
+        me.read(0x400, &mut fcb_header)
+            .unwrap_or_else(|e| panic!("reading FCB header {}", e));
 
         // Copy the FCB LUT entries into the real LUT.
         // TODO: Ensure that we do not change any sequences used by AHB flash access.
-        let fcb_lut = &fcb[0x80..][..256];
-        for (i, sequence) in fcb_lut.chunks_exact(16).enumerate() {
+        for i in 0..16 {
+            let mut sequence = [0; 16];
+            // TODO: Report error instead of panicking.
+            me.read(0x400 + 0x80 + i * 16, &mut sequence)
+                .unwrap_or_else(|e| panic!("failed to read LUT entry {} from FCB: {}", i, e));
             let word1 = u32::from_ne_bytes(sequence[0..][..4].try_into().unwrap_or_else(|_| panic!()));
             let word2 = u32::from_ne_bytes(sequence[4..][..4].try_into().unwrap_or_else(|_| panic!()));
             let word3 = u32::from_ne_bytes(sequence[8..][..4].try_into().unwrap_or_else(|_| panic!()));
             let word4 = u32::from_ne_bytes(sequence[12..][..4].try_into().unwrap_or_else(|_| panic!()));
-            me.flex_spi.write_lut_sequence(i, [word1, word2, word3, word4]);
+            me.flex_spi.write_lut_sequence(i as usize, [word1, word2, word3, word4]);
         }
 
         me
@@ -113,35 +114,38 @@ impl<'a> FlexSpiNorFlash<'a> {
         // TODO: check that start and end address are aligned to `read_alignment`.
 
         // Make sure no old data remains in the RX fifo.
+        self.flex_spi.set_rx_fifo_watermark_u64_words(16);
         self.flex_spi.clear_rx_fifo();
 
-        // Split into reads of at most u16::MAX bytes.
-        for (i, mut buffer) in buffer.chunks_mut(u16::MAX as usize).enumerate() {
-            let address = address + i as u32 * u16::MAX as u32;
+        // Split into reads of at most 128 (16 u64 words) bytes to ensure we don't need to worry about the FIFO during each transfer.
+        for (i, buffer) in buffer.chunks_mut(128).enumerate() {
             // Start the read sequence.
             unsafe {
                 self.flex_spi
-                    .start_command_sequence(CommandSequence {
+                    .configure_command_sequence(CommandSequence {
                         start: sequence::READ,
                         count: 1,
-                        address,
+                        address: address + i as u32 * 128,
                         data_size: buffer.len() as u16,
                         parallel: false,
                     })
                     .unwrap_or_else(|_: InvalidCommandSequence| {
                         panic!("FlexSPI driver reported invalid command sequence for hard-coded read sequence")
                     });
+                self.flex_spi
+                    .trigger_command_and_wait()
+                    .map_err(ReadError::WaitFinish)?;
             }
 
             // Drain the RX queue until the read buffer is full.
-            while !buffer.is_empty() {
-                self.flex_spi.wait_rx_ready().map_err(ReadError::WaitRx)?;
-                let read = self.flex_spi.drain_rx_fifo(buffer);
-                buffer = &mut buffer[read..];
+            let read = self.flex_spi.drain_rx_fifo(buffer);
+            if read != buffer.len() {
+                return Err(NotEnoughData {
+                    expected: i * 128 + buffer.len(),
+                    actual: i * 128 + read,
+                }
+                .into());
             }
-
-            // Wait for the command to finish (and check for errors).
-            self.flex_spi.wait_command_done().map_err(ReadError::WaitFinish)?;
         }
 
         Ok(())
@@ -150,13 +154,13 @@ impl<'a> FlexSpiNorFlash<'a> {
     /// Erase a sector of flash memory.
     ///
     /// NOTE: The address argument is a physical flash address, not a CPU memory address.
-    pub fn erase_sector(&mut self, address: u32) -> Result<(), WriteError> {
+    pub unsafe fn erase_sector(&mut self, address: u32) -> Result<(), WriteError> {
         // TODO: verify address is aligned to a sector.
         self.set_and_verify_write_enable()?;
 
         unsafe {
             self.flex_spi
-                .start_command_sequence(CommandSequence {
+                .configure_command_sequence(CommandSequence {
                     start: sequence::ERASE_SECTOR,
                     count: 1,
                     address,
@@ -166,6 +170,9 @@ impl<'a> FlexSpiNorFlash<'a> {
                 .unwrap_or_else(|_: InvalidCommandSequence| {
                     panic!("FlexSPI driver reported invalid command sequence for hard-coded erase sector sequence")
                 });
+            self.flex_spi
+                .trigger_command_and_wait_write()
+                .map_err(WriteError::WaitFinish)?;
         }
 
         self.flex_spi.wait_command_done().map_err(WriteError::WaitFinish)?;
@@ -178,13 +185,13 @@ impl<'a> FlexSpiNorFlash<'a> {
     /// Erase a block of flash memory.
     ///
     /// NOTE: The address argument is a physical flash address, not a CPU memory address.
-    pub fn erase_block(&mut self, address: u32) -> Result<(), WriteError> {
+    pub unsafe fn erase_block(&mut self, address: u32) -> Result<(), WriteError> {
         // TODO: verify address is aligned to a block.
         self.set_and_verify_write_enable()?;
 
         unsafe {
             self.flex_spi
-                .start_command_sequence(CommandSequence {
+                .configure_command_sequence(CommandSequence {
                     start: sequence::ERASE_BLOCK,
                     count: 1,
                     address,
@@ -194,22 +201,23 @@ impl<'a> FlexSpiNorFlash<'a> {
                 .unwrap_or_else(|_: InvalidCommandSequence| {
                     panic!("FlexSPI driver reported invalid command sequence for hard-coded erase sector sequence")
                 });
+            self.flex_spi
+                .trigger_command_and_wait_write()
+                .map_err(WriteError::WaitFinish)?;
         }
 
-        self.flex_spi.wait_command_done().map_err(WriteError::WaitFinish)?;
-        self.wait_write_not_in_progress()?;
         self.flex_spi.invalidate_cache();
         self.flex_spi.clear_ahb_rx_buffers();
         Ok(())
     }
 
     /// Erase the whole flash chip.
-    pub fn erase_chip(&mut self) -> Result<(), WriteError> {
+    pub unsafe fn erase_chip(&mut self) -> Result<(), WriteError> {
         self.set_and_verify_write_enable()?;
 
         unsafe {
             self.flex_spi
-                .start_command_sequence(CommandSequence {
+                .configure_command_sequence(CommandSequence {
                     start: sequence::CHIP_ERASE,
                     count: 1,
                     address: 0,
@@ -219,12 +227,14 @@ impl<'a> FlexSpiNorFlash<'a> {
                 .unwrap_or_else(|_: InvalidCommandSequence| {
                     panic!("FlexSPI driver reported invalid command sequence for hard-coded erase sector sequence")
                 });
+            self.flex_spi
+                .trigger_command_and_wait_write()
+                .map_err(WriteError::WaitFinish)?;
         }
 
-        self.flex_spi.wait_command_done().map_err(WriteError::WaitFinish)?;
-        self.wait_write_not_in_progress()?;
         self.flex_spi.invalidate_cache();
         self.flex_spi.clear_ahb_rx_buffers();
+        // self.wait_write_not_in_progress()?;
         Ok(())
     }
 
@@ -235,7 +245,7 @@ impl<'a> FlexSpiNorFlash<'a> {
     /// Please refer to the datasheet of the flash memory for more details.
     ///
     /// NOTE: The address argument is a physical flash address, not a CPU memory address.
-    pub fn page_program(&mut self, address: u32, data: &[u8]) -> Result<(), PageProgramError> {
+    pub unsafe fn page_program(&mut self, address: u32, data: &[u8]) -> Result<(), PageProgramError> {
         // Check if the write fully falls into one page.
         WriteCrossesPageBoundary::check(address, data.len() as u32, self.alignment.page_size)?;
 
@@ -245,41 +255,34 @@ impl<'a> FlexSpiNorFlash<'a> {
         self.set_and_verify_write_enable()?;
 
         // Make sure no old data remains in the TX FIFO.
+        self.flex_spi.set_tx_fifo_watermark_u64_words(16);
         self.flex_spi.clear_tx_fifo();
 
-        // Start the command.
-        unsafe {
+        // Program chunks of at most 128 bytes.
+        // TODO: Split into 128 bytes aligned chunks automatically so we can remove the restriction of crossing page boundaries.
+        for (i, chunk) in data.chunks(128).enumerate() {
+            self.flex_spi.fill_tx_fifo(chunk);
             self.flex_spi
-                .start_command_sequence(CommandSequence {
+                .configure_command_sequence(CommandSequence {
                     start: sequence::PAGE_PROGRAM,
                     count: 1,
-                    address,
+                    address: address + i as u32 * 128,
                     data_size: data.len() as u16,
                     parallel: false,
                 })
                 .unwrap_or_else(|_: InvalidCommandSequence| {
                     panic!("FlexSPI driver reported invalid command sequence for hard-coded page program sequence")
                 });
+            self.flex_spi
+                .trigger_command_and_wait_write()
+                .map_err(WriteError::WaitFinish)?;
+            // self.wait_write_not_in_progress()?;
+
+            // TODO: Part of the data may have been written earlier even if we exit with an error.
+            // So we should consider clearing the cache and buffers even in case of errors.
+            self.flex_spi.invalidate_cache();
+            self.flex_spi.clear_ahb_rx_buffers();
         }
-
-        // TODO: Verify write in progress?
-
-        // Write the data.
-        let mut data = data;
-        while !data.is_empty() {
-            self.flex_spi.wait_tx_ready().map_err(WriteError::WaitTx)?;
-            let written = self.flex_spi.fill_tx_fifo(data);
-            data = &data[written..];
-        }
-
-        // Wait for the command to finish.
-        self.flex_spi.wait_command_done().map_err(WriteError::WaitFinish)?;
-        self.wait_write_not_in_progress()?;
-
-        // TODO: Part of the data may have been written earlier even if we exit with an error.
-        // So we should consider clearing the cache and buffers even in case of errors.
-        self.flex_spi.invalidate_cache();
-        self.flex_spi.clear_ahb_rx_buffers();
 
         Ok(())
     }
@@ -292,7 +295,7 @@ impl<'a> FlexSpiNorFlash<'a> {
         self.flex_spi.clear_rx_fifo();
         unsafe {
             self.flex_spi
-                .start_command_sequence(CommandSequence {
+                .configure_command_sequence(CommandSequence {
                     start: sequence::READ_STATUS_XPI,
                     count: 1,
                     address: 0,
@@ -302,11 +305,12 @@ impl<'a> FlexSpiNorFlash<'a> {
                 .unwrap_or_else(|_: InvalidCommandSequence| {
                     panic!("FlexSPI driver reported invalid command sequence for hard-coded read status (XPI) sequence")
                 });
+            self.flex_spi
+                .trigger_command_and_wait()
+                .map_err(ReadError::WaitFinish)?;
         }
 
-        self.flex_spi.wait_command_done().map_err(ReadError::WaitFinish)?;
-
-        let mut buffer = 0xDEADBEEFu32.to_ne_bytes();
+        let mut buffer = [0; 4];
         let read = self.flex_spi.drain_rx_fifo(&mut buffer);
 
         if read != buffer.len() {
@@ -326,7 +330,7 @@ impl<'a> FlexSpiNorFlash<'a> {
     fn set_write_enable(&mut self) -> Result<(), super::peripheral::WaitCommandError> {
         unsafe {
             self.flex_spi
-                .start_command_sequence(CommandSequence {
+                .configure_command_sequence(CommandSequence {
                     start: sequence::WRITE_ENABLE_XPI,
                     count: 1,
                     address: 0,
@@ -336,8 +340,8 @@ impl<'a> FlexSpiNorFlash<'a> {
                 .unwrap_or_else(|_: InvalidCommandSequence| {
                     panic!("FlexSPI driver reported invalid command sequence for hard-coded write enable sequence")
                 });
+            self.flex_spi.trigger_command_and_wait()
         }
-        self.flex_spi.wait_command_done()
     }
 
     /// Set the write-enable latch and verify that it is enabled.
@@ -365,16 +369,6 @@ impl<'a> FlexSpiNorFlash<'a> {
         }
 
         Err(WriteError::WriteEnableFailed)
-    }
-
-    /// Wait for a write to not be in progress.
-    fn wait_write_not_in_progress(&mut self) -> Result<(), WriteError> {
-        loop {
-            let status = self.read_status().map_err(WriteError::ReadStatus)?;
-            if !status.is_write_in_progress() {
-                return Ok(());
-            }
-        }
     }
 }
 
