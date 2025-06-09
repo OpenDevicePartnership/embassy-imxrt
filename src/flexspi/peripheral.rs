@@ -231,9 +231,9 @@ impl<'a> FlexSpi<'a> {
         let (stage, interrupts) = critical_section::with(|_| unsafe { self._trigger_command_and_wait_write() });
         self.check_and_clear_command_interrupts(interrupts).map_err(|e| {
             if stage == 0 {
-                super::nor_flash::WriteError::WaitFinish(e)
+                super::nor_flash::WriteError::Command(e.into())
             } else {
-                super::nor_flash::WriteError::ReadStatus(super::nor_flash::ReadError::WaitFinish(e))
+                super::nor_flash::WriteError::ReadStatus(super::nor_flash::ReadError::Command(e.into()))
             }
         })
     }
@@ -513,7 +513,7 @@ impl<'a> FlexSpi<'a> {
 ///
 /// Note that this struct does not encode an actual command to send to the flash.
 /// It points to pre-defined commands in the FlexSPI LUT (lookup table).
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct CommandSequence {
     /// The start index in the LUT of the sequence to execute.
@@ -543,7 +543,7 @@ pub struct CommandSequence {
 }
 
 /// Error that can occur while waiting for a command to complete or make progress.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum WaitCommandError {
     /// The arbiter went into idle state, but the command did not finish.
@@ -563,7 +563,7 @@ pub enum WaitCommandError {
 }
 
 /// The FlexSPI peripheral failed to execute a command.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct CommandFailed {
     /// The index of the sequence in the FlexSPI LUT that caused the error.
@@ -580,7 +580,7 @@ impl From<CommandFailed> for WaitCommandError {
 }
 
 /// Error code reported by the FlexSPI peripheral when it fails to execute a command sequence.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum CommandErrorCode {
@@ -659,7 +659,7 @@ impl CommandErrorCode {
 }
 
 /// Error that can occur while waiting for space in the TX FIFO.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum WaitTxReadyError {
     /// The command failed with an error.
@@ -676,7 +676,7 @@ impl From<WaitCommandError> for WaitTxReadyError {
 }
 
 /// Error executing a command sequence.
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct InvalidCommandSequence {
     /// The requested sequence start index.
