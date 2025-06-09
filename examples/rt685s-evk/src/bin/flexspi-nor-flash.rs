@@ -55,7 +55,7 @@ async fn do_main(p: &mut embassy_imxrt::Peripherals) -> Result<(), ()> {
     let mut button2 = gpio::Input::new(p.PIO0_10.reborrow(), gpio::Pull::None, gpio::Inverter::Disabled);
 
     // Create a new FlexSPI NOR flash driver.
-    // NOTE: This relies of the FlexSPI having been configured already by having a valid FCB in the flash memory.
+    // NOTE: This relies on the FlexSPI having been configured already by having a valid FCB in the flash memory.
     let mut flash = unsafe { FlexSpiNorFlash::new_unchecked(p.FLEXSPI.reborrow(), alignment) };
 
     // Read last sector.
