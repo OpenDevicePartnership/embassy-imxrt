@@ -10,7 +10,7 @@ use crate::Peri;
 /// It only changes some settings for the IP command execution.
 /// It should not interfere with AHB access to the flash device.
 ///
-/// It can also probe the the flash memory to automatically detect the correct [`FlashAlignment`].
+/// It can also probe the flash memory to automatically detect the correct [`FlashAlignment`].
 /// For this to work, the flash memory must have a valid FlexSPI Configuration Block (FCB) at address 0x400.
 /// See the documentation of the ROM bootloader in the RT6xx User Manual for more details about the FCB.
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -211,6 +211,8 @@ impl<'a> FlexSpiNorFlash<'a> {
     ///
     /// # Safety
     /// You may not erase flash memory holding code of the current program.
+    /// This means this function is never sound to call when executing your program
+    /// directly from flash.
     ///
     /// If your program also performs memory mapped access to the erased region,
     /// you must invalidate the FlexSPI cache and the AHB RX buffer.
@@ -237,7 +239,7 @@ impl<'a> FlexSpiNorFlash<'a> {
     /// Perform a page program.
     ///
     /// The data to be written may not cross a page boundary.
-    /// You flash memory may impose more restrictions on programming.
+    /// Your flash memory may impose more restrictions on programming.
     /// Please refer to the datasheet of the flash memory for more details.
     ///
     /// NOTE: The address argument is a physical flash address, not a CPU memory address.
