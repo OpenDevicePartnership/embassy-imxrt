@@ -3,6 +3,49 @@
 use crate::peripherals::FLEXSPI;
 use crate::{pac, Peri};
 
+/// Constants used by inline assembly.
+#[cfg(target_arch = "arm")]
+mod arm {
+    /// The base address of the FlexSPI peripheral,
+    pub const FLEXSPI_BASE: u32 = 0x40134000;
+
+    /// The byte offset of the FlexSPI INTR register.
+    pub const FLEXSPI_INTR: u16 = 0x14;
+
+    /// The byte offset of the FlexSPI IPCMD register.
+    pub const FLEXSPI_IPCMD: u16 = 0xB0;
+
+    /// The byte offset of the FlexSPI IPCR0 register.
+    pub const FLEXSPI_IPCR0: u16 = 0xA0;
+
+    /// The byte offset of the FlexSPI IPCR1 register.
+    pub const FLEXSPI_IPCR1: u16 = 0xA4;
+
+    /// The byte offset of the FlexSPI IPRXFCR register.
+    pub const FLEXSPI_IPRXFCR: u16 = 0xB8;
+
+    /// The byte offset of the FlexSPI RFDR[0..32] registers.
+    pub const FLEXSPI_RFDR: u16 = 0x100;
+
+    /// The bitmask of the IPCMDDONE (command done) interrupt in the INTR register.
+    pub const IPCMDDONE: u32 = 1 << 0;
+
+    /// The bitmask of the IPCMDGE (grant timeout) interrupt in the INTR register.
+    pub const IPCMDGE: u32 = 1 << 1;
+
+    /// The bitmask of the IPCMDERR (command error) interrupt in the INTR register.
+    pub const IPCMDERR: u32 = 1 << 4;
+
+    /// The bitmask of the DATALEARNFAIL (data learn failed) interrupt in the INTR register.
+    pub const DATALEARNFAIL: u32 = 1 << 7;
+
+    /// The bitmask of the SEQTIMEOUT (sequence timeout) interrupt in the INTR register.
+    pub const SEQTIMEOUT: u32 = 1 << 11;
+}
+
+#[cfg(target_arch = "arm")]
+use self::arm::*;
+
 /// Low level FlexSPI interface.
 pub struct FlexSpi<'a> {
     /// The FlexSPI peripheral.
@@ -11,39 +54,6 @@ pub struct FlexSpi<'a> {
         reason = "This field represents unique access to the FlexSPI peripheral, but we don't actually need the object"
     )]
     flex_spi: Peri<'a, FLEXSPI>,
-}
-
-/// A command sequence to run on the FlexSPI peripheral.
-///
-/// Note that this struct does not encode an actual command to send to the flash.
-/// It points to pre-defined commands in the FlexSPI LUT (lookup table).
-#[derive(Copy, Clone)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct CommandSequence {
-    /// The start index in the LUT of the sequence to execute.
-    pub start: u8,
-
-    /// The number of sequences to run.
-    ///
-    /// If more than one, sequences will be run from the LUT in order, starting at [`Self::sequence_start`].
-    /// A value of 0 is interpreted the same as 1: run a single sequence.
-    pub count: u8,
-
-    /// The physical flash address for the command sequence.
-    ///
-    /// This is used by the `RADDR` and `CADDR` instructions.
-    pub address: u32,
-
-    /// The data size for the instruction.
-    ///
-    /// This is used by the `DATSZ` instruction.
-    pub data_size: u16,
-
-    /// Enable parallel mode for this command sequence.
-    ///
-    /// In parallel mode, instructions are sent to two connected flash memories.
-    /// Refer to the FlexSPI documentation in the RT6xx user manual for details about parallel mode.
-    pub parallel: bool,
 }
 
 impl<'a> FlexSpi<'a> {
@@ -147,7 +157,7 @@ impl<'a> FlexSpi<'a> {
     /// Additionally, no IP command may currently be running on the FlexSPI peripheral.
     ///
     /// You must also ensure that the .data section is executable before calling this function.
-    pub unsafe fn trigger_command_and_wait(&mut self) -> Result<(), WaitCommandError> {
+    pub unsafe fn trigger_command_and_wait(&mut self) -> Result<pac::flexspi::intr::R, WaitCommandError> {
         let interrupts = critical_section::with(|_| unsafe { self._trigger_command_and_wait() });
         self.check_and_clear_command_interrupts(interrupts)
     }
@@ -159,7 +169,6 @@ impl<'a> FlexSpi<'a> {
     #[link_section = ".data"]
     #[inline(never)]
     unsafe fn _trigger_command_and_wait(&mut self) -> pac::flexspi::intr::R {
-        // unsafe fn _trigger_command_and_wait(&mut self, extra_delay: u32) -> pac::flexspi::intr::R {
         #[cfg(not(target_arch = "arm"))]
         {
             // Safety: pac::flexspi::intr::R is a transparent wrapper around a u32.
@@ -167,58 +176,25 @@ impl<'a> FlexSpi<'a> {
         }
         #[cfg(target_arch = "arm")]
         {
-            const FLEXSPI_BASE: u32 = 0x40134000;
-            const FLEXSPI_INTR: u32 = FLEXSPI_BASE + 0x14;
-            const FLEXSPI_IPCMD: u32 = FLEXSPI_BASE + 0xB0;
-
-            const IPCMDDONE: u32 = 1 << 0;
-            const IPCMDGE: u32 = 1 << 1;
-            const IPCMDERR: u32 = 1 << 4;
-            const DATALEARNFAIL: u32 = 1 << 7;
-            const SEQTIMEOUT: u32 = 1 << 11;
-
             let mut interrupts: u32;
 
             unsafe {
                 core::arch::asm! {
                     // Trigger command execution.
                     "mov {value}, 1",
-                    "mov {address}, {FLEXSPI_IPCMD_L}",
-                    "movt {address}, {FLEXSPI_IPCMD_H}",
-                    "str {value}, [{address}]",
+                    "str {value}, [{flexspi_base}, #{FLEXSPI_IPCMD}]",
 
                     // Wait for the command to complete.
-                    "mov {address}, {FLEXSPI_INTR_L}",
-                    "movt {address}, {FLEXSPI_INTR_H}",
                     "2:",
-                    "ldr {value}, [{address}]",
-                    "tst {value}, {intr_mask}",
-                    "beq 2b",
+                        "ldr {value}, [{flexspi_base}, #{FLEXSPI_INTR}]",
+                        "tst {value}, {intr_mask}",
+                        "beq 2b",
 
-                    // Execute the extra delay (10 cycles per iteration).
-                    // "tst {delay},{delay}",
-                    // "beq 3f",
-                    // "2:",
-                    // "nop",
-                    // "nop",
-                    // "nop",
-                    // "nop",
-                    // "nop",
-                    // "nop",
-                    // "nop",
-                    // "nop",
-                    // "decs {delay}",
-                    // "bnz 2b",
-                    // "3:",
-
-                    FLEXSPI_IPCMD_L = const FLEXSPI_IPCMD & 0xFFFF,
-                    FLEXSPI_IPCMD_H = const FLEXSPI_IPCMD >> 16 & 0xFFFF,
-                    FLEXSPI_INTR_L = const FLEXSPI_INTR & 0xFFFF,
-                    FLEXSPI_INTR_H = const FLEXSPI_INTR >> 16 & 0xFFFF,
+                    flexspi_base = in(reg) FLEXSPI_BASE,
+                    FLEXSPI_IPCMD = const FLEXSPI_IPCMD,
+                    FLEXSPI_INTR = const FLEXSPI_INTR,
                     intr_mask = in(reg) IPCMDDONE | IPCMDGE | IPCMDERR | DATALEARNFAIL | SEQTIMEOUT,
-                    // delay = in(reg) extra_delay,
                     value = out(reg) interrupts,
-                    address = out(reg) _,
                     options(nostack),
                 }
             }
@@ -240,6 +216,8 @@ impl<'a> FlexSpi<'a> {
     /// Interrupts are disabled while waiting for the command to complete,
     /// to prevent interrupt handlers located in FLASH memory from executing.
     ///
+    /// NOTE: This function assumes that LUT sequence 2 is used to read the status register of the flash memory.
+    ///
     /// # Safety
     /// The command could potentially change the code of the currently running program.
     /// It is up to the caller to ensure that the command does not cause any undefined behaviour.
@@ -247,9 +225,17 @@ impl<'a> FlexSpi<'a> {
     /// Additionally, no IP command may currently be running on the FlexSPI peripheral.
     ///
     /// You must also ensure that the .data section is executable before calling this function.
-    pub unsafe fn trigger_command_and_wait_write(&mut self) -> Result<(), WaitCommandError> {
-        let interrupts = critical_section::with(|_| unsafe { self._trigger_command_and_wait_write() });
-        self.check_and_clear_command_interrupts(interrupts)
+    pub unsafe fn trigger_command_and_wait_write(
+        &mut self,
+    ) -> Result<pac::flexspi::intr::R, super::nor_flash::WriteError> {
+        let (stage, interrupts) = critical_section::with(|_| unsafe { self._trigger_command_and_wait_write() });
+        self.check_and_clear_command_interrupts(interrupts).map_err(|e| {
+            if stage == 0 {
+                super::nor_flash::WriteError::WaitFinish(e)
+            } else {
+                super::nor_flash::WriteError::ReadStatus(super::nor_flash::ReadError::WaitFinish(e))
+            }
+        })
     }
 
     /// Implementation details for [`Self::trigger_command_and_wait_write()`].
@@ -258,28 +244,15 @@ impl<'a> FlexSpi<'a> {
     /// to ensure that no instructions need to be fetched from FLASH while we keep the FlexSPI peripheral busy.
     #[link_section = ".data"]
     #[inline(never)]
-    unsafe fn _trigger_command_and_wait_write(&mut self) -> pac::flexspi::intr::R {
+    unsafe fn _trigger_command_and_wait_write(&mut self) -> (u32, pac::flexspi::intr::R) {
         #[cfg(not(target_arch = "arm"))]
         {
             // Safety: pac::flexspi::intr::R is a transparent wrapper around a u32.
             unsafe { core::mem::transmute(0u32) }
         }
-        #[cfg(target_arch = "arm")]
         {
-            const FLEXSPI_BASE: u32 = 0x40134000;
-            const FLEXSPI_INTR: u8 = 0x14;
-            const FLEXSPI_IPCMD: u8 = 0xB0;
-            const FLEXSPI_IPCR0: u8 = 0xA0;
-            const FLEXSPI_IPCR1: u8 = 0xA4;
-            const FLEXSPI_IPRXFCR: u8 = 0xB8;
-
-            const IPCMDDONE: u32 = 1 << 0;
-            const IPCMDGE: u32 = 1 << 1;
-            const IPCMDERR: u32 = 1 << 4;
-            const DATALEARNFAIL: u32 = 1 << 7;
-            const SEQTIMEOUT: u32 = 1 << 11;
-
             let mut interrupts: u32;
+            let mut stage: u32;
 
             unsafe {
                 core::arch::asm! {
@@ -289,57 +262,85 @@ impl<'a> FlexSpi<'a> {
 
                     // Wait for the command to complete.
                     "2:",
-                    "ldr {interrupts}, [{flexspi_base}, #{FLEXSPI_INTR}]",
-                    "tst {interrupts}, {intr_mask}",
-                    "beq 2b",
+                        "ldr {interrupts}, [{flexspi_base}, #{FLEXSPI_INTR}]",
 
-                    // TODO: check for errors and skip reading status
+                        // Test for errors and exit with stage = 0.
+                        "tst {interrupts}, {intr_mask_error}",
+                        "bne 98f",
+
+                        // Check if the command is done.
+                        "tst {interrupts}, #{INTR_MASK_DONE}", // test for command done
+                        "beq 2b",
 
                     // Configure READ_STATUS_XPI command
+                    // TODO: Make sequence configurable?
                     "mov {value}, #0", // IPCR0 address
                     "str {value}, [{flexspi_base}, #{FLEXSPI_IPCR0}]",
-                    "mov {value}, #4", // IPCR1 data size
-                    "movt {value}, #2", // IPCR1 sequence index
+                    "mov {value}, #{READ_STATUS_CR1_L}",
+                    "movt {value}, #{READ_STATUS_CR1_H}",
                     "str {value}, [{flexspi_base}, #{FLEXSPI_IPCR1}]",
 
                     // Clear RX FIFO
                     "3:",
-                    "ldr {value}, [{flexspi_base}, #{FLEXSPI_IPRXFCR}]",
-                    "orr {value}, 1",
-                    "str {value}, [{flexspi_base}, #{FLEXSPI_IPRXFCR}]",
+                        "ldr {value}, [{flexspi_base}, #{FLEXSPI_IPRXFCR}]",
+                        "orr {value}, 1",
+                        "str {value}, [{flexspi_base}, #{FLEXSPI_IPRXFCR}]",
 
-                    // Trigger command execution.
+                        // Clear CMDDONE interrupt flag and trigger command execution.
+                        // No need to clear error flags, because we would have exited on errors.
+                        "mov {value}, #{INTR_MASK_DONE}",
+                        "str {value}, [{flexspi_base}, #{FLEXSPI_INTR}]",
+                        "mov {value}, #1",
+                        "str {value}, [{flexspi_base}, #{FLEXSPI_IPCMD}]",
+
+                        // Wait for the command to complete.
+                        "2:",
+                            "ldr {interrupts}, [{flexspi_base}, #{FLEXSPI_INTR}]",
+
+                            // Test for errors, and exit with correct stage number.
+                            "tst {interrupts}, {intr_mask_error}",
+                            "bne 99f",
+                            "tst {interrupts}, #{INTR_MASK_DONE}", // test for command done
+                            "beq 2b",
+
+                        // Read the flash status.
+                        "ldr {value}, [{flexspi_base}, #{FLEXSPI_RFDR}]",
+                        "tst {value}, #{STATUS_WRITE_IN_PROGRESS}", // test the write-in-progress bit
+                        "bne 3b",
+
+                    "mov {value}, #2",
+                    "b 100f",
+                    "98:",
+                    "mov {value}, #0",
+                    "b 100f",
+                    "99:",
                     "mov {value}, #1",
-                    "str {value}, [{flexspi_base}, #{FLEXSPI_IPCMD}]",
 
-                    // Wait for the command to complete.
-                    "2:",
-                    "ldr {value}, [{flexspi_base}, #{FLEXSPI_INTR}]",
-                    "tst {value}, {intr_mask}",
-                    "beq 2b",
+                    // Exit
+                    "100:",
 
-                    // Read the flash status.
-                    "ldr {value}, [{flexspi_base}, #{FLEXSPI_RFDR}]",
-                    "tst {value}, #2", // test the write-in-progress bit
-                    "bne 3b",
-
-                    FLEXSPI_INTR = const 0x14,
-                    FLEXSPI_IPCMD = const 0xB0,
+                    flexspi_base = in(reg) FLEXSPI_BASE,
+                    FLEXSPI_INTR = const FLEXSPI_INTR,
+                    FLEXSPI_IPCMD = const FLEXSPI_IPCMD,
                     FLEXSPI_IPRXFCR = const FLEXSPI_IPRXFCR,
-                    FLEXSPI_IPCR0 = const 0xA0,
-                    FLEXSPI_IPCR1 = const 0xA4,
-                    FLEXSPI_RFDR = const 0x100,
+                    FLEXSPI_IPCR0 = const FLEXSPI_IPCR0,
+                    FLEXSPI_IPCR1 = const FLEXSPI_IPCR1,
+                    FLEXSPI_RFDR = const FLEXSPI_RFDR,
 
-                    intr_mask = in(reg) IPCMDDONE | IPCMDGE | IPCMDERR | DATALEARNFAIL | SEQTIMEOUT,
-                    flexspi_base = in(reg) 0x40134000,
+                    READ_STATUS_CR1_L = const 4, // data size
+                    READ_STATUS_CR1_H = const 2, // sequence index
+                    STATUS_WRITE_IN_PROGRESS = const 2,
+
+                    INTR_MASK_DONE = const IPCMDDONE,
+                    intr_mask_error = in(reg) IPCMDGE | IPCMDERR | DATALEARNFAIL | SEQTIMEOUT,
                     interrupts = out(reg) interrupts,
-                    value = out(reg) _,
+                    value = out(reg) stage,
                     options(nostack),
                 }
             }
 
             // Safety: pac::flexspi::intr::R is a transparent wrapper around a u32.
-            unsafe { core::mem::transmute(interrupts) }
+            unsafe { (stage, core::mem::transmute(interrupts)) }
         }
     }
 
@@ -417,24 +418,11 @@ impl<'a> FlexSpi<'a> {
         // Limit buffer to fifo length.
         let watermark = self.get_tx_fifo_watermark_bytes();
         let copy_len = buffer.len().min(watermark);
-        let buffer = &buffer[..copy_len];
 
         let flex_spi = unsafe { pac::Flexspi::steal() };
 
-        let mut words = buffer.chunks_exact(4);
-        // Write whole u32 words,
-        for (i, word) in (&mut words).enumerate() {
-            let word = u32::from_ne_bytes([word[0], word[1], word[2], word[3]]);
-            flex_spi.tfdr(i).write(|w| unsafe { w.bits(word) });
-        }
-
-        // Write the remainder.
-        let remainder = words.remainder();
-        if remainder.len() > 0 {
-            let mut word = [0x00; 4];
-            word[..remainder.len()].copy_from_slice(remainder);
-            let word = u32::from_ne_bytes(word);
-            flex_spi.tfdr(buffer.len() / 4).write(|w| unsafe { w.bits(word) });
+        unsafe {
+            read_u8_write_u32_volatile(&buffer[..copy_len], flex_spi.tfdr(0).as_ptr().cast());
         }
 
         // Clear the TX watermark empty interrupt to transmit the data.
@@ -456,17 +444,14 @@ impl<'a> FlexSpi<'a> {
     pub fn drain_rx_fifo(&mut self, buffer: &mut [u8]) -> usize {
         let flex_spi = unsafe { pac::Flexspi::steal() };
 
-        // Get the fill level, but limit it to the watermark level.
+        // Get number of bytes to pop.
         let watermark = self.get_rx_fifo_watermark_bytes();
         let fill_level = self.get_rx_fill_level_bytes();
-
-        // Truncate buffer to available FIFO size.
         let copy_len = buffer.len().min(fill_level).min(watermark);
-        let buffer = &mut buffer[..copy_len];
 
         // Copy data from TX FIFO to buffer.
         unsafe {
-            read_u32_volatile_write_u8(flex_spi.rfdr(0).as_ptr().cast(), buffer);
+            read_u32_volatile_write_u8(flex_spi.rfdr(0).as_ptr().cast(), &mut buffer[..copy_len]);
         }
 
         // Pop watermark data from the FIFO.
@@ -476,55 +461,13 @@ impl<'a> FlexSpi<'a> {
         copy_len
     }
 
-    /// Discard the AHB RX buffer.
-    ///
-    /// Warning! Currently not implemented.
-    pub fn clear_ahb_rx_buffers(&mut self) {
-        // TODO: Uhhh... how?
-        // https://community.nxp.com/t5/i-MX-RT-Crossover-MCUs/RT600-685-Invalidating-AHB-FlexSPI-Cache-RX-Buffers-after/m-p/1487133
-    }
-
-    /// Invalidate the complete memory cache.
-    pub fn invalidate_cache(&mut self) {
-        let cache = unsafe { pac::Cache64::steal() };
-        loop {
-            while cache.ccr().read().go().bit() {
-                // Wait for the cache controller to be idle.
-            }
-
-            // Execute the command in a critical section to ensure we do not race with other users of the cache.
-            // (As long as they also use a critical section this way.)
-            let command_started = critical_section::with(|_| {
-                if cache.ccr().read().go().bit() {
-                    return false;
-                }
-                // Invalidate the whole cache.
-                cache.ccr().modify(|_, w| {
-                    w.invw0().set_bit();
-                    w.pushw0().clear_bit();
-                    w.invw1().set_bit();
-                    w.pushw1().clear_bit();
-                    w.go().set_bit();
-                    w
-                });
-                true
-            });
-            if command_started {
-                break;
-            }
-        }
-        while cache.ccr().read().go().bit() {
-            // Wait for the cache controller to be idle.
-        }
-    }
-
     /// Check the interrupt register for command finished/error bits, and clear them.
     ///
     /// Performs one read of the interrupt register and clears only the set bits that indicate the command failed.
     fn check_and_clear_command_interrupts(
         &mut self,
         interrupts: pac::flexspi::intr::R,
-    ) -> Result<(), WaitCommandError> {
+    ) -> Result<pac::flexspi::intr::R, WaitCommandError> {
         let flex_spi = unsafe { pac::Flexspi::steal() };
         if interrupts.ipcmderr().bit() {
             // If the cmderr interrupt is set, read status1 before clearing the interrupt.
@@ -546,7 +489,7 @@ impl<'a> FlexSpi<'a> {
             Err(WaitCommandError::GrantTimeout)
         } else {
             self.clear_command_finished_bits(&interrupts);
-            Ok(())
+            Ok(interrupts)
         }
     }
 
@@ -564,6 +507,39 @@ impl<'a> FlexSpi<'a> {
             w
         });
     }
+}
+
+/// A command sequence to run on the FlexSPI peripheral.
+///
+/// Note that this struct does not encode an actual command to send to the flash.
+/// It points to pre-defined commands in the FlexSPI LUT (lookup table).
+#[derive(Copy, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct CommandSequence {
+    /// The start index in the LUT of the sequence to execute.
+    pub start: u8,
+
+    /// The number of sequences to run.
+    ///
+    /// If more than one, sequences will be run from the LUT in order, starting at [`Self::sequence_start`].
+    /// A value of 0 is interpreted the same as 1: run a single sequence.
+    pub count: u8,
+
+    /// The physical flash address for the command sequence.
+    ///
+    /// This is used by the `RADDR` and `CADDR` instructions.
+    pub address: u32,
+
+    /// The data size for the instruction.
+    ///
+    /// This is used by the `DATSZ` instruction.
+    pub data_size: u16,
+
+    /// Enable parallel mode for this command sequence.
+    ///
+    /// In parallel mode, instructions are sent to two connected flash memories.
+    /// Refer to the FlexSPI documentation in the RT6xx user manual for details about parallel mode.
+    pub parallel: bool,
 }
 
 /// Error that can occur while waiting for a command to complete or make progress.
@@ -712,7 +688,7 @@ pub struct InvalidCommandSequence {
 
 /// Copy bytes from `source` to `dest`.
 ///
-/// The data is read from the source pointer as bytes,
+/// The data is read from the source as bytes,
 /// and written to the destination as [`u32`] words with a volatile write.
 ///
 /// If the number of bytes is not a multiple of 4,
