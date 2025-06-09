@@ -80,10 +80,6 @@ impl<'a> FlexSpiNorFlash<'a> {
         let flex_spi = FlexSpi::new(flex_spi);
         let mut me = Self { flex_spi, alignment };
 
-        // Set the RX fifo to the maximum size.
-        me.flex_spi.set_rx_fifo_watermark_u64_words(16);
-        me.flex_spi.set_tx_fifo_watermark_u64_words(16);
-
         // TODO: Validate FCB header and version number.
         // TODO: Report error instead of panicking.
         let mut fcb_header = [0; 8];
@@ -154,6 +150,12 @@ impl<'a> FlexSpiNorFlash<'a> {
     /// Erase a sector of flash memory.
     ///
     /// NOTE: The address argument is a physical flash address, not a CPU memory address.
+    ///
+    /// # Safety
+    /// You may not erase flash memory holding code of the current program.
+    ///
+    /// If your program also performs memory mapped access to the erased region,
+    /// you must invalidate the FlexSPI cache and the AHB RX buffer.
     pub unsafe fn erase_sector(&mut self, address: u32) -> Result<(), WriteError> {
         // TODO: verify address is aligned to a sector.
         self.set_and_verify_write_enable()?;
@@ -170,21 +172,20 @@ impl<'a> FlexSpiNorFlash<'a> {
                 .unwrap_or_else(|_: InvalidCommandSequence| {
                     panic!("FlexSPI driver reported invalid command sequence for hard-coded erase sector sequence")
                 });
-            self.flex_spi
-                .trigger_command_and_wait_write()
-                .map_err(WriteError::WaitFinish)?;
+            self.flex_spi.trigger_command_and_wait_write()?;
         }
-
-        self.flex_spi.wait_command_done().map_err(WriteError::WaitFinish)?;
-        self.wait_write_not_in_progress()?;
-        self.flex_spi.invalidate_cache();
-        self.flex_spi.clear_ahb_rx_buffers();
         Ok(())
     }
 
     /// Erase a block of flash memory.
     ///
     /// NOTE: The address argument is a physical flash address, not a CPU memory address.
+    ///
+    /// # Safety
+    /// You may not erase flash memory holding code of the current program.
+    ///
+    /// If your program also performs memory mapped access to the erased region,
+    /// you must invalidate the FlexSPI cache and the AHB RX buffer.
     pub unsafe fn erase_block(&mut self, address: u32) -> Result<(), WriteError> {
         // TODO: verify address is aligned to a block.
         self.set_and_verify_write_enable()?;
@@ -201,17 +202,18 @@ impl<'a> FlexSpiNorFlash<'a> {
                 .unwrap_or_else(|_: InvalidCommandSequence| {
                     panic!("FlexSPI driver reported invalid command sequence for hard-coded erase sector sequence")
                 });
-            self.flex_spi
-                .trigger_command_and_wait_write()
-                .map_err(WriteError::WaitFinish)?;
+            self.flex_spi.trigger_command_and_wait_write()?;
         }
-
-        self.flex_spi.invalidate_cache();
-        self.flex_spi.clear_ahb_rx_buffers();
         Ok(())
     }
 
     /// Erase the whole flash chip.
+    ///
+    /// # Safety
+    /// You may not erase flash memory holding code of the current program.
+    ///
+    /// If your program also performs memory mapped access to the erased region,
+    /// you must invalidate the FlexSPI cache and the AHB RX buffer.
     pub unsafe fn erase_chip(&mut self) -> Result<(), WriteError> {
         self.set_and_verify_write_enable()?;
 
@@ -227,14 +229,8 @@ impl<'a> FlexSpiNorFlash<'a> {
                 .unwrap_or_else(|_: InvalidCommandSequence| {
                     panic!("FlexSPI driver reported invalid command sequence for hard-coded erase sector sequence")
                 });
-            self.flex_spi
-                .trigger_command_and_wait_write()
-                .map_err(WriteError::WaitFinish)?;
+            self.flex_spi.trigger_command_and_wait_write()?;
         }
-
-        self.flex_spi.invalidate_cache();
-        self.flex_spi.clear_ahb_rx_buffers();
-        // self.wait_write_not_in_progress()?;
         Ok(())
     }
 
@@ -245,6 +241,12 @@ impl<'a> FlexSpiNorFlash<'a> {
     /// Please refer to the datasheet of the flash memory for more details.
     ///
     /// NOTE: The address argument is a physical flash address, not a CPU memory address.
+    ///
+    /// # Safety
+    /// You may not modify flash memory holding code of the current program.
+    ///
+    /// If your program also performs memory mapped access to the erased region,
+    /// you must invalidate the FlexSPI cache and the AHB RX buffer.
     pub unsafe fn page_program(&mut self, address: u32, data: &[u8]) -> Result<(), PageProgramError> {
         // Check if the write fully falls into one page.
         WriteCrossesPageBoundary::check(address, data.len() as u32, self.alignment.page_size)?;
@@ -273,15 +275,7 @@ impl<'a> FlexSpiNorFlash<'a> {
                 .unwrap_or_else(|_: InvalidCommandSequence| {
                     panic!("FlexSPI driver reported invalid command sequence for hard-coded page program sequence")
                 });
-            self.flex_spi
-                .trigger_command_and_wait_write()
-                .map_err(WriteError::WaitFinish)?;
-            // self.wait_write_not_in_progress()?;
-
-            // TODO: Part of the data may have been written earlier even if we exit with an error.
-            // So we should consider clearing the cache and buffers even in case of errors.
-            self.flex_spi.invalidate_cache();
-            self.flex_spi.clear_ahb_rx_buffers();
+            self.flex_spi.trigger_command_and_wait_write()?;
         }
 
         Ok(())
@@ -292,8 +286,18 @@ impl<'a> FlexSpiNorFlash<'a> {
     /// Note that you normally do not need to call this yourself.
     /// The status of the flash memory is checked before write operations automatically.
     pub fn read_status(&mut self) -> Result<Status, ReadError> {
+        self.flex_spi.set_rx_fifo_watermark_u64_words(16);
         self.flex_spi.clear_rx_fifo();
+
         unsafe {
+            // let peri = mimxrt685s_pac::Flexspi::steal();
+            // let intr = peri.intr().read();
+            // if intr.ipcmddone().bit() || intr.ipcmdge().bit() || intr.ipcmderr().bit() || intr.datalearnfail().bit() || intr.seqtimeout().bit() {
+            //     panic!("intr: 0x{:08X}", intr.bits());
+            // }
+            // if self.flex_spi.get_rx_fill_level_bytes() > 0 {
+            //     panic!("rx fifo not empty");
+            // }
             self.flex_spi
                 .configure_command_sequence(CommandSequence {
                     start: sequence::READ_STATUS_XPI,
@@ -307,8 +311,8 @@ impl<'a> FlexSpiNorFlash<'a> {
                 });
             self.flex_spi
                 .trigger_command_and_wait()
-                .map_err(ReadError::WaitFinish)?;
-        }
+                .map_err(ReadError::WaitFinish)?
+        };
 
         let mut buffer = [0; 4];
         let read = self.flex_spi.drain_rx_fifo(&mut buffer);
@@ -340,8 +344,9 @@ impl<'a> FlexSpiNorFlash<'a> {
                 .unwrap_or_else(|_: InvalidCommandSequence| {
                     panic!("FlexSPI driver reported invalid command sequence for hard-coded write enable sequence")
                 });
-            self.flex_spi.trigger_command_and_wait()
+            self.flex_spi.trigger_command_and_wait()?;
         }
+        Ok(())
     }
 
     /// Set the write-enable latch and verify that it is enabled.
