@@ -93,7 +93,17 @@ macro_rules! bind_interrupts {
             #[no_mangle]
             unsafe extern "C" fn $irq() {
                 $(
-                    <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
+                    // Note: Cannot extract the handler call due to trace_interrupt! requiring
+                    // the call to be inside its block syntax for proper instrumentation
+                    #[cfg(feature = "systemview-tracing")]
+                    systemview_tracing::trace_interrupt! {
+                        <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
+                    }
+
+                    #[cfg(not(feature = "systemview-tracing"))]
+                    {
+                        <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
+                    }
                 )*
             }
 

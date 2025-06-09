@@ -963,8 +963,6 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
     }
 
     fn set_duty(&mut self, _: (), duty: Self::Duty) {
-        // When set duty cycle is called on an already running PWM, output could stay low for a PWM period
-        // before new duty cycle is updated
         let scaled = duty.as_scaled(self.count_max);
         let reg = self.info.regs;
 
@@ -972,8 +970,10 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
         // PWM output is set to high when timer count reaches match register value
         // For active high PWM, set match register such that output is high for PWM cycle length*dutycycle
         reg.mr(self.info.channel).write(|w|
-            //SAFETY: No safety impact as we are writing match register here
-            unsafe { w.match_().bits(self.count_max - scaled)});
+            // SAFETY: No safety impact as we are writing match register here
+            // FieldWriter::bits will clear field first, than write new value, cause PWM stay low for a period,
+            // match_ is bits[0..31], so we can use REG::bits to workaround the problem. 
+            unsafe { w.bits(self.count_max - scaled)});
     }
 
     fn set_period<P>(&mut self, period: P)
