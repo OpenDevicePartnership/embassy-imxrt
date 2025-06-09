@@ -125,12 +125,10 @@ impl<'a> FlexSpiNorFlash<'a> {
                         data_size: buffer.len() as u16,
                         parallel: false,
                     })
-                    .unwrap_or_else(|_: InvalidCommandSequence| {
-                        panic!("FlexSPI driver reported invalid command sequence for hard-coded read sequence")
-                    });
+                    .map_err(|e| ReadError::Command(e.into()))?;
                 self.flex_spi
                     .trigger_command_and_wait()
-                    .map_err(ReadError::WaitFinish)?;
+                    .map_err(|e| ReadError::Command(e.into()))?;
             }
 
             // Drain the RX queue until the read buffer is full.
@@ -169,9 +167,7 @@ impl<'a> FlexSpiNorFlash<'a> {
                     data_size: 0,
                     parallel: false,
                 })
-                .unwrap_or_else(|_: InvalidCommandSequence| {
-                    panic!("FlexSPI driver reported invalid command sequence for hard-coded erase sector sequence")
-                });
+                .map_err(|e| WriteError::Command(e.into()))?;
             self.flex_spi.trigger_command_and_wait_write()?;
         }
         Ok(())
@@ -199,9 +195,7 @@ impl<'a> FlexSpiNorFlash<'a> {
                     data_size: 0,
                     parallel: false,
                 })
-                .unwrap_or_else(|_: InvalidCommandSequence| {
-                    panic!("FlexSPI driver reported invalid command sequence for hard-coded erase sector sequence")
-                });
+                .map_err(|e| WriteError::Command(e.into()))?;
             self.flex_spi.trigger_command_and_wait_write()?;
         }
         Ok(())
@@ -228,9 +222,7 @@ impl<'a> FlexSpiNorFlash<'a> {
                     data_size: 0,
                     parallel: false,
                 })
-                .unwrap_or_else(|_: InvalidCommandSequence| {
-                    panic!("FlexSPI driver reported invalid command sequence for hard-coded erase sector sequence")
-                });
+                .map_err(|e| WriteError::Command(e.into()))?;
             self.flex_spi.trigger_command_and_wait_write()?;
         }
         Ok(())
@@ -274,9 +266,7 @@ impl<'a> FlexSpiNorFlash<'a> {
                     data_size: data.len() as u16,
                     parallel: false,
                 })
-                .unwrap_or_else(|_: InvalidCommandSequence| {
-                    panic!("FlexSPI driver reported invalid command sequence for hard-coded page program sequence")
-                });
+                .map_err(|e| WriteError::Command(e.into()))?;
             self.flex_spi.trigger_command_and_wait_write()?;
         }
 
@@ -308,12 +298,10 @@ impl<'a> FlexSpiNorFlash<'a> {
                     data_size: 4,
                     parallel: false,
                 })
-                .unwrap_or_else(|_: InvalidCommandSequence| {
-                    panic!("FlexSPI driver reported invalid command sequence for hard-coded read status (XPI) sequence")
-                });
+                .map_err(|e| ReadError::Command(e.into()))?;
             self.flex_spi
                 .trigger_command_and_wait()
-                .map_err(ReadError::WaitFinish)?
+                .map_err(|e| ReadError::Command(e.into()))?;
         };
 
         let mut buffer = [0; 4];
@@ -333,19 +321,15 @@ impl<'a> FlexSpiNorFlash<'a> {
     }
 
     /// Set the write enable latch without verifying that it is actually enabled.
-    fn set_write_enable(&mut self) -> Result<(), super::peripheral::WaitCommandError> {
+    fn set_write_enable(&mut self) -> Result<(), CommandError> {
         unsafe {
-            self.flex_spi
-                .configure_command_sequence(CommandSequence {
-                    start: sequence::WRITE_ENABLE_XPI,
-                    count: 1,
-                    address: 0,
-                    data_size: 0,
-                    parallel: false,
-                })
-                .unwrap_or_else(|_: InvalidCommandSequence| {
-                    panic!("FlexSPI driver reported invalid command sequence for hard-coded write enable sequence")
-                });
+            self.flex_spi.configure_command_sequence(CommandSequence {
+                start: sequence::WRITE_ENABLE_XPI,
+                count: 1,
+                address: 0,
+                data_size: 0,
+                parallel: false,
+            })?;
             self.flex_spi.trigger_command_and_wait()?;
         }
         Ok(())
@@ -400,22 +384,42 @@ impl Status {
     }
 }
 
-/// Error that can occur when reading data from the flash memory.
-#[derive(Copy, Clone)]
+/// Error that can occur when executing a command.
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum ReadError {
-    /// An error occured while waiting for data in the RX buffer.
-    WaitRx(super::peripheral::WaitCommandError),
+pub enum CommandError {
+    /// The requested command sequence is out of bounds.
+    InvalidCommandSequence(InvalidCommandSequence),
 
     /// An error occured while waiting for the command the finish.
     WaitFinish(super::peripheral::WaitCommandError),
+}
+
+impl From<InvalidCommandSequence> for CommandError {
+    fn from(value: InvalidCommandSequence) -> Self {
+        Self::InvalidCommandSequence(value)
+    }
+}
+
+impl From<super::peripheral::WaitCommandError> for CommandError {
+    fn from(value: super::peripheral::WaitCommandError) -> Self {
+        Self::WaitFinish(value)
+    }
+}
+
+/// Error that can occur when reading data from the flash memory.
+#[derive(Copy, Clone, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ReadError {
+    /// The command failed to execute.
+    Command(CommandError),
 
     /// The command finished, but we did not get the amount of data we expected.
     NotEnoughData(NotEnoughData),
 }
 
 /// We did not receive the amount of data we expected.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct NotEnoughData {
     /// The expected amount of data.
@@ -432,7 +436,7 @@ impl From<NotEnoughData> for ReadError {
 }
 
 /// Error that can occur when performing an erase or write operation.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum WriteError {
     /// Failed to read the flash memory status.
@@ -442,20 +446,17 @@ pub enum WriteError {
     WriteInProgress,
 
     /// Failed to set the write-enable latch.
-    SetWriteEnable(super::peripheral::WaitCommandError),
+    SetWriteEnable(CommandError),
 
     /// The write-enable latch did not actually engage.
     WriteEnableFailed,
 
-    /// An error occured while waiting for space in the TX buffer.
-    WaitTx(super::peripheral::WaitTxReadyError),
-
-    /// An error occured while waiting for the command to finish.
-    WaitFinish(super::peripheral::WaitCommandError),
+    /// The command failed to execute.
+    Command(CommandError),
 }
 
 /// Error that can occur during a page program operation.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum PageProgramError {
     /// The write operation would have crossed a page boundary.
@@ -466,7 +467,7 @@ pub enum PageProgramError {
 }
 
 /// A write operation would have crossed a page boundary.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct WriteCrossesPageBoundary {
     /// The start address of the write.
