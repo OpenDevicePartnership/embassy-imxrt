@@ -10,7 +10,7 @@ use itertools::Itertools;
 
 use super::{
     force_clear_remediation, wait_remediation_complete, Async, Blocking, Error, Info, Instance, InterruptHandler,
-    MasterDma, Mode, Result, SclPin, SdaPin, TransferError, I2C_REMEDIATION, I2C_WAKERS, REMEDIATON_MASTER_STOP,
+    MasterDma, Mode, Result, SclPin, SdaPin, TransferError, I2C_REMEDIATION, I2C_WAKERS, REMEDIATION_MASTER_STOP,
     TEN_BIT_PREFIX,
 };
 use crate::flexcomm::FlexcommRef;
@@ -1207,7 +1207,7 @@ impl Drop for StartStopGuard {
             } else {
                 // We are NOT pending, we need to ask the interrupt to send a stop the next
                 // time the engine is pending. We ensured that the interrupt is active above
-                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATON_MASTER_STOP, Ordering::AcqRel);
+                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATION_MASTER_STOP, Ordering::AcqRel);
             }
         })
     }

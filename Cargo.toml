@@ -108,6 +108,7 @@ embedded-hal-02 = { package = "embedded-hal", version = "0.2.6", features = [
 embedded-hal-1 = { package = "embedded-hal", version = "1.0" }
 embedded-hal-async = { version = "1.0" }
 embedded-hal-nb = { version = "1.0" }
+embedded-hal-i2c = { git = "https://github.com/tweedegolf/embedded-hal-i2c.git", branch = "main" }
 mimxrt600-fcb = "0.2.0"
 document-features = "0.2.7"
 paste = "1.0"
