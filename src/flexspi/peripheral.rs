@@ -74,20 +74,22 @@ impl<'a> FlexSpi<'a> {
     /// You must ensure that memory mapped flash access still behaves properly.
     /// The easiest way to do this is to only modify LUT sequences that are NOT used for memory mapped flash access.
     pub unsafe fn write_lut_sequence(&mut self, index: usize, data: [u32; 4]) {
-        let flexspi = pac::Flexspi::steal();
+        let flexspi = unsafe { pac::Flexspi::steal() };
 
         // Unlock the LUT.
-        flexspi.lutkey().modify(|_, w| w.key().bits(0x5AF05AF0));
+        unsafe { flexspi.lutkey().modify(|_, w| w.key().bits(0x5AF05AF0)) };
         flexspi.lutcr().write(|w| w.unlock().set_bit());
 
         // Write the LUT entries.
-        flexspi.lut(index * 4 + 0).write(|w| w.bits(data[0]));
-        flexspi.lut(index * 4 + 1).write(|w| w.bits(data[1]));
-        flexspi.lut(index * 4 + 2).write(|w| w.bits(data[2]));
-        flexspi.lut(index * 4 + 3).write(|w| w.bits(data[3]));
+        unsafe {
+            flexspi.lut(index * 4 + 0).write(|w| w.bits(data[0]));
+            flexspi.lut(index * 4 + 1).write(|w| w.bits(data[1]));
+            flexspi.lut(index * 4 + 2).write(|w| w.bits(data[2]));
+            flexspi.lut(index * 4 + 3).write(|w| w.bits(data[3]));
+        }
 
         // Lock the LUT.
-        flexspi.lutkey().modify(|_, w| w.key().bits(0x5AF05AF0));
+        unsafe { flexspi.lutkey().modify(|_, w| w.key().bits(0x5AF05AF0)) };
         flexspi.lutcr().write(|w| w.lock().set_bit());
     }
 
@@ -113,28 +115,26 @@ impl<'a> FlexSpi<'a> {
 
         // TODO: Can we check if an IP command is already running or queued?
 
-        unsafe {
-            let flex_spi = pac::Flexspi::steal();
+        let flex_spi = unsafe { pac::Flexspi::steal() };
 
-            // Clear all interrupts that indicate a command finished.
-            // Not sure who left them there, but it's not for the next command.
-            let interrupts = flex_spi.intr().read();
-            self.clear_command_finished_bits(&interrupts);
+        // Clear all interrupts that indicate a command finished.
+        // Not sure who left them there, but it's not for the next command.
+        let interrupts = flex_spi.intr().read();
+        self.clear_command_finished_bits(&interrupts);
 
-            // Configure the command in IPCR0 and IPCR1.
-            let parallel = match sequence.parallel {
-                false => pac::flexspi::ipcr1::Iparen::Iparen0,
-                true => pac::flexspi::ipcr1::Iparen::Iparen1,
-            };
-            flex_spi.ipcr0().write(|w| w.sfar().bits(sequence.address));
-            flex_spi.ipcr1().write(|w| {
-                w.idatsz().bits(sequence.data_size);
-                w.iseqid().bits(sequence.start);
-                w.iseqnum().bits(sequence.count.saturating_sub(1));
-                w.iparen().variant(parallel);
-                w
-            });
-        }
+        // Configure the command in IPCR0 and IPCR1.
+        let parallel = match sequence.parallel {
+            false => pac::flexspi::ipcr1::Iparen::Iparen0,
+            true => pac::flexspi::ipcr1::Iparen::Iparen1,
+        };
+        flex_spi.ipcr0().write(|w| unsafe { w.sfar().bits(sequence.address) });
+        flex_spi.ipcr1().write(|w| unsafe {
+            w.idatsz().bits(sequence.data_size);
+            w.iseqid().bits(sequence.start);
+            w.iseqnum().bits(sequence.count.saturating_sub(1));
+            w.iparen().variant(parallel);
+            w
+        });
         Ok(())
     }
 
@@ -171,7 +171,7 @@ impl<'a> FlexSpi<'a> {
     unsafe fn _trigger_command_and_wait(&mut self) -> pac::flexspi::intr::R {
         #[cfg(not(target_arch = "arm"))]
         {
-            // Safety: pac::flexspi::intr::R is a transparent wrapper around a u32.
+            // SAFETY: pac::flexspi::intr::R is a transparent wrapper around a u32.
             unsafe { core::mem::transmute(0u32) }
         }
         #[cfg(target_arch = "arm")]
@@ -247,7 +247,7 @@ impl<'a> FlexSpi<'a> {
     unsafe fn _trigger_command_and_wait_write(&mut self) -> (u32, pac::flexspi::intr::R) {
         #[cfg(not(target_arch = "arm"))]
         {
-            // Safety: pac::flexspi::intr::R is a transparent wrapper around a u32.
+            // SAFETY: pac::flexspi::intr::R is a transparent wrapper around a u32.
             unsafe { core::mem::transmute(0u32) }
         }
         {
@@ -339,7 +339,7 @@ impl<'a> FlexSpi<'a> {
                 }
             }
 
-            // Safety: pac::flexspi::intr::R is a transparent wrapper around a u32.
+            // SAFETY: pac::flexspi::intr::R is a transparent wrapper around a u32.
             unsafe { (stage, core::mem::transmute(interrupts)) }
         }
     }
@@ -348,11 +348,9 @@ impl<'a> FlexSpi<'a> {
     ///
     /// Note: Attempts to set the watermark level to zero will set the level to pne 64 bit word instead.
     pub fn set_tx_fifo_watermark_u64_words(&mut self, num_u64: u8) {
-        unsafe {
-            let flex_spi = pac::Flexspi::steal();
-            let value = num_u64.saturating_sub(1);
-            flex_spi.iptxfcr().modify(|_, w| w.txwmrk().bits(value));
-        }
+        let flex_spi = unsafe { pac::Flexspi::steal() };
+        let value = num_u64.saturating_sub(1);
+        flex_spi.iptxfcr().modify(|_, w| unsafe { w.txwmrk().bits(value) });
     }
 
     /// Get the TX FIFO watermark level in `u64` words.
@@ -370,11 +368,9 @@ impl<'a> FlexSpi<'a> {
     ///
     /// Note: Attempts to set the watermark level to zero will set the level to one 64 bit word instead.
     pub fn set_rx_fifo_watermark_u64_words(&mut self, num_u64: u8) {
-        unsafe {
-            let flex_spi = pac::Flexspi::steal();
-            let value = num_u64.saturating_sub(1);
-            flex_spi.iprxfcr().modify(|_, w| w.rxwmrk().bits(value));
-        }
+        let flex_spi = unsafe { pac::Flexspi::steal() };
+        let value = num_u64.saturating_sub(1);
+        flex_spi.iprxfcr().modify(|_, w| unsafe { w.rxwmrk().bits(value) });
     }
 
     /// Get the RX FIFO watermark level in `u64` words.

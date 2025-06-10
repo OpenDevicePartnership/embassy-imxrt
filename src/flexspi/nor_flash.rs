@@ -97,7 +97,7 @@ impl<'a> FlexSpiNorFlash<'a> {
             let word2 = u32::from_ne_bytes(sequence[4..][..4].try_into().unwrap_or_else(|_| panic!()));
             let word3 = u32::from_ne_bytes(sequence[8..][..4].try_into().unwrap_or_else(|_| panic!()));
             let word4 = u32::from_ne_bytes(sequence[12..][..4].try_into().unwrap_or_else(|_| panic!()));
-            me.flex_spi.write_lut_sequence(i as usize, [word1, word2, word3, word4]);
+            unsafe { me.flex_spi.write_lut_sequence(i as usize, [word1, word2, word3, word4]) };
         }
 
         me
@@ -258,16 +258,18 @@ impl<'a> FlexSpiNorFlash<'a> {
         // TODO: Split into 128 bytes aligned chunks automatically so we can remove the restriction of crossing page boundaries.
         for (i, chunk) in data.chunks(128).enumerate() {
             self.flex_spi.fill_tx_fifo(chunk);
-            self.flex_spi
-                .configure_command_sequence(CommandSequence {
-                    start: sequence::PAGE_PROGRAM,
-                    count: 1,
-                    address: address + i as u32 * 128,
-                    data_size: data.len() as u16,
-                    parallel: false,
-                })
-                .map_err(|e| WriteError::Command(e.into()))?;
-            self.flex_spi.trigger_command_and_wait_write()?;
+            unsafe {
+                self.flex_spi
+                    .configure_command_sequence(CommandSequence {
+                        start: sequence::PAGE_PROGRAM,
+                        count: 1,
+                        address: address + i as u32 * 128,
+                        data_size: data.len() as u16,
+                        parallel: false,
+                    })
+                    .map_err(|e| WriteError::Command(e.into()))?;
+                self.flex_spi.trigger_command_and_wait_write()?;
+            }
         }
 
         Ok(())
@@ -282,14 +284,6 @@ impl<'a> FlexSpiNorFlash<'a> {
         self.flex_spi.clear_rx_fifo();
 
         unsafe {
-            // let peri = mimxrt685s_pac::Flexspi::steal();
-            // let intr = peri.intr().read();
-            // if intr.ipcmddone().bit() || intr.ipcmdge().bit() || intr.ipcmderr().bit() || intr.datalearnfail().bit() || intr.seqtimeout().bit() {
-            //     panic!("intr: 0x{:08X}", intr.bits());
-            // }
-            // if self.flex_spi.get_rx_fill_level_bytes() > 0 {
-            //     panic!("rx fifo not empty");
-            // }
             self.flex_spi
                 .configure_command_sequence(CommandSequence {
                     start: sequence::READ_STATUS_XPI,
