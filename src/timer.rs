@@ -8,7 +8,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 
 use crate::clocks::{enable_and_reset, ClockConfig, ConfigurableClock};
-use crate::iopctl::{DriveMode, DriveStrength, Inverter, IopctlPin as Pin, Pull, SlewRate};
+use crate::iopctl::{DriveMode, DriveStrength, Inverter, IopctlFunctionPin, IopctlPin as Pin, Pull, SlewRate};
 use crate::pac::clkctl1::ct32bitfclksel::Sel;
 use crate::pac::Clkctl1;
 use crate::pwm::{CentiPercent, Hertz, MicroSeconds};
