@@ -65,6 +65,27 @@ pub use embassy_hal_internal::{Peri, PeripheralType};
 #[cfg(feature = "rt")]
 pub use crate::pac::NVIC_PRIO_BITS;
 
+// Helper function for interrupt handling with optional tracing
+#[inline(always)]
+#[doc(hidden)]
+pub unsafe fn __handle_interrupt<T, H>()
+where
+    T: crate::interrupt::typelevel::Interrupt,
+    H: crate::interrupt::typelevel::Handler<T>,
+{
+    #[cfg(feature = "systemview-tracing")]
+    {
+        systemview_tracing::trace_interrupt! {
+            H::on_interrupt();
+        }
+    }
+
+    #[cfg(not(feature = "systemview-tracing"))]
+    {
+        H::on_interrupt();
+    }
+}
+
 /// Macro to bind interrupts to handlers.
 ///
 /// This defines the right interrupt handlers, and creates a unit struct (like `struct Irqs;`)
@@ -93,17 +114,7 @@ macro_rules! bind_interrupts {
             #[no_mangle]
             unsafe extern "C" fn $irq() {
                 $(
-                    // Note: Cannot extract the handler call due to trace_interrupt! requiring
-                    // the call to be inside its block syntax for proper instrumentation
-                    #[cfg(feature = "systemview-tracing")]
-                    systemview_tracing::trace_interrupt! {
-                        <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
-                    }
-
-                    #[cfg(not(feature = "systemview-tracing"))]
-                    {
-                        <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
-                    }
+                    $crate::__handle_interrupt::<$crate::interrupt::typelevel::$irq, $handler>();
                 )*
             }
 
