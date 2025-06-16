@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use embassy_imxrt::flexspi::nor_flash::{FlashAlignment, FlexSpiNorFlash};
+use embassy_imxrt::flexspi::nor_flash::FlexSpiNorFlash;
 use embassy_imxrt::gpio;
 use futures::FutureExt as _;
 use {defmt_rtt as _, panic_probe as _};
@@ -34,15 +34,6 @@ async fn main(_spawner: embassy_executor::Spawner) {
 async fn do_main(p: &mut embassy_imxrt::Peripherals) -> Result<(), ()> {
     defmt::info!("Application started");
 
-    // NOTE: Make sure to adjust the alignment for the actual flash chip you are using.
-    let alignment = FlashAlignment {
-        read_alignment: 2,
-        write_alignment: 2,
-        sector_size: 4096,
-        block_size: 64 * 1024,
-        page_size: 256,
-    };
-
     let mut blue = gpio::Output::new(
         p.PIO0_26.reborrow(),
         gpio::Level::Low,
@@ -56,7 +47,8 @@ async fn do_main(p: &mut embassy_imxrt::Peripherals) -> Result<(), ()> {
 
     // Create a new FlexSPI NOR flash driver.
     // NOTE: This relies on the FlexSPI having been configured already by having a valid FCB in the flash memory.
-    let mut flash = unsafe { FlexSpiNorFlash::new_unchecked(p.FLEXSPI.reborrow(), alignment) };
+    let mut flash = unsafe { FlexSpiNorFlash::with_probed_config(p.FLEXSPI.reborrow(), 2, 2) }
+        .map_err(|e| defmt::error!("Failed to initialize FlexSPI peripheral: {}", e))?;
 
     // Read last sector.
     let mut last_sector = [0; 16];
