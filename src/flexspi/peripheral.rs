@@ -56,6 +56,30 @@ pub struct FlexSpi<'a> {
     flex_spi: Peri<'a, FLEXSPI>,
 }
 
+/// A flash port of the FlexSPI peripheral.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum FlashPort {
+    /// Port A1.
+    A1,
+
+    /// Port A2.
+    A2,
+
+    /// Port B1.
+    B1,
+
+    /// Port B2.
+    B2,
+}
+
+impl FlashPort {
+    /// Get an array of all the flash ports, in the order they are mapped to memory.
+    pub const fn all() -> [Self; 4] {
+        [Self::A1, Self::A2, Self::B1, Self::B2]
+    }
+}
+
 impl<'a> FlexSpi<'a> {
     /// Create a new FlexSPI peripheral.
     pub fn new(flex_spi: Peri<'a, FLEXSPI>) -> Self {
@@ -73,8 +97,9 @@ impl<'a> FlexSpi<'a> {
     /// Altering the LUT will potentiall change the behaviour of memory mapped flash access.
     /// You must ensure that memory mapped flash access still behaves properly.
     /// The easiest way to do this is to only modify LUT sequences that are NOT used for memory mapped flash access.
-    pub unsafe fn write_lut_sequence(&mut self, index: usize, data: [u32; 4]) {
+    pub unsafe fn write_lut_sequence(&mut self, index: u8, data: [u32; 4]) {
         let flexspi = unsafe { pac::Flexspi::steal() };
+        let index: usize = index.into();
 
         // Unlock the LUT.
         unsafe { flexspi.lutkey().modify(|_, w| w.key().bits(0x5AF05AF0)) };
@@ -272,8 +297,7 @@ impl<'a> FlexSpi<'a> {
                         "tst {interrupts}, #{INTR_MASK_DONE}", // test for command done
                         "beq 2b",
 
-                    // Configure READ_STATUS_XPI command
-                    // TODO: Make sequence configurable?
+                    // Configure read status command
                     "mov {value}, #0", // IPCR0 address
                     "str {value}, [{flexspi_base}, #{FLEXSPI_IPCR0}]",
                     "mov {value}, #{READ_STATUS_CR1_L}",
@@ -328,7 +352,7 @@ impl<'a> FlexSpi<'a> {
                     FLEXSPI_RFDR = const FLEXSPI_RFDR,
 
                     READ_STATUS_CR1_L = const 4, // data size
-                    READ_STATUS_CR1_H = const 2, // sequence index
+                    READ_STATUS_CR1_H = const super::nor_flash::sequence::READ_STATUS, // sequence index
                     STATUS_WRITE_IN_PROGRESS = const 2,
 
                     INTR_MASK_DONE = const IPCMDDONE,
@@ -405,6 +429,47 @@ impl<'a> FlexSpi<'a> {
     pub fn clear_tx_fifo(&mut self) {
         let flex_spi = unsafe { pac::Flexspi::steal() };
         flex_spi.iptxfcr().modify(|_, w| w.clriptxf().set_bit());
+    }
+
+    /// Get the size in KiB (1024 bytes) of the flash connected to a specific flash port.
+    #[inline]
+    pub fn flash_size_kb(&self, port: FlashPort) -> u32 {
+        let flex_spi = unsafe { pac::Flexspi::steal() };
+        match port {
+            FlashPort::A1 => flex_spi.flsha1cr0().read().flshsz().bits(),
+            FlashPort::A2 => flex_spi.flsha2cr0().read().flshsz().bits(),
+            FlashPort::B1 => flex_spi.flshb1cr0().read().flshsz().bits(),
+            FlashPort::B2 => flex_spi.flshb2cr0().read().flshsz().bits(),
+        }
+    }
+
+    /// Get the AHB read sequence for the flash connected to a specific port.
+    ///
+    /// This gives the command sequences in the LUT used for an AHB read.
+    pub fn ahb_read_sequence(&self, port: FlashPort) -> core::ops::Range<u8> {
+        let flex_spi = unsafe { pac::Flexspi::steal() };
+        let flshcr3 = match port {
+            FlashPort::A1 => flex_spi.flshcr2(0).read(),
+            FlashPort::A2 => flex_spi.flshcr2(1).read(),
+            FlashPort::B1 => flex_spi.flshcr2(2).read(),
+            FlashPort::B2 => flex_spi.flshcr2(3).read(),
+        };
+        let start = flshcr3.ardseqid().bits();
+        let len = flshcr3.ardseqnum().bits() + 1;
+        start..start + len
+    }
+
+    /// Get the flash port used for a sepcific flash address.
+    pub fn port_for_address(&self, address: u32) -> Option<FlashPort> {
+        let mut offset = 0;
+        for port in FlashPort::all() {
+            let port_size = self.flash_size_kb(port) * 1024;
+            if offset + port_size > address {
+                return Some(port);
+            }
+            offset += port_size
+        }
+        None
     }
 
     /// Write data to the IP TX FIFO and mark it ready for sending.
