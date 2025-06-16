@@ -177,7 +177,7 @@ impl<'a> FlexSpiNorFlash<'a> {
     ///
     /// NOTE: The address argument is a physical flash address, not a CPU memory address.
     pub fn read(&mut self, address: u32, buffer: &mut [u8]) -> Result<(), ReadError> {
-        // TODO: check that start and end address are aligned to `read_alignment`.
+        MisalignedAccessError::check(address, self.alignment.read_alignment)?;
         read(&mut self.flex_spi, sequence::READ, 1, address, buffer)
     }
 
@@ -191,7 +191,7 @@ impl<'a> FlexSpiNorFlash<'a> {
     /// If your program also performs memory mapped access to the erased region,
     /// you must invalidate the FlexSPI cache and the AHB RX buffer.
     pub unsafe fn erase_sector(&mut self, address: u32) -> Result<(), WriteError> {
-        // TODO: verify address is aligned to a sector.
+        MisalignedAccessError::check(address, self.alignment.sector_size)?;
         self.set_and_verify_write_enable()?;
 
         unsafe {
@@ -219,7 +219,7 @@ impl<'a> FlexSpiNorFlash<'a> {
     /// If your program also performs memory mapped access to the erased region,
     /// you must invalidate the FlexSPI cache and the AHB RX buffer.
     pub unsafe fn erase_block(&mut self, address: u32) -> Result<(), WriteError> {
-        // TODO: verify address is aligned to a block.
+        MisalignedAccessError::check(address, self.alignment.block_size)?;
         self.set_and_verify_write_enable()?;
 
         unsafe {
@@ -278,10 +278,11 @@ impl<'a> FlexSpiNorFlash<'a> {
     /// If your program also performs memory mapped access to the erased region,
     /// you must invalidate the FlexSPI cache and the AHB RX buffer.
     pub unsafe fn page_program(&mut self, address: u32, data: &[u8]) -> Result<(), PageProgramError> {
+        // Check that address is aligned to self.write_alignment.
+        MisalignedAccessError::check(address, self.alignment.write_alignment)?;
+
         // Check if the write fully falls into one page.
         WriteCrossesPageBoundary::check(address, data.len() as u32, self.alignment.page_size)?;
-
-        // TODO: Check that address is aligned to self.write_alignment.
 
         // Set write enable latch and verify that it worked.
         self.set_and_verify_write_enable()?;
@@ -651,11 +652,38 @@ impl From<super::peripheral::WaitCommandError> for CommandError {
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ReadError {
+    /// The address is not aligned to the required read alignment.
+    Misaligned(MisalignedAccessError),
+
     /// The command failed to execute.
     Command(CommandError),
 
     /// The command finished, but we did not get the amount of data we expected.
     NotEnoughData(NotEnoughData),
+}
+
+/// We did not receive the amount of data we expected.
+#[derive(Copy, Clone, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct MisalignedAccessError {
+    /// The address for the access.
+    pub address: u32,
+
+    /// The alignment requirement that the address does not meet.
+    pub alignment: u32,
+}
+
+impl MisalignedAccessError {
+    /// Check if an address is aligned.
+    ///
+    /// The alignment requires must be a power of two.
+    fn check(address: u32, alignment: u32) -> Result<(), MisalignedAccessError> {
+        if address & (alignment - 1) == 0 {
+            Ok(())
+        } else {
+            Err(MisalignedAccessError { address, alignment })
+        }
+    }
 }
 
 /// We did not receive the amount of data we expected.
@@ -669,6 +697,12 @@ pub struct NotEnoughData {
     pub actual: usize,
 }
 
+impl From<MisalignedAccessError> for ReadError {
+    fn from(value: MisalignedAccessError) -> Self {
+        Self::Misaligned(value)
+    }
+}
+
 impl From<NotEnoughData> for ReadError {
     fn from(value: NotEnoughData) -> Self {
         Self::NotEnoughData(value)
@@ -679,6 +713,9 @@ impl From<NotEnoughData> for ReadError {
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum WriteError {
+    /// The address is not aligned to the required write alignment.
+    Misaligned(MisalignedAccessError),
+
     /// Failed to read the flash memory status.
     ReadStatus(ReadError),
 
@@ -695,6 +732,12 @@ pub enum WriteError {
     Command(CommandError),
 }
 
+impl From<MisalignedAccessError> for WriteError {
+    fn from(value: MisalignedAccessError) -> Self {
+        Self::Misaligned(value)
+    }
+}
+
 /// Error that can occur during a page program operation.
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -704,6 +747,12 @@ pub enum PageProgramError {
 
     /// The operation was attempted but failed.
     WriteFailed(WriteError),
+}
+
+impl From<MisalignedAccessError> for PageProgramError {
+    fn from(value: MisalignedAccessError) -> Self {
+        Self::WriteFailed(value.into())
+    }
 }
 
 /// A write operation would have crossed a page boundary.
