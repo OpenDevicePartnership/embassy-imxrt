@@ -22,6 +22,15 @@ pub struct FlexSpiNorFlash<'a> {
     alignment: FlashAlignment,
 }
 
+/// Configuration of the [`FlexSpiNorFlash`] driver.
+pub struct FlashConfig {
+    /// Alignment requirements of access to the flash memory.
+    pub alignment: FlashAlignment,
+
+    /// Command sequences for the FlexSPI peripheral.
+    pub sequences: FlashSequences,
+}
+
 /// Alignment requirements of a flash memory chip.
 #[derive(Copy, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -50,57 +59,118 @@ pub struct FlashAlignment {
     pub page_size: u32,
 }
 
-/// Default sequence indexes in the LUT for specific commands.
+/// FlexSPI command sequences for NOR flash.
+///
+/// You can use the [`mimxrt600_fcb`] crate to create command sequences.
+// TODO: Support longer sequences?
+pub struct FlashSequences {
+    /// The sequence for reading data from flash.
+    pub read: [u32; 4],
+
+    /// The sequence for reading the flash status register.
+    pub read_status: [u32; 4],
+
+    /// The sequence for setting the write-enable latch.
+    pub write_enable: [u32; 4],
+
+    /// The sequence to erase a single sector.
+    pub erase_sector: [u32; 4],
+
+    /// The sequence to erase a single block.
+    pub erase_block: [u32; 4],
+
+    /// The sequence to erase the entire chip.
+    pub erase_chip: [u32; 4],
+
+    /// The sequence for performing a page program.
+    pub page_program: [u32; 4],
+}
+
+/// Sequence indexes in the LUT for specific commands.
+///
+/// These are chosen specifically for the driver.
+/// Using the upper half of the LUT (16..32) means we should not conflict with the default configuration for AHB access.
 #[allow(unused)]
-mod sequence {
-    pub const READ: u8 = 0;
-    pub const READ_STATUS: u8 = 1;
-    pub const READ_STATUS_XPI: u8 = 2;
-    pub const WRITE_ENABLE: u8 = 3;
-    pub const WRITE_ENABLE_XPI: u8 = 4;
-    pub const ERASE_SECTOR: u8 = 5;
-    pub const ERASE_BLOCK: u8 = 8;
-    pub const PAGE_PROGRAM: u8 = 9;
-    pub const CHIP_ERASE: u8 = 11;
-    pub const EXIT_NO_COMMAND: u8 = 15;
+pub(super) mod sequence {
+    pub const READ: u8 = 16;
+    pub const READ_STATUS: u8 = 17;
+    pub const WRITE_ENABLE: u8 = 18;
+    pub const ERASE_SECTOR: u8 = 19;
+    pub const ERASE_BLOCK: u8 = 20;
+    pub const ERASE_CHIP: u8 = 21;
+    pub const PAGE_PROGRAM: u8 = 22;
 }
 
 impl<'a> FlexSpiNorFlash<'a> {
-    /// Create a new FlexSPI FLASH driver without checking the alignment validity.
+    /// Create a new FlexSPI FLASH driver with the given configuration.
     ///
-    /// The page size is used exclusivly for the [`page_program()`] command.
-    /// It is used to ensure that data is not written across page boundaries.
+    /// The driver does not check if the config is correct for the flash chip connected to the FlexSPI peripheral.
     ///
     /// # Safety
     /// The FLASH driver can be used to write to flash,
     /// which can potentially overwrite parts of the currently running program.
     /// The user must take care to uphold all the soundness requirements of Rust.
-    pub unsafe fn new_unchecked(flex_spi: Peri<'a, FLEXSPI>, alignment: FlashAlignment) -> Self {
-        // TODO: Add constructor that reads alignment from the FCB on the flash itself.
+    ///
+    /// It also overwrites entries in the FlexSPI LUT,
+    /// which might interfer with memory mapped flash access in non-default system configurations.
+    pub unsafe fn with_config(
+        flex_spi: Peri<'a, FLEXSPI>,
+        config: FlashConfig,
+    ) -> Result<Self, InvalidAlignmentRequirement> {
+        // Check if the alignment requirements are all powers of two.
+        config.alignment.check()?;
+
         let flex_spi = FlexSpi::new(flex_spi);
-        let mut me = Self { flex_spi, alignment };
+        let mut me = Self {
+            flex_spi,
+            alignment: config.alignment,
+        };
 
-        // TODO: Validate FCB header and version number.
-        // TODO: Report error instead of panicking.
-        let mut fcb_header = [0; 8];
-        me.read(0x400, &mut fcb_header)
-            .unwrap_or_else(|e| panic!("reading FCB header {}", e));
-
-        // Copy the FCB LUT entries into the real LUT.
-        // TODO: Ensure that we do not change any sequences used by AHB flash access.
-        for i in 0..16 {
-            let mut sequence = [0; 16];
-            // TODO: Report error instead of panicking.
-            me.read(0x400 + 0x80 + i * 16, &mut sequence)
-                .unwrap_or_else(|e| panic!("failed to read LUT entry {} from FCB: {}", i, e));
-            let word1 = u32::from_ne_bytes(sequence[0..][..4].try_into().unwrap_or_else(|_| panic!()));
-            let word2 = u32::from_ne_bytes(sequence[4..][..4].try_into().unwrap_or_else(|_| panic!()));
-            let word3 = u32::from_ne_bytes(sequence[8..][..4].try_into().unwrap_or_else(|_| panic!()));
-            let word4 = u32::from_ne_bytes(sequence[12..][..4].try_into().unwrap_or_else(|_| panic!()));
-            unsafe { me.flex_spi.write_lut_sequence(i as usize, [word1, word2, word3, word4]) };
+        // Copy the sequences into the LUT.
+        unsafe {
+            me.flex_spi.write_lut_sequence(sequence::READ, config.sequences.read);
+            me.flex_spi
+                .write_lut_sequence(sequence::READ_STATUS, config.sequences.read_status);
+            me.flex_spi
+                .write_lut_sequence(sequence::WRITE_ENABLE, config.sequences.write_enable);
+            me.flex_spi
+                .write_lut_sequence(sequence::ERASE_SECTOR, config.sequences.erase_sector);
+            me.flex_spi
+                .write_lut_sequence(sequence::ERASE_BLOCK, config.sequences.erase_block);
+            me.flex_spi
+                .write_lut_sequence(sequence::ERASE_CHIP, config.sequences.erase_chip);
+            me.flex_spi
+                .write_lut_sequence(sequence::PAGE_PROGRAM, config.sequences.page_program);
         }
 
-        me
+        Ok(me)
+    }
+
+    /// Create a new FlexSPI FLASH driver, reading most of the configuration from the flash itself.
+    ///
+    /// The configuration is reaad from the FlexSPI Configuration Block (FCB) on the flash memory at address `0x400..0x600`.
+    /// The FCB does not contain the read and write alignment of the flash memory,
+    /// so these must be provided manually.
+    ///
+    /// The driver does not check if the read config is correct for the flash chip connected to the FlexSPI peripheral.
+    ///
+    /// This only works if the FlexSPI has already been configured for memory mapped (AHB) access,
+    /// and if the flash memory has a valid and correct FlexSPI Configuration Block.
+    ///
+    /// # Safety
+    /// The FLASH driver can be used to write to flash,
+    /// which can potentially overwrite parts of the currently running program.
+    /// The user must take care to uphold all the soundness requirements of Rust.
+    ///
+    /// It also overwrites entries in the FlexSPI LUT,
+    /// which might interfer with memory mapped flash access in non-default system configurations.
+    pub unsafe fn with_probed_config(
+        mut flex_spi: Peri<'a, FLEXSPI>,
+        read_alignment: u32,
+        write_alignment: u32,
+    ) -> Result<Self, ReadConfigError> {
+        let config = FlashConfig::read_from_flash(flex_spi.reborrow(), read_alignment, write_alignment)?;
+        unsafe { Self::with_config(flex_spi, config).map_err(ReadConfigError::InvalidAlignmentRequirement) }
     }
 
     /// Read data from the given flash address.
@@ -108,41 +178,7 @@ impl<'a> FlexSpiNorFlash<'a> {
     /// NOTE: The address argument is a physical flash address, not a CPU memory address.
     pub fn read(&mut self, address: u32, buffer: &mut [u8]) -> Result<(), ReadError> {
         // TODO: check that start and end address are aligned to `read_alignment`.
-
-        // Make sure no old data remains in the RX fifo.
-        self.flex_spi.set_rx_fifo_watermark_u64_words(16);
-        self.flex_spi.clear_rx_fifo();
-
-        // Split into reads of at most 128 (16 u64 words) bytes to ensure we don't need to worry about the FIFO during each transfer.
-        for (i, buffer) in buffer.chunks_mut(128).enumerate() {
-            // Start the read sequence.
-            unsafe {
-                self.flex_spi
-                    .configure_command_sequence(CommandSequence {
-                        start: sequence::READ,
-                        count: 1,
-                        address: address + i as u32 * 128,
-                        data_size: buffer.len() as u16,
-                        parallel: false,
-                    })
-                    .map_err(|e| ReadError::Command(e.into()))?;
-                self.flex_spi
-                    .trigger_command_and_wait()
-                    .map_err(|e| ReadError::Command(e.into()))?;
-            }
-
-            // Drain the RX queue until the read buffer is full.
-            let read = self.flex_spi.drain_rx_fifo(buffer);
-            if read != buffer.len() {
-                return Err(NotEnoughData {
-                    expected: i * 128 + buffer.len(),
-                    actual: i * 128 + read,
-                }
-                .into());
-            }
-        }
-
-        Ok(())
+        read(&mut self.flex_spi, sequence::READ, 1, address, buffer)
     }
 
     /// Erase a sector of flash memory.
@@ -216,7 +252,7 @@ impl<'a> FlexSpiNorFlash<'a> {
         unsafe {
             self.flex_spi
                 .configure_command_sequence(CommandSequence {
-                    start: sequence::CHIP_ERASE,
+                    start: sequence::ERASE_CHIP,
                     count: 1,
                     address: 0,
                     data_size: 0,
@@ -286,7 +322,7 @@ impl<'a> FlexSpiNorFlash<'a> {
         unsafe {
             self.flex_spi
                 .configure_command_sequence(CommandSequence {
-                    start: sequence::READ_STATUS_XPI,
+                    start: sequence::READ_STATUS,
                     count: 1,
                     address: 0,
                     data_size: 4,
@@ -318,7 +354,7 @@ impl<'a> FlexSpiNorFlash<'a> {
     fn set_write_enable(&mut self) -> Result<(), CommandError> {
         unsafe {
             self.flex_spi.configure_command_sequence(CommandSequence {
-                start: sequence::WRITE_ENABLE_XPI,
+                start: sequence::WRITE_ENABLE,
                 count: 1,
                 address: 0,
                 data_size: 0,
@@ -376,6 +412,216 @@ impl Status {
         // TODO: Taken from Macronix datasheet, but is this universal?
         self.raw & 0x02 != 0
     }
+}
+
+/// Read data from the given flash address.
+///
+/// NOTE: The address argument is a physical flash address, not a CPU memory address.
+fn read(
+    flex_spi: &mut FlexSpi,
+    sequence_start: u8,
+    sequence_count: u8,
+    address: u32,
+    buffer: &mut [u8],
+) -> Result<(), ReadError> {
+    // Make sure no old data remains in the RX fifo.
+    flex_spi.set_rx_fifo_watermark_u64_words(16);
+    flex_spi.clear_rx_fifo();
+
+    // Split into reads of at most 128 (16 u64 words) bytes to ensure we don't need to worry about the FIFO during each transfer.
+    for (i, buffer) in buffer.chunks_mut(128).enumerate() {
+        // Start the read sequence.
+        unsafe {
+            flex_spi
+                .configure_command_sequence(CommandSequence {
+                    start: sequence_start,
+                    count: sequence_count,
+                    address: address + i as u32 * 128,
+                    data_size: buffer.len() as u16,
+                    parallel: false,
+                })
+                .map_err(|e| ReadError::Command(e.into()))?;
+            flex_spi
+                .trigger_command_and_wait()
+                .map_err(|e| ReadError::Command(e.into()))?;
+        }
+
+        // Drain the RX queue until the read buffer is full.
+        let read = flex_spi.drain_rx_fifo(buffer);
+        if read != buffer.len() {
+            return Err(NotEnoughData {
+                expected: i * 128 + buffer.len(),
+                actual: i * 128 + read,
+            }
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
+impl FlashConfig {
+    /// Read the configuration from the FlexSPI Configuration Block (FCB) on the flash memory.
+    ///
+    /// The read and write alignment of the flash are not stored in the FCB, so they must be provided separately.
+    fn read_from_flash(
+        flex_spi: Peri<'_, FLEXSPI>,
+        read_alignment: u32,
+        write_alignment: u32,
+    ) -> Result<Self, ReadConfigError> {
+        let flex_spi = &mut super::peripheral::FlexSpi::new(flex_spi);
+
+        const FCB_START: u32 = 0x400;
+        const FCB_END: u32 = FCB_START + 512;
+
+        // Figure out which flash port holds the FCB, so we can determine what read sequence to use.
+        let port = flex_spi
+            .port_for_address(FCB_START)
+            .ok_or(ReadConfigError::MemoryTooSmall)?;
+        if flex_spi.port_for_address(FCB_END - 1) != Some(port) {
+            return Err(ReadConfigError::ConfigurationSpreadOverMultipleChips);
+        }
+
+        let read_sequence = flex_spi.ahb_read_sequence(port);
+        let read_sequence_start = read_sequence.start;
+        let read_sequence_count = read_sequence.end - read_sequence.start;
+
+        // Helper to read from flash with the right error type.
+        let read = |flex_spi: &mut _, address: u32, buffer: &mut [u8]| {
+            read(flex_spi, read_sequence_start, read_sequence_count, address, buffer)
+                .map_err(|e| ReadConfigError::ReadFailed(address, e))
+        };
+
+        // Read and verify FCB header.
+        let mut buffer = [0u8; 8];
+        read(flex_spi, FCB_START, &mut buffer)?;
+        if buffer != [0x46, 0x43, 0x46, 0x42, 0x00, 0x00, 0x02, 0x56] {
+            return Err(ReadConfigError::InvalidHeader(buffer));
+        }
+
+        // Read misc configuration.
+        let mut buffer = [0u8; 4];
+        read(flex_spi, FCB_START + 0x44, &mut buffer)?;
+        let device_type = buffer[0];
+        let num_pins = buffer[1];
+        let lut_custom_seq_enable = buffer[3];
+
+        // We only support serial NOR flash (type == 1).
+        if device_type != 1 {
+            return Err(ReadConfigError::InvalidDeviceType(device_type));
+        }
+
+        // The documentation on the meaning of lutCustomSeq is unclear, so refuse to parse it.
+        if lut_custom_seq_enable != 0 {
+            return Err(ReadConfigError::CustomLutSequencesNotSupported);
+        }
+
+        // Read page size and sector size.
+        let mut buffer = [0u8; 8];
+        read(flex_spi, FCB_START + 0x1C0, &mut buffer)?;
+        let page_size = u32::from_ne_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
+        let sector_size = u32::from_ne_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
+
+        // Read block size.
+        let mut buffer = [0u8; 4];
+        read(flex_spi, FCB_START + 0x1D0, &mut buffer)?;
+        let block_size = u32::from_ne_bytes(buffer);
+
+        let alignment = FlashAlignment {
+            read_alignment,
+            write_alignment,
+            sector_size,
+            block_size,
+            page_size,
+        };
+        alignment
+            .check()
+            .map_err(ReadConfigError::InvalidAlignmentRequirement)?;
+
+        // Read LUT entries.
+        //
+        // Indices in FCB taken from RT6xx User Manual, section 42.8.16.2.2, table 1105.
+        let read_fcb_lut_sequence = |flex_spi: &mut _, index: u32| {
+            let mut buffer = [0u8; 16];
+            let flash_offset = FCB_START + 0x80 + index * 16;
+            read(flex_spi, flash_offset, &mut buffer)?;
+            Ok([
+                u32::from_ne_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]),
+                u32::from_ne_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]),
+                u32::from_ne_bytes([buffer[8], buffer[9], buffer[10], buffer[11]]),
+                u32::from_ne_bytes([buffer[12], buffer[13], buffer[14], buffer[15]]),
+            ])
+        };
+
+        let xpi_offset = match num_pins {
+            0 | 1 => 0,
+            2.. => 1,
+        };
+        let sequences = FlashSequences {
+            read: read_fcb_lut_sequence(flex_spi, 0)?,
+            read_status: read_fcb_lut_sequence(flex_spi, 1 + xpi_offset)?,
+            write_enable: read_fcb_lut_sequence(flex_spi, 3 + xpi_offset)?,
+            erase_sector: read_fcb_lut_sequence(flex_spi, 5)?,
+            erase_block: read_fcb_lut_sequence(flex_spi, 8)?,
+            erase_chip: read_fcb_lut_sequence(flex_spi, 11)?,
+            page_program: read_fcb_lut_sequence(flex_spi, 9)?,
+        };
+
+        Ok(Self { alignment, sequences })
+    }
+}
+
+impl FlashAlignment {
+    fn check(&self) -> Result<(), InvalidAlignmentRequirement> {
+        // If the alignment is a power of two, exactly one bit is set to 1.
+        // We also allow `0`, which we treat the same as `1` (no alignment required).
+        if self.read_alignment != 0 && self.read_alignment.count_ones() != 1 {
+            return Err(InvalidAlignmentRequirement::ReadAlignment(self.read_alignment));
+        }
+        if self.write_alignment != 0 && self.write_alignment.count_ones() != 1 {
+            return Err(InvalidAlignmentRequirement::WriteAlignment(self.write_alignment));
+        }
+        Ok(())
+    }
+}
+
+/// Error that can occur when reading the configuration from flash.
+#[derive(Copy, Clone, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ReadConfigError {
+    /// The configuration block (address 0x400..0x600) is spread over multiple memory chips.
+    ConfigurationSpreadOverMultipleChips,
+
+    /// The total memory is too small to hold the configuration block.
+    MemoryTooSmall,
+
+    /// Failed to read (part of) the configuration block.
+    ReadFailed(u32, ReadError),
+
+    /// The header of the configuration block is invalid.
+    InvalidHeader([u8; 8]),
+
+    /// The device type is wrong (should be `1` for serial NOR flash).
+    InvalidDeviceType(u8),
+
+    /// The configuration block has `lutCustomSeqEnabled` set to true.
+    ///
+    /// The documentation of lutCustomSeq is unclear, so no attempt it made to parse it.
+    CustomLutSequencesNotSupported,
+
+    /// The alignment requirement is invalid (not a power of two).
+    InvalidAlignmentRequirement(InvalidAlignmentRequirement),
+}
+
+/// Error indicating that an alignment requirement of flash is not a power of two.
+#[derive(Copy, Clone, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum InvalidAlignmentRequirement {
+    /// The read alignment is not a power of two.
+    ReadAlignment(u32),
+
+    /// The write alignment is not a power of two.
+    WriteAlignment(u32),
 }
 
 /// Error that can occur when executing a command.
