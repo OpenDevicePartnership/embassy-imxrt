@@ -292,6 +292,7 @@ dependencies = [
  "embedded-hal-nb",
  "embedded-io",
  "embedded-io-async",
+ "embedded-mcu-hal",
  "fixed",
  "itertools",
  "log",
@@ -400,6 +401,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ff09972d4073aa8c299395be75161d582e7629cd663171d62af73c8d50dba3f"
 dependencies = [
  "embedded-io",
+]
+
+[[package]]
+name = "embedded-mcu-hal"
+version = "0.1.0"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#21f07f4497bee540d6957f37ac7759887f00a430"
+dependencies = [
+ "defmt 1.0.1",
 ]
 
 [[package]]
