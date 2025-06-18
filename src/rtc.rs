@@ -226,7 +226,7 @@ impl<'r> RtcDatetime<'r> {
         //         Todo: https://github.com/OpenDevicePartnership/embassy-imxrt/issues/121
         self.is_valid_datetime(datetime)?;
         let secs = self.convert_datetime_to_secs(datetime);
-        _ = self.set_datetime_in_secs(secs);
+        self.set_datetime_in_secs(secs);
         Ok(())
     }
 

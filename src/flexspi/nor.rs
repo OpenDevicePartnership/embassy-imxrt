@@ -174,13 +174,13 @@ pub enum FlexspiAhbWriteWaitUnit {
     AhbCycle8,
     /// AWRWAIT unit is 32 ahb clock cycle.
     AhbCycle32,
-    /// AWRWAIT unit is 128 ahb clock cycle.   
+    /// AWRWAIT unit is 128 ahb clock cycle.
     AhbCycle128,
-    /// AWRWAIT unit is 512 ahb clock cycle.   
+    /// AWRWAIT unit is 512 ahb clock cycle.
     AhbCycle512,
-    /// AWRWAIT unit is 2048 ahb clock cycle.  
+    /// AWRWAIT unit is 2048 ahb clock cycle.
     AhbCycle2048,
-    /// AWRWAIT unit is 8192 ahb clock cycle.  
+    /// AWRWAIT unit is 8192 ahb clock cycle.
     AhbCycle8192,
     /// AWRWAIT unit is 32768 ahb clock cycle.
     AhbCycle32768,
@@ -204,9 +204,9 @@ pub enum FlexspiReadSampleClock {
 pub struct FlexspiAhbBufferConfig {
     /// This priority for AHB Master Read which this AHB RX Buffer is assigned.
     pub priority: u8,
-    /// AHB Master ID the AHB RX Buffer is assigned.       
+    /// AHB Master ID the AHB RX Buffer is assigned.
     pub master_index: u8,
-    /// AHB buffer size in byte.   
+    /// AHB buffer size in byte.
     pub buffer_size: u16,
     /// AHB Read Prefetch Enable for current AHB RX Buffer corresponding Master, allows to prefetch
     /// data for AHB read access.
@@ -230,17 +230,17 @@ pub struct FlexspiDeviceConfig {
     pub cs_hold_time: u8,
     /// CS line setup time
     pub cs_setup_time: u8,
-    /// Data valid time for external device                          
+    /// Data valid time for external device
     pub data_valid_time: u8,
-    /// Column space size                       
+    /// Column space size
     pub columnspace: u8,
-    /// If enable word address                        
+    /// If enable word address
     pub enable_word_address: bool,
-    /// Sequence ID for AHB write command                    
+    /// Sequence ID for AHB write command
     pub awr_seq_index: u8,
     /// Sequence number for AHB write command
     pub awr_seq_number: u8,
-    /// Sequence ID for AHB read command                       
+    /// Sequence ID for AHB read command
     pub ard_seq_index: u8,
     /// Sequence number for AHB read command
     pub ard_seq_number: u8,
@@ -454,7 +454,7 @@ impl From<FlexSpiError> for NorStorageBusError {
 
 impl FlexSpiError {
     /// Get the description of the error
-    pub fn describe<'a, M: Mode>(&self, flexspi: &'a FlexspiNorStorageBus<M>) {
+    pub fn describe<M: Mode>(&self, flexspi: &FlexspiNorStorageBus<M>) {
         match self {
             FlexSpiError::CmdGrantErr { result } => {
                 if result.AhbReadCmdErr {
@@ -539,10 +539,10 @@ impl FlexSpiError {
                         flexspi.info.regs.sts1().read().ahbcmderrcode().bits()
                     );
                     info!(
-                        "There will be AHB bus error response except the following cases: 
+                        "There will be AHB bus error response except the following cases:
                         - AHB write command is triggered by flush (INCR burst ended with AHB_TX_BUF not empty)
                         - AHB bufferable write access and bufferable enabled (AHBCR[BUFFERABLEEN]=0x1)
-                    Following are possible reasons for this error - 
+                    Following are possible reasons for this error -
                         - Command timeout during execution"
                     );
                 }
@@ -557,7 +557,7 @@ impl FlexSpiError {
                         flexspi.info.regs.sts1().read().ahbcmderrcode().bits()
                     );
                     info!(
-                        "There will be AHB bus error response. Following are possible reasons for this error - 
+                        "There will be AHB bus error response. Following are possible reasons for this error -
                         - Command timeout during execution"
                     );
                 }
@@ -572,7 +572,7 @@ impl FlexSpiError {
                         flexspi.info.regs.sts1().read().ipcmderrcode().bits()
                     );
                     info!(
-                        "Following are possible reasons for this error - 
+                        "Following are possible reasons for this error -
                         - Command timeout during execution"
                     );
                 }
@@ -580,7 +580,7 @@ impl FlexSpiError {
             FlexSpiError::AhbBusTimeout { result } => {
                 if result.AhbReadCmdErr || result.AhbWriteCmdErr {
                     info!(
-                        "There will be AHB bus error response. Following are possible reasons for this error - 
+                        "There will be AHB bus error response. Following are possible reasons for this error -
                         - AHB bus timeout (no bus ready return)"
                     );
                 } else {
@@ -603,7 +603,7 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
         self.setup_ip_transfer(self.command_sequence_number, cmd.addr, cmd.data_bytes);
 
         // Program the LUT instructions for the command
-        self.program_lut(&cmd, self.command_sequence_number as u8);
+        self.program_lut(&cmd, self.command_sequence_number);
 
         // Start the transfer
         self.execute_ip_cmd();
@@ -612,10 +612,7 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
         // This wait is for FlexSPI to send the command to the Flash device
         // But the command completion in the flash needs to be checked separately
         // by reading the status register of the flash device
-        let status = self.wait_for_cmd_completion();
-        if status.is_err() {
-            return status;
-        }
+        self.wait_for_cmd_completion()?;
 
         // Check for any errors during the transfer
         self.check_transfer_status().map_err(|e| {
@@ -667,7 +664,7 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
 
         self.info.regs.ipcr1().modify(|_, w| unsafe {
             // SAFETY: Operation is safe as we are programming the sequence ID to be used for the transfer
-            w.iseqid().bits(seq_id as u8)
+            w.iseqid().bits(seq_id)
         });
 
         // Reset the sequence pointer
@@ -689,7 +686,7 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
         // TODO: Set Tx and Rx watermark
         self.info.regs.iprxfcr().modify(|_, w| unsafe {
             // SAFETY: Operation is safe as we are programming the watermark value to be used for the transfer
-            w.rxwmrk().bits((self.rx_watermark / 8) - 1 as u8)
+            w.rxwmrk().bits((self.rx_watermark / 8) - 1)
         });
 
         // Set the data length
@@ -715,79 +712,79 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
             self.info.regs.intr().modify(|_, w| w.ipcmderr().clear_bit_by_one());
             if intr.seqtimeout().bit_is_set() {
                 self.info.regs.intr().modify(|_, w| w.seqtimeout().clear_bit_by_one());
-                return Err(FlexSpiError::CmdExecErr {
+                Err(FlexSpiError::CmdExecErr {
                     result: CmdResult {
                         AhbReadCmdErr: false,
                         AhbWriteCmdErr: false,
                         IpCmdErr: true,
                     },
-                });
+                })
             } else {
-                return Err(FlexSpiError::CmdCheckErr {
+                Err(FlexSpiError::CmdCheckErr {
                     result: CmdResult {
                         AhbReadCmdErr: false,
                         AhbWriteCmdErr: false,
                         IpCmdErr: true,
                     },
-                });
+                })
             }
         } else if intr.ahbcmderr().bit_is_set() {
             self.info.regs.intr().modify(|_, w| w.ahbcmderr().clear_bit_by_one());
             if intr.seqtimeout().bit_is_set() {
-                return Err(FlexSpiError::CmdExecErr {
+                Err(FlexSpiError::CmdExecErr {
                     result: CmdResult {
                         AhbReadCmdErr: true,
                         AhbWriteCmdErr: true,
                         IpCmdErr: false,
                     },
-                });
+                })
             } else {
-                return Err(FlexSpiError::CmdCheckErr {
+                Err(FlexSpiError::CmdCheckErr {
                     result: CmdResult {
                         AhbReadCmdErr: true,
                         AhbWriteCmdErr: true,
                         IpCmdErr: false,
                     },
-                });
+                })
             }
         } else if intr.ahbbustimeout().bit_is_set() {
             self.info
                 .regs
                 .intr()
                 .modify(|_, w| w.ahbbustimeout().clear_bit_by_one());
-            return Err(FlexSpiError::AhbBusTimeout {
+            Err(FlexSpiError::AhbBusTimeout {
                 result: CmdResult {
                     AhbReadCmdErr: true,
                     AhbWriteCmdErr: true,
                     IpCmdErr: false,
                 },
-            });
+            })
         } else if intr.datalearnfail().bit_is_set() {
             self.info
                 .regs
                 .intr()
                 .modify(|_, w| w.datalearnfail().clear_bit_by_one());
-            return Err(FlexSpiError::DataLearningFailed);
+            Err(FlexSpiError::DataLearningFailed)
         } else if intr.ipcmdge().bit_is_set() {
             self.info.regs.intr().modify(|_, w| w.ipcmdge().clear_bit_by_one());
-            return Err(FlexSpiError::CmdGrantErr {
+            Err(FlexSpiError::CmdGrantErr {
                 result: CmdResult {
                     AhbReadCmdErr: false,
                     AhbWriteCmdErr: false,
                     IpCmdErr: true,
                 },
-            });
+            })
         } else if intr.ahbcmdge().bit_is_set() {
             self.info.regs.intr().modify(|_, w| w.ahbcmdge().clear_bit_by_one());
-            return Err(FlexSpiError::CmdGrantErr {
+            Err(FlexSpiError::CmdGrantErr {
                 result: CmdResult {
                     AhbReadCmdErr: true,
                     AhbWriteCmdErr: true,
                     IpCmdErr: false,
                 },
-            });
+            })
         } else {
-            return Ok(());
+            Ok(())
         }
     }
 
@@ -861,7 +858,7 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
         cookie.next_instruction();
     }
 
-    fn program_dummy_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie) {
+    fn program_dummy_instruction_if_non_zero(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie) {
         let cmd_mode = match cmd.mode {
             NorStorageCmdMode::SDR => FlexSpiLutOpcode::DUMMY_SDR,
             NorStorageCmdMode::DDR => FlexSpiLutOpcode::DUMMY_DDR,
@@ -872,18 +869,14 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
             NorStorageBusWidth::Quad => 2,
             NorStorageBusWidth::Octal => 3,
         };
-        let dummy_val: u8;
-
-        match cmd.dummy {
-            NorStorageDummyCycles::Bytes(dummy_bytes) => {
-                dummy_val = dummy_bytes;
-            }
-            NorStorageDummyCycles::Clocks(dummy_cycles) => {
-                dummy_val = dummy_cycles;
-            }
+        let dummy_val = match cmd.dummy {
+            NorStorageDummyCycles::Bytes(dummy_bytes) => dummy_bytes,
+            NorStorageDummyCycles::Clocks(dummy_cycles) => dummy_cycles,
+        };
+        if dummy_val > 0 {
+            self.write_instr(cookie, cmd_mode, dummy_val, bus_width);
+            cookie.next_instruction();
         }
-        self.write_instr(cookie, cmd_mode, dummy_val, bus_width);
-        cookie.next_instruction();
     }
 
     fn program_read_data_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie, data_length: u8) {
@@ -965,14 +958,7 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
             self.program_addr_instruction(cmd, &mut cookie);
         }
 
-        match cmd.dummy {
-            NorStorageDummyCycles::Clocks(clk) => {
-                if clk > 0 {
-                    self.program_dummy_instruction(cmd, &mut cookie);
-                }
-            }
-            _ => {}
-        }
+        self.program_dummy_instruction_if_non_zero(cmd, &mut cookie);
 
         if let Some(transfertype) = cmd.cmdtype {
             match transfertype {
@@ -1045,7 +1031,6 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
     }
 
     fn read_cmd_data(&mut self, read_data: &mut [u8]) -> Result<(), NorStorageBusError> {
-        let num_rx_watermark_slot;
         let mut size = read_data.len() as u32;
 
         let error = self.check_transfer_status();
@@ -1055,7 +1040,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusIoError);
         }
 
-        num_rx_watermark_slot = self.rx_watermark / FIFO_SLOT_SIZE as u8;
+        let num_rx_watermark_slot = self.rx_watermark / FIFO_SLOT_SIZE as u8;
 
         for watermark_sized_chunk in read_data.chunks_mut(self.rx_watermark as usize) {
             if watermark_sized_chunk.len() < self.rx_watermark as usize {
@@ -1094,14 +1079,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
                 .zip(0..num_rx_watermark_slot)
             {
                 let data = self.info.regs.rfdr(slot as usize).read().bits();
-                if chunk.len() < FIFO_SLOT_SIZE as usize {
-                    // We cannot do copy from slice as it will cause a panic
-                    for i in 0..chunk.len() {
-                        chunk[i] = (data >> (i * 8)) as u8;
-                    }
-                } else {
-                    chunk.copy_from_slice(&data.to_le_bytes());
-                }
+                chunk.copy_from_slice(&data.to_le_bytes()[..chunk.len()]);
                 size -= chunk.len() as u32;
             }
             self.info.regs.intr().modify(|_, w| w.iprxwa().clear_bit_by_one());
@@ -1381,22 +1359,12 @@ impl FlexSpiConfigurationPort {
         }
 
         regs.dllcr(inst).modify(|_, w| {
-            let is_unified_config;
-            let mut dll_value;
-            let temp;
-
             let rx_sample_clock = flexspi_config.rx_sample_clock;
-            match rx_sample_clock {
-                Rxclksrc::Rxclksrc0 => {
-                    is_unified_config = true;
-                }
-                Rxclksrc::Rxclksrc1 => {
-                    is_unified_config = true;
-                }
-                Rxclksrc::Rxclksrc3 => {
-                    is_unified_config = device_config.is_sck2_enabled;
-                }
-            }
+            let is_unified_config = match rx_sample_clock {
+                Rxclksrc::Rxclksrc0 => true,
+                Rxclksrc::Rxclksrc1 => true,
+                Rxclksrc::Rxclksrc3 => device_config.is_sck2_enabled,
+            };
             w.ovrden().variant(is_unified_config);
             if device_config.flexspi_root_clk >= CLOCK_100MHZ {
                 /* DLLEN = 1, SLVDLYTARGET = 0xF, */
@@ -1404,9 +1372,9 @@ impl FlexSpiConfigurationPort {
                     w.slvdlytarget().bits(0xF).dllen().set_bit();
                 }
             } else {
-                temp = (device_config.data_valid_time) as u32 * 1000; /* Convert data valid time in ns to ps. */
-                dll_value = temp / DELAYCELLUNIT as u32;
-                if dll_value * (DELAYCELLUNIT as u32) < temp {
+                let temp = (device_config.data_valid_time) as u32 * 1000; /* Convert data valid time in ns to ps. */
+                let mut dll_value = temp / DELAYCELLUNIT;
+                if dll_value * DELAYCELLUNIT < temp {
                     dll_value += 1;
                 }
                 unsafe {

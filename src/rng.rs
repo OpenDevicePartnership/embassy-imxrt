@@ -139,7 +139,7 @@ impl<'d> Rng<'d> {
             // Read MCTL after reading ENT15
             let _ = self.info.regs.mctl().read();
 
-            if entropy.iter().any(|e| *e == 0) {
+            if entropy.contains(&0) {
                 return Err(Error::SeedError);
             }
 

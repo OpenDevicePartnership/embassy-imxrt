@@ -1485,25 +1485,11 @@ impl ClockOutConfig {
 
 /// Using the config, enables all desired clocks to desired clock rates
 fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
-    if let Err(e) = config.rtc.enable_and_reset() {
-        return Err(e);
-    }
-
-    if let Err(e) = config.lposc.enable_and_reset() {
-        return Err(e);
-    }
-
-    if let Err(e) = config.ffro.enable_and_reset() {
-        return Err(e);
-    }
-
-    if let Err(e) = config.sfro.enable_and_reset() {
-        return Err(e);
-    }
-
-    if let Err(e) = config.sys_osc.enable_and_reset() {
-        return Err(e);
-    }
+    config.rtc.enable_and_reset()?;
+    config.lposc.enable_and_reset()?;
+    config.ffro.enable_and_reset()?;
+    config.sfro.enable_and_reset()?;
+    config.sys_osc.enable_and_reset()?;
 
     // Switch the main clock source to FFRO divided by 4 (the reset default).
     // This is done in case a bootloader already configured the main clock to use the PLL.
@@ -1513,9 +1499,7 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
     // so this should be fine.
     MainClkConfig::reset_main_clk();
 
-    if let Err(e) = config.main_pll_clk.enable_and_reset() {
-        return Err(e);
-    }
+    config.main_pll_clk.enable_and_reset()?;
 
     // Move FLEXSPI clock source from main clock to FFRO to avoid instruction/data fetch issue in XIP when
     // updating PLL and main clock.
@@ -1531,10 +1515,7 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
 
     init_syscpuahb_clk();
 
-    if let Err(e) = config.main_clk.enable_and_reset() {
-        return Err(e);
-    }
-
+    config.main_clk.enable_and_reset()?;
     config.sys_clk.update_sys_core_clock();
     Ok(())
 }
