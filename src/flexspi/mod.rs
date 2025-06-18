@@ -1,9 +1,9 @@
-pub mod nor;
+//! FlexSPI device driver.
 
-#[cfg(feature = "time")]
-use embassy_time::Instant;
+#![deny(unsafe_op_in_unsafe_fn)]
 
-#[cfg(feature = "time")]
-pub(crate) fn is_expired(start: Instant, timeout: u64) -> bool {
-    Instant::now().duration_since(start).as_millis() > timeout
-}
+pub mod peripheral;
+
+pub mod nor_flash;
+
+pub mod nor_storage_bus;
