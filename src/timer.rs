@@ -515,9 +515,8 @@ impl<'p, M: Mode, P: CaptureEvent> CaptureTimer<'p, M, P> {
     /// Returns the captured clock count
     /// Captured clock = (Capture value - previous counter value)
     fn get_event_capture_time_us(&self) -> u32 {
-        let time_float = (self.event_clock_counts as f32 / self.clk_freq as f32) * 1000000.0;
-        let integer_part = time_float as u32;
-        integer_part
+        let microseconds = (self.event_clock_counts as f32 / self.clk_freq as f32) * 1000000.0;
+        microseconds as u32
     }
 
     fn reset_and_enable(&self) {
@@ -621,7 +620,7 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
 
             if self.info.input_event_captured() {
                 // First time capture, store data into timer hist and reenable interrupt
-                if first_captured == false {
+                if !first_captured {
                     timer_hist = reg.cr(self.info.channel).read().bits();
                     first_captured = true;
                     self.info.cap_timer_interrupt_enable();
@@ -692,7 +691,7 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Blocking, P> {
         loop {
             if self.info.input_event_captured() {
                 // First time capture, store data into timer hist and reenable interrupt
-                if first_captured == false {
+                if !first_captured {
                     timer_hist = reg.cr(self.info.channel).read().bits();
                     first_captured = true;
                     self.info.cap_timer_interrupt_enable();

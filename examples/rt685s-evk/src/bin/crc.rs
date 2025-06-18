@@ -167,5 +167,7 @@ async fn main(_spawner: Spawner) {
     let output = crc.feed_bytes(data);
     defmt::assert_eq!(output, 0x0376_e6e7);
 
-    loop {}
+    loop {
+        cortex_m::asm::wfe();
+    }
 }
