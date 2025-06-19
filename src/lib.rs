@@ -36,12 +36,7 @@ pub mod iopctl;
 pub mod pwm;
 pub mod rng;
 
-// The time driver RTC implementation takes ownership of the RTC, which conflicts with exposing the RTC
-// as a peripheral for end-user use.
-#[cfg(all(feature = "rtc", feature = "time-driver-rtc"))]
-compile_error!("The `rtc` feature is incompatible with the `time-driver-rtc` feature. Please choose one or the other.");
-
-#[cfg(feature = "rtc")]
+#[cfg(not(feature = "time-driver-rtc"))]
 pub mod rtc;
 
 /// Time driver for the iMX RT600 series.

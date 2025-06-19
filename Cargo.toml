@@ -39,9 +39,6 @@ defmt = [
 ## Enable features requiring `embassy-time`
 time = ["dep:embassy-time", "embassy-embedded-hal/time"]
 
-## Enable usage of the RTC driver.  This is mutually exclusive with the time-driver-rtc time driver; if you want the RTC driver, use time-driver-os-timer instead.
-rtc = []
-
 ## Enable custom embassy time-driver implementation, using 32KHz RTC
 time-driver-rtc = ["_time-driver", "embassy-time-driver?/tick-hz-1_000"]
 
@@ -49,7 +46,6 @@ time-driver-rtc = ["_time-driver", "embassy-time-driver?/tick-hz-1_000"]
 time-driver-os-timer = [
     "_time-driver",
     "embassy-time-driver?/tick-hz-1_000_000",
-    "rtc"
 ]
 
 _time-driver = [
