@@ -42,7 +42,7 @@ time = ["dep:embassy-time", "embassy-embedded-hal/time"]
 ## Enable custom embassy time-driver implementation, using 32KHz RTC
 time-driver-rtc = ["_time-driver", "embassy-time-driver?/tick-hz-1_000"]
 
-## Enable custom embassy time-driver implementation, using 32KHz RTC
+## Enable custom embassy time-driver implementation, using 1MHz ostimer clock
 time-driver-os-timer = [
     "_time-driver",
     "embassy-time-driver?/tick-hz-1_000_000",

@@ -12,7 +12,10 @@ use super::AlarmState;
 use crate::interrupt::InterruptExt;
 use crate::{interrupt, pac};
 
-fn rtc() -> &'static pac::rtc::RegisterBlock {
+// SAFETY: This function allows access to the RTC peripheral's register block without ownership checks.
+//         If a register is to be accessed from multiple locations (e.g. an interrupt), access to it
+//         must be synchronized using a critical section or other synchronization mechanism.
+unsafe fn rtc() -> &'static pac::rtc::RegisterBlock {
     unsafe { &*pac::Rtc::ptr() }
 }
 
@@ -51,24 +54,24 @@ struct Rtc {
 impl Rtc {
     /// Access the GPREG0 register to use it as a 31-bit counter.
     #[inline]
-    fn counter_reg(&self) -> &pac::rtc::Gpreg {
+    unsafe fn counter_reg(&self) -> &pac::rtc::Gpreg {
         rtc().gpreg(0)
     }
 
     /// Access the GPREG1 register to use it as a compare register for triggering alarms.
     #[inline]
-    fn compare_reg(&self) -> &pac::rtc::Gpreg {
+    unsafe fn compare_reg(&self) -> &pac::rtc::Gpreg {
         rtc().gpreg(1)
     }
 
     /// Access the GPREG2 register to use it to enable or disable interrupts (int_en).
     #[inline]
-    fn int_en_reg(&self) -> &pac::rtc::Gpreg {
+    unsafe fn int_en_reg(&self) -> &pac::rtc::Gpreg {
         rtc().gpreg(2)
     }
 
     fn init(&'static self, irq_prio: crate::interrupt::Priority) {
-        let r = rtc();
+        let r = unsafe { rtc() };
         // enable RTC int (1kHz since subsecond doesn't generate an int)
         r.ctrl().modify(|_r, w| w.rtc1khz_en().set_bit());
         // TODO: low power support. line above is leaving out write to .wakedpd_en().set_bit())
@@ -77,7 +80,14 @@ impl Rtc {
         // safety: Writing to the gregs is always considered unsafe, gpreg1 is used
         // as a compare register for triggering an alarm so to avoid unnecessary triggers
         // after initialization, this is set to 0x:FFFF_FFFF
-        self.compare_reg().write(|w| unsafe { w.gpdata().bits(u32::MAX) });
+        unsafe { self.compare_reg() }.write(|w| unsafe { w.gpdata().bits(u32::MAX) });
+
+        // Zero the counter register to prevent overflow.  Overflow is not generally expected to happen,
+        // but in cases where users are switching between different compile-time implementations of the time
+        // driver, the counter register may have a left-over value from the previous firmware that may have
+        // been using this register for a different purpose, which may trigger overflow.
+        // Since this is just used to track the number of ticks since boot, it is safe to zero it out.
+        unsafe { self.counter_reg() }.write(|w| unsafe { w.gpdata().bits(0) });
         // safety: writing a value to the 1kHz RTC wake counter is always considered unsafe.
         // The following loads 10 into the count-down timer.
         r.wake().write(|w| unsafe { w.bits(0xA) });
@@ -87,7 +97,7 @@ impl Rtc {
 
     #[cfg(feature = "rt")]
     fn on_interrupt(&self) {
-        let r = rtc();
+        let r = unsafe { rtc() };
         // This interrupt fires every 10 ticks of the 1kHz RTC high res clk and adds
         // 10 to the 31 bit counter gpreg0. The 32nd bit is used for parity detection
         // This is done to avoid needing to calculate # of ticks spent on interrupt
@@ -101,16 +111,16 @@ impl Rtc {
             // The following reloads 10 into the count-down timer after it triggers an int.
             // The countdown begins anew after the write so time can continue to be measured.
             r.wake().write(|w| unsafe { w.bits(0xA) });
-            if (self.counter_reg().read().bits() + 0xA) > 0x8000_0000 {
+            if (unsafe { self.counter_reg().read().bits() } + 0xA) > 0x8000_0000 {
                 // if we're going to "overflow", increase the period
                 self.next_period();
-                let rollover_diff = 0x8000_0000 - (self.counter_reg().read().bits() + 0xA);
+                let rollover_diff = 0x8000_0000 - (unsafe { self.counter_reg().read().bits() } + 0xA);
                 // safety: writing to gpregs is always considered unsafe. In order to
                 // not "lose" time when incrementing the period, gpreg0, the extended
                 // counter, is restarted at the # of ticks it would overflow by
-                self.counter_reg().write(|w| unsafe { w.bits(rollover_diff) });
+                unsafe { self.counter_reg() }.write(|w| unsafe { w.bits(rollover_diff) });
             } else {
-                self.counter_reg().modify(|r, w| unsafe { w.bits(r.bits() + 0xA) });
+                unsafe { self.counter_reg() }.modify(|r, w| unsafe { w.bits(r.bits() + 0xA) });
             }
         }
 
@@ -118,10 +128,10 @@ impl Rtc {
             // gpreg2 as an "int_en" set by next_period(). This is
             // 1 when the timestamp for the alarm deadline expires
             // before the counter register overflows again.
-            if self.int_en_reg().read().gpdata().bits() == 1 {
+            if unsafe { self.int_en_reg().read().gpdata().bits() == 1 } {
                 // gpreg0 is our extended counter register, check if
                 // our counter is larger than the compare value
-                if self.counter_reg().read().bits() > self.compare_reg().read().bits() {
+                if unsafe { self.counter_reg().read().bits() } > unsafe { self.compare_reg().read().bits() } {
                     self.trigger_alarm(cs);
                 }
             }
@@ -148,7 +158,7 @@ impl Rtc {
                 // safety: writing to gpregs is always unsafe, gpreg2 is an alarm
                 // enable. If the alarm must trigger within the next period, then
                 // just enable it. `set_alarm` has already set the correct CC val.
-                self.int_en_reg().write(|w| unsafe { w.gpdata().bits(1) });
+                unsafe { self.int_en_reg() }.write(|w| unsafe { w.gpdata().bits(1) });
             }
         })
     }
@@ -164,7 +174,7 @@ impl Rtc {
             // always just used as the alarm enable for the timer driver.
             // If alarm timestamp has passed the alarm will not fire.
             // Disarm the alarm and return `false` to indicate that.
-            self.int_en_reg().write(|w| unsafe { w.gpdata().bits(0) });
+            unsafe { self.int_en_reg() }.write(|w| unsafe { w.gpdata().bits(0) });
 
             alarm.timestamp.set(u64::MAX);
 
@@ -180,8 +190,7 @@ impl Rtc {
         // the compare register, gpreg1, is set to the last 31 bits of the timestamp
         // as the 32nd and final bit is used for the parity check in `next_period`
         // `period` will be used for the upper bits in a timestamp comparison.
-        self.compare_reg()
-            .modify(|_r, w| unsafe { w.bits(safe_timestamp as u32 & 0x7FFF_FFFF) });
+        unsafe { self.compare_reg() }.modify(|_r, w| unsafe { w.bits(safe_timestamp as u32 & 0x7FFF_FFFF) });
 
         // The following checks that the difference in timestamp is less than the overflow period
         let diff = timestamp - t;
@@ -190,12 +199,12 @@ impl Rtc {
 
             // safety: writing to the gpregs is always unsafe. If the alarm
             // must trigger within the next period, set the "int enable"
-            self.int_en_reg().write(|w| unsafe { w.gpdata().bits(1) });
+            unsafe { self.int_en_reg() }.write(|w| unsafe { w.gpdata().bits(1) });
         } else {
             // safety: writing to the gpregs is always unsafe. If alarm must trigger
             // some time after the current period, too far in the future, don't setup
             // the alarm enable, gpreg2, yet. It will be setup later by `next_period`.
-            self.int_en_reg().write(|w| unsafe { w.gpdata().bits(0) });
+            unsafe { self.int_en_reg() }.write(|w| unsafe { w.gpdata().bits(0) });
         }
 
         true
@@ -216,7 +225,7 @@ impl Driver for Rtc {
         // `period` MUST be read before `counter`, see comment at the top for details.
         let period = self.period.load(Ordering::Acquire);
         compiler_fence(Ordering::Acquire);
-        let counter = self.counter_reg().read().bits();
+        let counter = unsafe { self.counter_reg() }.read().bits();
         calc_now(period, counter)
     }
 

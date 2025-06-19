@@ -2,7 +2,10 @@
 
 use crate::{pac, peripherals, Peri};
 
-fn rtc() -> &'static pac::rtc::RegisterBlock {
+// SAFETY: This function allows access to the RTC peripheral's register block without ownership checks.
+//         If a register is to be accessed from multiple locations (e.g. an interrupt), access to it
+//         must be synchronized using a critical section or other synchronization mechanism.
+unsafe fn rtc() -> &'static pac::rtc::RegisterBlock {
     unsafe { &*pac::Rtc::ptr() }
 }
 
@@ -232,7 +235,9 @@ impl<'r> RtcDatetime<'r> {
 
     ///Set the datetime in seconds
     pub fn set_datetime_in_secs(&self, secs: u32) {
-        let r = rtc();
+        // SAFETY: This is safe because calling this function requires an instance of an RtcDatetime,
+        //         which takes ownership of the RTC peripheral, and we don't access any RTC registers from an interrupt.
+        let r = unsafe { rtc() };
         r.ctrl().modify(|_r, w| w.rtc_en().disable());
         r.count().write(|w| unsafe { w.bits(secs) });
         r.ctrl().modify(|_r, w| w.rtc_en().enable());
@@ -263,7 +268,9 @@ impl<'r> RtcDatetime<'r> {
 
     /// Get the datetime as UTC seconds
     pub fn get_datetime_as_secs(&self) -> Result<u32, Error> {
-        let r = rtc();
+        // SAFETY: This is safe because calling this function requires an instance of an RtcDatetime,
+        //         which takes ownership of the RTC peripheral, and we don't access any RTC registers from an interrupt.
+        let r = unsafe { rtc() };
         let secs;
         //  If RTC is not enabled return error
         if r.ctrl().read().rtc_en().bit_is_clear() {
