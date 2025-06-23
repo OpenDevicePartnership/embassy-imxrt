@@ -89,16 +89,17 @@ pub struct FlashSequences {
 /// Sequence indexes in the LUT for specific commands.
 ///
 /// These are chosen specifically for the driver.
-/// Using the upper half of the LUT (16..32) means we should not conflict with the default configuration for AHB access.
+/// Note that the upper half of the LUT (16..32) seems to ignore all writes and always reads as 0.
+/// So avoid that region.
 #[allow(unused)]
 pub(super) mod sequence {
-    pub const READ: u8 = 16;
-    pub const READ_STATUS: u8 = 17;
-    pub const WRITE_ENABLE: u8 = 18;
-    pub const ERASE_SECTOR: u8 = 19;
-    pub const ERASE_BLOCK: u8 = 20;
-    pub const ERASE_CHIP: u8 = 21;
-    pub const PAGE_PROGRAM: u8 = 22;
+    pub const READ: u8 = 8;
+    pub const READ_STATUS: u8 = 9;
+    pub const WRITE_ENABLE: u8 = 10;
+    pub const ERASE_SECTOR: u8 = 11;
+    pub const ERASE_BLOCK: u8 = 12;
+    pub const ERASE_CHIP: u8 = 13;
+    pub const PAGE_PROGRAM: u8 = 14;
 }
 
 impl<'a> FlexSpiNorFlash<'a> {
