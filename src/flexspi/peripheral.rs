@@ -118,6 +118,20 @@ impl<'a> FlexSpi<'a> {
         flexspi.lutcr().write(|w| w.lock().set_bit());
     }
 
+    /// Read a LUT sequence by index.
+    ///
+    /// The index should be in the range 0..32.
+    pub fn read_lut_sequence(&mut self, index: u8) -> [u32; 4] {
+        let index: usize = index.into();
+        let flexspi = unsafe { pac::Flexspi::steal() };
+        [
+            flexspi.lut(index * 4 + 0).read().bits(),
+            flexspi.lut(index * 4 + 1).read().bits(),
+            flexspi.lut(index * 4 + 2).read().bits(),
+            flexspi.lut(index * 4 + 3).read().bits(),
+        ]
+    }
+
     /// Configure a command sequence from the LUT to run using the IP interface.
     ///
     /// This function not start the command sequence.
