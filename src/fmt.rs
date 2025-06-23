@@ -7,11 +7,9 @@ use core::fmt::{Debug, Display, LowerHex};
 macro_rules! assert {
     ($($x:tt)*) => {
         {
-            #[cfg(test)]
-            ::assert2::assert!($($x)*);
-            #[cfg(all(not(test), not(feature = "defmt")))]
+            #[cfg(not(feature = "defmt"))]
             ::core::assert!($($x)*);
-            #[cfg(all(not(test), feature = "defmt"))]
+            #[cfg(feature = "defmt")]
             ::defmt::assert!($($x)*);
         }
     };
