@@ -205,6 +205,10 @@ impl<'a> FlexSpi<'a> {
     ///
     /// This part is located in RAM (the .data section) and implemented in inline assembly,
     /// to ensure that no instructions need to be fetched from FLASH while we keep the FlexSPI peripheral busy.
+    ///
+    /// TODO: Loading the instructions over the data bus works,
+    /// but the end-user may need more control over the address of the function
+    /// if they are using TrustZone.
     #[link_section = ".data"]
     #[inline(never)]
     unsafe fn _trigger_command_and_wait(&mut self) -> pac::flexspi::intr::R {
@@ -281,6 +285,10 @@ impl<'a> FlexSpi<'a> {
     ///
     /// This part is located in RAM (the .data section) and implemented in inline assembly,
     /// to ensure that no instructions need to be fetched from FLASH while we keep the FlexSPI peripheral busy.
+    ///
+    /// TODO: Loading the instructions over the data bus works,
+    /// but the end-user may need more control over the address of the function
+    /// if they are using TrustZone.
     #[link_section = ".data"]
     #[inline(never)]
     unsafe fn _trigger_command_and_wait_write(&mut self) -> (u32, pac::flexspi::intr::R) {
