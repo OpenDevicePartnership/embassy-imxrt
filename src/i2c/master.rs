@@ -52,15 +52,15 @@ fn get_freq_hz(hi_clocks: u8, lo_clocks: u8, clock_div_multiplier: u16, clock_sp
 // neither the type nor the trait are defined in our crate.  Therefore, we define this Into-like trait and
 // use that instead.
 //
-trait IntoClocksEnum<DestT> {
-    fn into_clocks_enum(&self) -> DestT;
+trait ToClocksEnum<DestT> {
+    fn to_clocks_enum(&self) -> DestT;
 }
 
 const MIN_CLOCKS: u8 = 2;
 const MAX_CLOCKS: u8 = 9;
 
-impl IntoClocksEnum<Mstscllow> for u8 {
-    fn into_clocks_enum(&self) -> Mstscllow {
+impl ToClocksEnum<Mstscllow> for u8 {
+    fn to_clocks_enum(&self) -> Mstscllow {
         match *self {
             2 => Mstscllow::Clocks2,
             3 => Mstscllow::Clocks3,
@@ -75,8 +75,8 @@ impl IntoClocksEnum<Mstscllow> for u8 {
     }
 }
 
-impl IntoClocksEnum<Mstsclhigh> for u8 {
-    fn into_clocks_enum(&self) -> Mstsclhigh {
+impl ToClocksEnum<Mstsclhigh> for u8 {
+    fn to_clocks_enum(&self) -> Mstsclhigh {
         match *self {
             2 => Mstsclhigh::Clocks2,
             3 => Mstsclhigh::Clocks3,
@@ -138,8 +138,8 @@ impl SpeedRegisterSettings {
         //
         const CLOCK_DIV_MULTIPLIER_OFFSET: u16 = 1;
         Ok(Self {
-            scl_high_clocks: result_clocks_hi.into_clocks_enum(),
-            scl_low_clocks: result_clocks_lo.into_clocks_enum(),
+            scl_high_clocks: result_clocks_hi.to_clocks_enum(),
+            scl_low_clocks: result_clocks_lo.to_clocks_enum(),
             clock_div_multiplier: result_div_multiplier - CLOCK_DIV_MULTIPLIER_OFFSET,
             _actual_freq_hz: SFRO_CLOCK_SPEED_HZ
                 / (u32::from(result_clocks_hi + result_clocks_lo) * u32::from(result_div_multiplier)),
@@ -289,7 +289,7 @@ impl<'a> I2cMaster<'a, Blocking> {
         config: Config,
     ) -> Result<Self> {
         force_clear_remediation(&T::info());
-        Ok(Self::new_inner::<T>(fc, scl, sda, config, None)?)
+        Self::new_inner::<T>(fc, scl, sda, config, None)
     }
 
     fn start(&mut self, address: u16, is_read: bool) -> Result<()> {
