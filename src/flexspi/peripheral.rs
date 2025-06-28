@@ -107,7 +107,7 @@ impl<'a> FlexSpi<'a> {
 
         // Write the LUT entries.
         unsafe {
-            flexspi.lut(index * 4 + 0).write(|w| w.bits(data[0]));
+            flexspi.lut(index * 4).write(|w| w.bits(data[0]));
             flexspi.lut(index * 4 + 1).write(|w| w.bits(data[1]));
             flexspi.lut(index * 4 + 2).write(|w| w.bits(data[2]));
             flexspi.lut(index * 4 + 3).write(|w| w.bits(data[3]));
@@ -125,7 +125,7 @@ impl<'a> FlexSpi<'a> {
         let index: usize = index.into();
         let flexspi = unsafe { pac::Flexspi::steal() };
         [
-            flexspi.lut(index * 4 + 0).read().bits(),
+            flexspi.lut(index * 4).read().bits(),
             flexspi.lut(index * 4 + 1).read().bits(),
             flexspi.lut(index * 4 + 2).read().bits(),
             flexspi.lut(index * 4 + 3).read().bits(),
@@ -385,8 +385,9 @@ impl<'a> FlexSpi<'a> {
                 }
             }
 
-            // SAFETY: pac::flexspi::intr::R is a transparent wrapper around a u32.
-            unsafe { (stage, core::mem::transmute(interrupts)) }
+            // SAFETY: pac::flexspi::intr::R is a wrapper around a u32.
+            let interrupts = unsafe { core::mem::transmute::<u32, pac::flexspi::intr::R>(interrupts) };
+            (stage, interrupts)
         }
     }
 
