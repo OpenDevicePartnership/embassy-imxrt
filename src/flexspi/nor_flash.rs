@@ -174,6 +174,34 @@ impl<'a> FlexSpiNorFlash<'a> {
         unsafe { Self::with_config(flex_spi, config).map_err(ReadConfigError::InvalidAlignmentRequirement) }
     }
 
+    /// Get the alignment requirements of the flash device.
+    ///
+    /// These requirements are either passed in manually or read from the FlexSPI Configuration Block (FCB) on the flash.
+    /// In eiter case, it is possible that they do not match the actual requirements of the flash memory.
+    pub fn alignment(&self) -> &FlashAlignment {
+        &self.alignment
+    }
+
+    /// Get a shared reference to the underlying FlexSPI peripheral.
+    pub fn peripheral(&self) -> &super::peripheral::FlexSpi<'a> {
+        &self.flex_spi
+    }
+
+    /// Get the total size in bytes of the addressable flash memory.
+    ///
+    /// This gives the sum of the size of the flash memory chips connected to each port, capped at 4 GiB.
+    pub fn size_bytes(&self) -> u32 {
+        // Sum the flash memory of all the ports.
+        let total_kb = 0u32;
+        let total_kb = total_kb.saturating_add(self.flex_spi.flash_size_kb(super::peripheral::FlashPort::A1));
+        let total_kb = total_kb.saturating_add(self.flex_spi.flash_size_kb(super::peripheral::FlashPort::A2));
+        let total_kb = total_kb.saturating_add(self.flex_spi.flash_size_kb(super::peripheral::FlashPort::B1));
+        let total_kb = total_kb.saturating_add(self.flex_spi.flash_size_kb(super::peripheral::FlashPort::B2));
+
+        // Convert to bytes.
+        total_kb.saturating_mul(1024)
+    }
+
     /// Read data from the given flash address.
     ///
     /// NOTE: The address argument is a physical flash address, not a CPU memory address.

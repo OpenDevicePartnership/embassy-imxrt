@@ -290,6 +290,7 @@ dependencies = [
  "embedded-hal-nb",
  "embedded-io",
  "embedded-io-async",
+ "embedded-storage",
  "fixed",
  "itertools",
  "mimxrt600-fcb",
