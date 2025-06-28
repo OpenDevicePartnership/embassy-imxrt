@@ -293,6 +293,7 @@ dependencies = [
  "embedded-io",
  "embedded-io-async",
  "embedded-mcu-hal",
+ "embedded-storage",
  "fixed",
  "itertools",
  "log",
