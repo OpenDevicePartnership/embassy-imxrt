@@ -375,6 +375,9 @@ impl<'a> FlexSpi<'a> {
 
                     READ_STATUS_CR1_L = const 4, // data size
                     READ_STATUS_CR1_H = const super::nor_flash::sequence::READ_STATUS, // sequence index
+
+                    // TODO: This may be Macronix specific.
+                    // Full flexibility may require a XOR + AND mask as input parameter to allow inverting and testing arbitrary bits.
                     STATUS_WRITE_IN_PROGRESS = const 2,
 
                     INTR_MASK_DONE = const IPCMDDONE,
