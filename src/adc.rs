@@ -4,15 +4,18 @@
 
 use core::future::poll_fn;
 use core::marker::PhantomData;
+use core::ops::Deref;
 use core::task::Poll;
 
 use embassy_hal_internal::interrupt::InterruptExt;
-use embassy_hal_internal::{impl_peripheral, Peri, PeripheralType};
+use embassy_hal_internal::{Peri, PeripheralType};
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::clocks::enable_and_reset;
 use crate::interrupt::typelevel::Binding;
-use crate::iopctl::{DriveMode, DriveStrength, Function, Inverter, IopctlPin, Pull, SlewRate};
+use crate::iopctl::{
+    AnyPin, DriveMode, DriveStrength, Function, Inverter, IopctlFunctionPin, IopctlPin, Pull, SlewRate,
+};
 use crate::pac::adc0;
 use crate::peripherals::ADC0;
 use crate::{interrupt, peripherals};
@@ -45,16 +48,16 @@ impl Default for Config {
 /// ADC channel config
 pub struct ChannelConfig<'d> {
     /// Positive channel to sample
-    p_channel: Peri<'d, AnyInput>,
+    p_channel: GuardedAnyInput<'d>,
     /// An optional negative channel to sample
-    n_channel: Option<Peri<'d, AnyInput>>,
+    n_channel: Option<GuardedAnyInput<'d>>,
 }
 
 impl<'d> ChannelConfig<'d> {
     /// Default configuration for single ended channel sampling.
-    pub fn single_ended(input: Peri<'d, impl Input>) -> Self {
+    pub fn single_ended(p_input: Peri<'d, impl Input>) -> Self {
         Self {
-            p_channel: input.into(),
+            p_channel: GuardedAnyInput::from(p_input),
             n_channel: None,
         }
     }
@@ -68,8 +71,8 @@ impl<'d> ChannelConfig<'d> {
         }
 
         Ok(Self {
-            p_channel: p_input.into(),
-            n_channel: Some(n_input.into()),
+            p_channel: GuardedAnyInput::from(p_input),
+            n_channel: Some(GuardedAnyInput::from(n_input)),
         })
     }
 }
@@ -92,6 +95,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 /// ADC driver
 pub struct Adc<'p, const N: usize> {
     info: Info,
+    channels: [ChannelConfig<'p>; N],
     _lifetime: PhantomData<&'p ()>,
 }
 
@@ -163,13 +167,13 @@ impl<const N: usize> Adc<'_, N> {
         self.info.regs.ctrl().modify(|_, w| w.rstfifo().rstfifo_1());
     }
 
-    fn configure_channels(&mut self, channel_config: &[ChannelConfig; N]) {
-        let mut cmd = channel_config.len();
+    fn configure_channels(&mut self) {
+        let mut cmd = self.channels.len();
 
         // Configure conversion CMD configuration
         // Set up a cmd chain, one cmd per channel
         //   one points to the next, last one points to 0
-        for ch in channel_config {
+        for ch in &self.channels {
             // Mapping cmd [1-15] into reg array index [0-14]
             // Reg array index is one less than cmd
             let cmd_index = cmd - 1;
@@ -218,7 +222,7 @@ impl<const N: usize> Adc<'_, N> {
                 .tdly()
                 .bits(0)
                 .tcmd()
-                .bits(channel_config.len() as u8)
+                .bits(self.channels.len() as u8)
         });
     }
 }
@@ -229,16 +233,17 @@ impl<'p, const N: usize> Adc<'p, N> {
         _adc: Peri<'p, T>,
         _irq: impl Binding<T::Interrupt, InterruptHandler<T>> + 'p,
         config: Config,
-        channel_config: [ChannelConfig; N],
+        channels: [ChannelConfig<'p>; N],
     ) -> Self {
         let mut inst = Self {
             info: T::info(),
+            channels,
             _lifetime: PhantomData,
         };
 
         Self::init();
         inst.configure_adc(config);
-        inst.configure_channels(&channel_config);
+        inst.configure_channels();
 
         // Enable interrupt
         interrupt::ADC0.unpend();
@@ -367,17 +372,7 @@ pub(crate) trait SealedInput {
 
 /// A dual purpose (digital/analog) input that can be used as analog input to ADC peripheral.
 #[allow(private_bounds)]
-pub trait Input: SealedInput + Into<AnyInput> + PeripheralType + Sized + 'static {
-    /// Convert this ADC input pin to a type-erased `AnyInput`.
-    ///
-    /// This allows using several inputs in situations that might require
-    /// them to be the same type, like putting them in an array.
-    fn degrade_adc(self) -> AnyInput {
-        AnyInput {
-            channel: self.channel(),
-        }
-    }
-}
+pub trait Input: SealedInput + Into<AnyInput> + PeripheralType + Sized + 'static {}
 
 /// A type-erased ADC input.
 ///
@@ -385,9 +380,9 @@ pub trait Input: SealedInput + Into<AnyInput> + PeripheralType + Sized + 'static
 /// them to be the same type, like putting them in an array.
 pub struct AnyInput {
     channel: AdcChannel,
+    pin: AnyPin,
 }
-
-impl_peripheral!(AnyInput);
+embassy_hal_internal::impl_peripheral!(AnyInput);
 
 impl SealedInput for AnyInput {
     fn channel(&self) -> AdcChannel {
@@ -396,6 +391,30 @@ impl SealedInput for AnyInput {
 }
 
 impl Input for AnyInput {}
+
+struct GuardedAnyInput<'a> {
+    inner: Peri<'a, AnyInput>,
+}
+
+impl<'a, T: Into<AnyInput> + PeripheralType> From<Peri<'a, T>> for GuardedAnyInput<'a> {
+    fn from(val: Peri<'a, T>) -> Self {
+        GuardedAnyInput { inner: val.into() }
+    }
+}
+
+impl<'a> Deref for GuardedAnyInput<'a> {
+    type Target = Peri<'a, AnyInput>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Drop for GuardedAnyInput<'_> {
+    fn drop(&mut self) {
+        self.inner.pin.reset();
+    }
+}
 
 /// Macro to implement required types for dual purpose pins
 macro_rules! impl_pin {
@@ -425,7 +444,10 @@ macro_rules! impl_pin {
 
         impl From<$pin> for crate::adc::AnyInput {
             fn from(val: $pin) -> Self {
-                crate::adc::Input::degrade_adc(val)
+                crate::adc::AnyInput {
+                    channel: val.channel(),
+                    pin: val.into(),
+                }
             }
         }
     };

@@ -15,6 +15,7 @@ use super::{
 };
 use crate::flexcomm::FlexcommRef;
 use crate::interrupt::typelevel::Interrupt;
+use crate::iopctl::GuardedAnyPin;
 use crate::pac::i2c0::msttime::{Mstsclhigh, Mstscllow};
 use crate::{dma, interrupt, Peri};
 
@@ -153,6 +154,8 @@ pub struct I2cMaster<'a, M: Mode> {
     _flexcomm: FlexcommRef,
     _phantom: PhantomData<M>,
     dma_ch: Option<dma::channel::Channel<'a>>,
+    _sda: GuardedAnyPin<'a>,
+    _scl: GuardedAnyPin<'a>,
 }
 
 /// Represents a duty cycle (percentage of time to hold the SCL line high per bit).  Fitting is best-effort / not exact.
@@ -234,8 +237,8 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
         let flexcomm = T::enable(clock);
         T::into_i2c();
 
-        sda.as_sda();
-        scl.as_scl();
+        let sda = SdaPin::as_sda(sda);
+        let scl = SclPin::as_scl(scl);
 
         let info = T::info();
         let regs = info.regs;
@@ -263,6 +266,8 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
             _flexcomm: flexcomm,
             _phantom: PhantomData,
             dma_ch,
+            _scl: scl,
+            _sda: sda,
         })
     }
 

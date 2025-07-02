@@ -11,8 +11,8 @@ use embassy_sync::waitqueue::AtomicWaker;
 use sealed::Sealed;
 
 use crate::clocks::enable_and_reset;
-use crate::iopctl::IopctlPin;
-pub use crate::iopctl::{AnyPin, DriveMode, DriveStrength, Function, Inverter, Pull, SlewRate};
+pub use crate::iopctl::{AnyGpioPin, DriveMode, DriveStrength, Function, Inverter, Pull, SlewRate};
+use crate::iopctl::{IopctlFunctionPin, IopctlPin};
 use crate::{interrupt, peripherals, Peri, PeripheralType};
 
 // This should be unique per IMXRT package
@@ -160,7 +160,7 @@ impl Sense for SenseDisabled {}
 /// remain set while not in output mode, so the pin's level will be 'remembered' when it is not in
 /// output mode.
 pub struct Flex<'d, S: Sense> {
-    pin: Peri<'d, AnyPin>,
+    pin: Peri<'d, AnyGpioPin>,
     _sense_mode: PhantomData<S>,
 }
 
@@ -421,7 +421,7 @@ impl<'d> Input<'d> {
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 struct InputFuture<'d> {
-    pin: Peri<'d, AnyPin>,
+    pin: Peri<'d, AnyGpioPin>,
 }
 
 impl<'d> InputFuture<'d> {
@@ -541,7 +541,7 @@ impl<'d> Output<'d> {
     }
 }
 
-trait SealedPin: IopctlPin {
+trait SealedPin: IopctlPin + IopctlFunctionPin {
     fn pin_port(&self) -> usize;
 
     fn port(&self) -> usize {
@@ -562,22 +562,14 @@ trait SealedPin: IopctlPin {
 
 /// GPIO pin trait.
 #[allow(private_bounds)]
-pub trait GpioPin: SealedPin + Sized + PeripheralType + Into<AnyPin> + 'static {
-    /// Type-erase the pin.
-    fn degrade(self) -> AnyPin {
-        // SAFETY: This is only called within the GpioPin trait, which is only
-        // implemented within this module on valid pin peripherals and thus
-        // has been verified to be correct.
-        unsafe { AnyPin::new(self.port() as u8, self.pin() as u8) }
-    }
-}
+pub trait GpioPin: SealedPin + Sized + PeripheralType + Into<AnyGpioPin> + 'static {}
 
-impl SealedPin for AnyPin {
+impl SealedPin for AnyGpioPin {
     fn pin_port(&self) -> usize {
         self.pin_port()
     }
 }
-impl GpioPin for AnyPin {}
+impl GpioPin for AnyGpioPin {}
 
 macro_rules! impl_pin {
     ($pin_periph:ident, $pin_port:expr, $pin_no:expr) => {
@@ -587,9 +579,9 @@ macro_rules! impl_pin {
             }
         }
         impl GpioPin for crate::peripherals::$pin_periph {}
-        impl From<crate::peripherals::$pin_periph> for AnyPin {
+        impl From<crate::peripherals::$pin_periph> for AnyGpioPin {
             fn from(value: crate::peripherals::$pin_periph) -> Self {
-                value.degrade()
+                unsafe { AnyGpioPin::new(value.port() as u8, value.pin() as u8) }
             }
         }
     };
