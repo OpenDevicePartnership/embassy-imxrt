@@ -190,6 +190,12 @@ pub struct AnyPin {
     reg: &'static PioM_N,
 }
 
+// allow placing pins in guarded Mutexes
+// SAFETY: safety for Send here is the same as the other accessors to unsafe blocks: it must be done from a single executor context.
+//         This is a temporary workaround -- a better solution might be to refactor AnyPin to no longer maintain a reference to PioM_N,
+//         but instead look up the correct register set and then perform operations within an unsafe block as we do for other peripherals
+unsafe impl Send for AnyPin {}
+
 impl AnyPin {
     /// Creates a pin from raw port and pin numbers which can then be configured.
     ///

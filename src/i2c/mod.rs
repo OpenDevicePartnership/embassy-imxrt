@@ -71,6 +71,11 @@ struct Info {
     index: usize,
 }
 
+// SAFETY: safety for Send here is the same as the other accessors to unsafe blocks: it must be done from a single executor context.
+//         This is a temporary workaround -- a better solution might be to refactor Info to no longer maintain a reference to regs,
+//         but instead look up the correct register set and then perform operations within an unsafe block as we do for other peripherals
+unsafe impl Send for Info {}
+
 trait SealedInstance {
     fn info() -> Info;
     fn index() -> usize;
