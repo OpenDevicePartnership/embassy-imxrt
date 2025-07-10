@@ -51,15 +51,17 @@ pub struct RtcDatetimeClock<'r> {
 /// Implementation for `RtcDatetime`.
 impl<'r> RtcDatetimeClock<'r> {
     ///Set the datetime in seconds since the Unix time epoch (January 1, 1970).
-    fn set_datetime_in_secs(&self, secs: u64) {
+    fn set_datetime_in_secs(&self, secs: u64) -> Result<(), DatetimeClockError> {
         // SAFETY: We have sole ownership of the RTC peripheral and we enforce that there is only one instance of RtcDatetime,
         //         so we can safely access it as long as it's always from an object that has the handle-to-RTC.
         let r = unsafe { rtc() };
 
-        let secs: u32 = secs.try_into().unwrap(); // This overflows in 2106, but we should be out of service by then.
+        let secs: u32 = secs.try_into().map_err(|_| DatetimeClockError::UnsupportedDatetime)?;
         r.ctrl().modify(|_r, w| w.rtc_en().disable());
         r.count().write(|w| unsafe { w.bits(secs) });
         r.ctrl().modify(|_r, w| w.rtc_en().enable());
+
+        Ok(())
     }
 
     /// Get the datetime as seconds since the Unix time epoch (January 1, 1970).
@@ -81,7 +83,7 @@ impl<'r> RtcDatetimeClock<'r> {
             }
         };
 
-        Ok(secs.try_into().unwrap()) // This overflows in 2106, but we should be out of service by then.
+        Ok(secs.into())
     }
 }
 
