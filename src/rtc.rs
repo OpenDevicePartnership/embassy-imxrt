@@ -56,6 +56,7 @@ impl<'r> RtcDatetimeClock<'r> {
         //         so we can safely access it as long as it's always from an object that has the handle-to-RTC.
         let r = unsafe { rtc() };
 
+        // This won't fail until 2106, when we'll overflow the 32-bit counter.
         let secs: u32 = secs.try_into().map_err(|_| DatetimeClockError::UnsupportedDatetime)?;
         r.ctrl().modify(|_r, w| w.rtc_en().disable());
         r.count().write(|w| unsafe { w.bits(secs) });
@@ -95,12 +96,7 @@ impl DatetimeClock for RtcDatetimeClock<'_> {
 
     /// Sets the current structured date and time.
     fn set_current_datetime(&mut self, datetime: &Datetime) -> Result<(), DatetimeClockError> {
-        // SAFETY: Clear RTC_EN bit before setting time to handle race condition
-        //         when the count is in middle of a transition
-        //         There is 21 mS inacurracy in the time set
-        //         Todo: https://github.com/OpenDevicePartnership/embassy-imxrt/issues/121
-        _ = self.set_datetime_in_secs(datetime.to_unix_time_seconds());
-        Ok(())
+        self.set_datetime_in_secs(datetime.to_unix_time_seconds())
     }
 
     // TODO As currently implemented, we only return times with 1s resolution.  However, the hardware is capable of 1KHz
