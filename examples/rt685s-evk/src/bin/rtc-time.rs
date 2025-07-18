@@ -6,7 +6,7 @@ use embassy_executor::Spawner;
 use embassy_imxrt::rtc::Rtc;
 use embassy_time::Timer;
 use mcu_traits::datetime::{Datetime, UncheckedDatetime};
-use mcu_traits::{DatetimeClock, Nvram, NvramStorage};
+use mcu_traits::DatetimeClock;
 
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
@@ -16,7 +16,7 @@ async fn main(_spawner: Spawner) {
 
     let p = embassy_imxrt::init(Default::default());
     let mut r = Rtc::new(p.RTC);
-    let (dt_clock, rtc_nvram) = r.split();
+    let (dt_clock, _rtc_nvram) = r.split();
 
     // Datetime clock example
     {
@@ -39,20 +39,6 @@ async fn main(_spawner: Spawner) {
         let result = dt_clock.get_current_datetime();
         assert!(result.is_ok());
         info!("RTC get time: {:?}", result.unwrap());
-    }
-
-    // NVRAM example
-    {
-        // Note that unused registers are handled with a '..' pattern, rather than explictly naming all registers.
-        // This approach is recommended, because it allows the code to remain compatible with optional HAL features that
-        // may consume some of these registers, so long as the total number of registers is not overcommitted.
-        // If the number of registers is overcommitted, the code will not compile, which will help catch the issue early.
-        let [gp0, gp1, ..] = rtc_nvram.storage();
-        info!("RTC NVRAM GP0: {:?}", gp0.read());
-        info!("RTC NVRAM GP1: {:?}", gp1.read());
-
-        gp0.write(12345678);
-        info!("RTC NVRAM GP0: {:?}", gp0.read());
     }
 
     // Example of interop with the `chrono` library.  Requires the `chrono` feature to be enabled in the HAL and embedded-mcu crates.
