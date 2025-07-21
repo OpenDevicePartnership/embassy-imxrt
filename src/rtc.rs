@@ -3,8 +3,8 @@
 use core::marker::PhantomData;
 
 use crate::{pac, peripherals, Peri};
-use mcu_traits::datetime::Datetime;
-use mcu_traits::{DatetimeClock, DatetimeClockError, Nvram, NvramStorage};
+use embedded_mcu_hal::time::{Datetime, DatetimeClock, DatetimeClockError};
+use embedded_mcu_hal::{Nvram, NvramStorage};
 
 /// Number of general-purpose registers in the RTC NVRAM
 // If you need to consume some of these registers for internal HAL use, write a feature flag that reduces this count,

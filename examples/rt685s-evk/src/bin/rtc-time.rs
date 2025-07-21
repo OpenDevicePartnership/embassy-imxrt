@@ -5,8 +5,7 @@ use defmt::info;
 use embassy_executor::Spawner;
 use embassy_imxrt::rtc::Rtc;
 use embassy_time::Timer;
-use mcu_traits::datetime::{Datetime, UncheckedDatetime};
-use mcu_traits::DatetimeClock;
+use embedded_mcu_hal::time::{Datetime, DatetimeClock, UncheckedDatetime};
 
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 

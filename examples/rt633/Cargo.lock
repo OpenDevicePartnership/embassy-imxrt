@@ -354,9 +354,9 @@ dependencies = [
  "embedded-hal-nb",
  "embedded-io",
  "embedded-io-async",
+ "embedded-mcu-hal",
  "fixed",
  "itertools",
- "mcu-traits",
  "mimxrt600-fcb",
  "mimxrt633s-pac",
  "mimxrt685s-pac",
@@ -488,6 +488,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ff09972d4073aa8c299395be75161d582e7629cd663171d62af73c8d50dba3f"
 dependencies = [
  "embedded-io",
+]
+
+[[package]]
+name = "embedded-mcu-hal"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.0.1",
 ]
 
 [[package]]
@@ -725,13 +732,6 @@ checksum = "07af8b9cdd281b7915f413fa73f29ebd5d55d0d3f0155584dade1ff18cea1b17"
 dependencies = [
  "autocfg",
  "scopeguard",
-]
-
-[[package]]
-name = "mcu-traits"
-version = "0.1.0"
-dependencies = [
- "defmt 1.0.1",
 ]
 
 [[package]]

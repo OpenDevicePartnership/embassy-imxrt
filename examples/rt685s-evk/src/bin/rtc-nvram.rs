@@ -7,7 +7,7 @@ use embassy_imxrt::rtc::RtcNvramStorage;
 use embassy_sync::blocking_mutex::{CriticalSectionMutex, Mutex};
 use embassy_sync::once_lock::OnceLock;
 use embassy_time::{Duration, Timer};
-use mcu_traits::{Nvram, NvramStorage};
+use embedded_mcu_hal::{Nvram, NvramStorage};
 use static_cell::StaticCell;
 
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
