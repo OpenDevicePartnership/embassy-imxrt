@@ -84,16 +84,12 @@ impl OsTimer {
         let alarm = self.alarms.borrow(cs);
         alarm.timestamp.set(timestamp);
 
-        // Wait until we're allowed to write to MATCH_L/MATCH_H
-        // registers
-        while os().osevent_ctrl().read().match_wr_rdy().bit_is_set() {}
+        // Disable interrupts and make sure any pending interrupts are cleared
+        os().osevent_ctrl()
+            .modify(|_, w| w.ostimer_intena().clear_bit().ostimer_intrflag().set_bit());
 
-        let t = self.now();
-        if timestamp <= t {
-            os().osevent_ctrl().modify(|_, w| w.ostimer_intena().clear_bit());
-            alarm.timestamp.set(u64::MAX);
-            return false;
-        }
+        // Wait here in case the INTRFLAG is still clearing
+        while os().osevent_ctrl().read().match_wr_rdy().bit_is_set() {}
 
         let gray_timestamp = dec_to_gray(timestamp);
 
@@ -101,7 +97,20 @@ impl OsTimer {
             .write(|w| unsafe { w.bits(gray_timestamp as u32 & 0xffff_ffff) });
         os().match_h()
             .write(|w| unsafe { w.bits((gray_timestamp >> 32) as u32) });
+
         os().osevent_ctrl().modify(|_, w| w.ostimer_intena().set_bit());
+
+        // Make sure the MATCH value is copied to shadow registers
+        while os().osevent_ctrl().read().match_wr_rdy().bit_is_set() {}
+
+        // If COUNT_VALUE goes past MATCH value before INTENA is set no interrupt
+        // will ever occur. Determine this case and return false
+        let t = self.now();
+        if timestamp <= t {
+            os().osevent_ctrl().modify(|_, w| w.ostimer_intena().clear_bit());
+            alarm.timestamp.set(u64::MAX);
+            return false;
+        }
 
         true
     }
