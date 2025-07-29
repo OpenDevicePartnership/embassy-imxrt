@@ -51,7 +51,7 @@ pub struct RtcDatetimeClock<'r> {
 
 /// Implementation for `RtcDatetime`.
 impl<'r> RtcDatetimeClock<'r> {
-    ///Set the datetime in seconds since the Unix time epoch (January 1, 1970).
+    /// Set the datetime in seconds since the Unix time epoch (January 1, 1970).
     fn set_datetime_in_secs(&self, secs: u64) -> Result<(), DatetimeClockError> {
         // SAFETY: We have sole ownership of the RTC peripheral and we enforce that there is only one instance of RtcDatetime,
         //         so we can safely access it as long as it's always from an object that has the handle-to-RTC.
