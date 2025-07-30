@@ -88,10 +88,10 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     let (_dt_clock, rtc_nvram) = rtc.split();
 
-    // Note: it's recommended to use the lower registers first and use .. for register that you don't need;
+    // Note: it's recommended to use the lower registers first and use .. for registers that you don't need;
     //       that way, if you later want to enable an optional HAL feature that consumes some of the registers
-    //       provide some functionality, you won't have to change your code to accommodate as long as you're
-    //       not overcommitting the number of registers.
+    //       to provide some functionality, you won't have to change your code to accommodate as long as you're
+    //       not overcommitting the total number of registers on your platform.
     //       If you do overcommit, the code will not compile, which will help catch the issue early.
     let [shared_ticker_register, unshared_ticker_register, static_ticker_register, ..] = rtc_nvram.storage();
 
@@ -105,7 +105,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     spawner.must_spawn(reg_setter(ticker_mutex));
     spawner.must_spawn(reg_ticker(ticker_mutex));
 
-    // Shared with static function (e.g. interrupt handler) example - you need to put a static reference in the global scope so the static function can access it
+    // Shared with static function (e.g. interrupt handler) example - you need to put a mutex over a static reference in the global scope so the static function can access it
     spawner.must_spawn(reg_static_ticker(
         STATIC_SHARED_TICKER.get_or_init(|| Mutex::new(RefCell::new(static_ticker_register))),
     ));
