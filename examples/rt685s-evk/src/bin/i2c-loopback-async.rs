@@ -102,8 +102,9 @@ async fn master_service(mut master: I2cMaster<'static, Async>) {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    info!("i2c loopback example");
     let p = embassy_imxrt::init(Default::default());
+
+    info!("i2c loopback example");
 
     let slave = I2cSlave::new_async(p.FLEXCOMM2, p.PIO0_18, p.PIO0_17, Irqs, SLAVE_ADDR.unwrap(), p.DMA0_CH4).unwrap();
 
