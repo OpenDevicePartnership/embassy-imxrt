@@ -397,7 +397,7 @@ impl<'a> FlexSpi<'a> {
 
     /// Set the IP TX FIFO watermark to the given number of u64 entries.
     ///
-    /// Note: Attempts to set the watermark level to zero will set the level to pne 64 bit word instead.
+    /// Note: Attempts to set the watermark level to zero will set the level to one 64 bit word instead.
     pub fn set_tx_fifo_watermark_u64_words(&mut self, num_u64: u8) {
         let flex_spi = unsafe { pac::Flexspi::steal() };
         let value = num_u64.saturating_sub(1);
@@ -818,8 +818,8 @@ unsafe fn read_u8_write_u32_volatile(source: &[u8], dest: *mut u32) {
 /// the unneeded most significant bytes of the last word will be discarded.
 ///
 /// # Safety:
-/// The source pointer must point to a readable memory region propperly aligned for `u32` access.
-/// The size in bytes of the region must be atleast `dest.len()` rounded up to a multiple of 4.
+/// The source pointer must point to a readable memory region properly aligned for `u32` access.
+/// The size in bytes of the region must be at least `dest.len()` rounded up to a multiple of 4.
 /// The source region may not overlap with the `dest` slice.
 unsafe fn read_u32_volatile_write_u8(source: *const u32, dest: &mut [u8]) {
     unsafe {

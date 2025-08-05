@@ -44,7 +44,7 @@ pub struct FlashAlignment {
     ///
     /// Write command start and end addresses must be aligned to a multiple of this value.
     ///
-    /// Note that writes must also be fully contained in a single page (see [`page_size`
+    /// Note that writes must also be fully contained in a single page (see [`page_size`] for details).
     pub write_alignment: u32,
 
     /// The size of a sector erased by the [`FlexSpiFlash::sector_erase()`] command.
