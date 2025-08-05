@@ -2,8 +2,8 @@
 #![no_main]
 
 use embassy_imxrt::flexspi::nor_flash::FlexSpiNorFlash;
-use embedded_storage::nor_flash::{ReadNorFlash, NorFlash};
 use embassy_imxrt::gpio;
+use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use futures::FutureExt as _;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -77,7 +77,8 @@ async fn do_main(p: &mut embassy_imxrt::Peripherals) -> Result<(), ()> {
 
     // Erase last sector
     defmt::info!("Erasing last sector");
-    flash.erase(last_sector_addr, last_sector_addr + 4096)
+    flash
+        .erase(last_sector_addr, last_sector_addr + 4096)
         .map_err(|e| defmt::error!("Failed to erase last sector from flash: {}", e))?;
 
     // // Read last sector again.
@@ -88,10 +89,11 @@ async fn do_main(p: &mut embassy_imxrt::Peripherals) -> Result<(), ()> {
 
     // Program last sector.
     defmt::info!("Programming first chunk of last sector");
-    flash.write(
-        last_sector_addr,
-        &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-    )
+    flash
+        .write(
+            last_sector_addr,
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        )
         .map_err(|e| defmt::error!("Failed to program first chunk of last sector: {}", e))?;
     defmt::info!("Programmed first chunk of last sector");
 
