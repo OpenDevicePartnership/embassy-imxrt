@@ -295,8 +295,9 @@ impl<'a> FlexSpi<'a> {
         #[cfg(not(target_arch = "arm"))]
         {
             // SAFETY: pac::flexspi::intr::R is a transparent wrapper around a u32.
-            unsafe { core::mem::transmute(0u32) }
+            unsafe { (0, core::mem::transmute(0u32)) }
         }
+        #[cfg(target_arch = "arm")]
         {
             let mut interrupts: u32;
             let mut stage: u32;
