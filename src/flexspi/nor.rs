@@ -1363,27 +1363,54 @@ impl FlexSpiConfigurationPort {
             while !(regs.sts0().read().arbidle().bit_is_set() && regs.sts0().read().seqidle().bit_is_set()) {}
         }
 
-        regs.dllcr(inst).modify(|_, w| {
+        regs.dllcr(inst).write(|w| {
             let rx_sample_clock = flexspi_config.rx_sample_clock;
             let is_unified_config = match rx_sample_clock {
                 Rxclksrc::Rxclksrc0 => true,
                 Rxclksrc::Rxclksrc1 => true,
                 Rxclksrc::Rxclksrc3 => device_config.is_sck2_enabled,
             };
-            w.ovrden().variant(is_unified_config);
-            if device_config.flexspi_root_clk >= CLOCK_100MHZ {
-                /* DLLEN = 1, SLVDLYTARGET = 0xF, */
+
+            if is_unified_config {
+                // 1 fixed delay cells in DLL delay chain
                 unsafe {
-                    w.slvdlytarget().bits(0xF).dllen().set_bit();
-                }
+                    w.dllen()
+                        .clear_bit()
+                        .slvdlytarget()
+                        .bits(0x00)
+                        .ovrden()
+                        .set_bit()
+                        .ovrdval()
+                        .bits(0x00)
+                };
             } else {
-                let temp = (device_config.data_valid_time) as u32 * 1000; /* Convert data valid time in ns to ps. */
-                let mut dll_value = temp / DELAYCELLUNIT;
-                if dll_value * DELAYCELLUNIT < temp {
-                    dll_value += 1;
-                }
-                unsafe {
-                    w.ovrdval().bits((dll_value) as u8);
+                if device_config.flexspi_root_clk >= CLOCK_100MHZ {
+                    unsafe {
+                        w.dllen()
+                            .set_bit()
+                            .slvdlytarget()
+                            .bits(0xF)
+                            .ovrden()
+                            .clear_bit()
+                            .ovrdval()
+                            .bits(0x00);
+                    }
+                } else {
+                    let temp = (device_config.data_valid_time) as u32 * 1000; /* Convert data valid time in ns to ps. */
+                    let mut dll_value = temp / DELAYCELLUNIT;
+                    if dll_value * DELAYCELLUNIT < temp {
+                        dll_value += 1;
+                    }
+                    unsafe {
+                        w.dllen()
+                            .clear_bit()
+                            .slvdlytarget()
+                            .bits(0x00)
+                            .ovrden()
+                            .set_bit()
+                            .ovrdval()
+                            .bits((dll_value) as u8);
+                    }
                 }
             }
             w

@@ -197,6 +197,9 @@ impl<'d> WindowedWatchdog<'d> {
     /// must be performed before this call.
     pub fn unleash(&mut self) {
         self.info.regs.mod_().modify(|_, w| w.wden().set_bit());
+
+        // A feed must be performed after setting WDEN bit to actually enable watchdog
+        self.feed();
     }
 
     /// Reloads the watchdog timeout counter to the time set by [`Self::set_timeout`].
