@@ -439,7 +439,7 @@ dependencies = [
 [[package]]
 name = "embedded-mcu-hal"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#21f07f4497bee540d6957f37ac7759887f00a430"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#146fda33807af6aeabcade513914da95c926fbc9"
 dependencies = [
  "chrono",
  "defmt 1.0.1",
@@ -838,7 +838,7 @@ dependencies = [
 [[package]]
 name = "storage_bus"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#21f07f4497bee540d6957f37ac7759887f00a430"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#146fda33807af6aeabcade513914da95c926fbc9"
 
 [[package]]
 name = "strsim"

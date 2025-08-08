@@ -104,7 +104,9 @@ impl DatetimeClock for RtcDatetimeClock<'_> {
     //      resolution in some configurations.  In the future, we may consider adding a feature flag to enable setting
     //      timestamps with 1KHz resolution, but we don't currently have a use case for that.
     //
-    const MAX_RESOLUTION_HZ: u32 = 1;
+    fn max_resolution_hz(&self) -> u32 {
+        1
+    }
 }
 
 /// Represents a storage cell in the RTC's general-purpose NVRAM registers.
