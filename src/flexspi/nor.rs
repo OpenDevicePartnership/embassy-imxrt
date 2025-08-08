@@ -1,6 +1,5 @@
 //! FlexSPI NOR Storage Bus Driver module for the NXP RT6xx family of microcontrollers
 //!
-use core::cmp::min;
 
 use embassy_hal_internal::{Peri, PeripheralType};
 #[cfg(feature = "time")]
@@ -91,8 +90,9 @@ macro_rules! configure_ports_b {
     };
 }
 
-const FIFO_SLOT_SIZE: u32 = 4; // 4 bytes
-const MAX_TRANSFER_SIZE: u32 = 128;
+const FIFO_SLOT_SIZE: u8 = 4; // 4 bytes
+const MAX_TRANSFER_SIZE_PER_COMMAND: u16 = u16::MAX;
+
 /// The default command sequence number to use.
 ///
 /// All commands sent over the FlexSPI bus are first programmed into a lookup table at a specific index.
@@ -604,6 +604,10 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
         read_buf: Option<&mut [u8]>,
         write_buf: Option<&[u8]>,
     ) -> Result<(), NorStorageBusError> {
+        if cmd.data_bytes.is_some() && cmd.data_bytes.unwrap() > MAX_TRANSFER_SIZE_PER_COMMAND as u32 {
+            return Err(NorStorageBusError::StorageBusInternalError);
+        }
+
         // Setup the transfer to be sent of the FlexSPI IP Port
         self.setup_ip_transfer(self.command_sequence_number, cmd.addr, cmd.data_bytes);
 
@@ -612,12 +616,6 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
 
         // Start the transfer
         self.execute_ip_cmd();
-
-        // Wait for command to complete
-        // This wait is for FlexSPI to send the command to the Flash device
-        // But the command completion in the flash needs to be checked separately
-        // by reading the status register of the flash device
-        self.wait_for_cmd_completion()?;
 
         // Check for any errors during the transfer
         self.check_transfer_status().map_err(|e| {
@@ -638,6 +636,13 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
                 }
             }
         }
+
+        // Wait for command to complete
+        // This wait is for FlexSPI to send the command to the Flash device
+        // But the command completion in the flash needs to be checked separately
+        // by reading the status register of the flash device
+        self.wait_for_cmd_completion()?;
+
         Ok(())
     }
 }
@@ -695,13 +700,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
         });
 
         // Set the data length
-        // Max RX FIFO size is MAX_FLEXSPI_TRANSFER_SIZE bytes
-        // TODO - We want to avoid RX FIFO overflow for now. We will revisit this later and increase the size
-        // once we add overflow handling
         if let Some(size) = size {
             self.info.regs.ipcr1().modify(|_, w| unsafe {
                 // SAFETY: Operation is safe as we are programming the size of the transfer
-                w.idatsz().bits(min(size, MAX_TRANSFER_SIZE) as u16)
+                w.idatsz().bits(size as u16)
             });
         }
     }
@@ -995,9 +997,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusInternalError);
         }
 
-        for chunk in read_buf.chunks_mut(MAX_TRANSFER_SIZE as usize) {
-            self.read_cmd_data(chunk)?;
-        }
+        self.read_cmd_data(read_buf)?;
 
         Ok(())
     }
@@ -1009,9 +1009,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusInternalError);
         }
 
-        for chunk in write_buf.chunks(MAX_TRANSFER_SIZE as usize) {
-            self.write_cmd_data(chunk)?;
-        }
+        self.write_cmd_data(write_buf)?;
 
         Ok(())
     }
@@ -1026,6 +1024,9 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
                     return Err(NorStorageBusError::StorageBusIoError);
                 }
             }
+
+            // Clear the IPCMDDONE interrupt so that it is not sticky
+            self.info.regs.intr().write(|w| w.ipcmddone().clear_bit_by_one());
         }
         #[cfg(not(feature = "time"))]
         {
@@ -1045,7 +1046,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
             return Err(NorStorageBusError::StorageBusIoError);
         }
 
-        let num_rx_watermark_slot = self.rx_watermark / FIFO_SLOT_SIZE as u8;
+        let num_rx_watermark_slot = self.rx_watermark / FIFO_SLOT_SIZE;
 
         for watermark_sized_chunk in read_data.chunks_mut(self.rx_watermark as usize) {
             if watermark_sized_chunk.len() < self.rx_watermark as usize {
