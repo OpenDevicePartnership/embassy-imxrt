@@ -66,6 +66,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "chrono"
+version = "0.4.41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c469d952047f47f91b68d1cba3f10d63c11d73e4636f24f08daf0278abf01c4d"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "cortex-m"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -290,6 +299,7 @@ dependencies = [
  "embedded-hal-nb",
  "embedded-io",
  "embedded-io-async",
+ "embedded-mcu-hal",
  "fixed",
  "itertools",
  "mimxrt600-fcb",
@@ -305,6 +315,7 @@ dependencies = [
 name = "embassy-imxrt-examples"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "cortex-m",
  "cortex-m-rt",
  "defmt 0.3.100",
@@ -316,6 +327,7 @@ dependencies = [
  "embassy-time",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
+ "embedded-mcu-hal",
  "embedded-storage",
  "embedded-storage-async",
  "futures",
@@ -323,6 +335,7 @@ dependencies = [
  "mimxrt600-fcb",
  "panic-probe",
  "rand",
+ "static_cell",
  "storage_bus",
 ]
 
@@ -421,6 +434,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ff09972d4073aa8c299395be75161d582e7629cd663171d62af73c8d50dba3f"
 dependencies = [
  "embedded-io",
+]
+
+[[package]]
+name = "embedded-mcu-hal"
+version = "0.1.0"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#146fda33807af6aeabcade513914da95c926fbc9"
+dependencies = [
+ "chrono",
+ "defmt 1.0.1",
 ]
 
 [[package]]
@@ -805,9 +827,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
+name = "static_cell"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89b0684884a883431282db1e4343f34afc2ff6996fe1f4a1664519b66e14c1e"
+dependencies = [
+ "portable-atomic",
+]
+
+[[package]]
 name = "storage_bus"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#004ccaa45d341a56073360b0764d2a538d46780d"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#146fda33807af6aeabcade513914da95c926fbc9"
 
 [[package]]
 name = "strsim"

@@ -292,6 +292,7 @@ dependencies = [
  "embedded-hal-nb",
  "embedded-io",
  "embedded-io-async",
+ "embedded-mcu-hal",
  "fixed",
  "itertools",
  "log",
@@ -400,6 +401,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ff09972d4073aa8c299395be75161d582e7629cd663171d62af73c8d50dba3f"
 dependencies = [
  "embedded-io",
+]
+
+[[package]]
+name = "embedded-mcu-hal"
+version = "0.1.0"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#146fda33807af6aeabcade513914da95c926fbc9"
+dependencies = [
+ "defmt 1.0.1",
 ]
 
 [[package]]
@@ -692,7 +701,7 @@ dependencies = [
 [[package]]
 name = "storage_bus"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#004ccaa45d341a56073360b0764d2a538d46780d"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#146fda33807af6aeabcade513914da95c926fbc9"
 
 [[package]]
 name = "strsim"
