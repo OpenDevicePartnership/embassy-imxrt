@@ -716,9 +716,9 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
         let intr = self.info.regs.intr().read();
 
         if intr.ipcmderr().bit_is_set() {
-            self.info.regs.intr().modify(|_, w| w.ipcmderr().clear_bit_by_one());
+            self.info.regs.intr().write(|w| w.ipcmderr().clear_bit_by_one());
             if intr.seqtimeout().bit_is_set() {
-                self.info.regs.intr().modify(|_, w| w.seqtimeout().clear_bit_by_one());
+                self.info.regs.intr().write(|w| w.seqtimeout().clear_bit_by_one());
                 Err(FlexSpiError::CmdExecErr {
                     result: CmdResult {
                         AhbReadCmdErr: false,
@@ -736,8 +736,9 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
                 })
             }
         } else if intr.ahbcmderr().bit_is_set() {
-            self.info.regs.intr().modify(|_, w| w.ahbcmderr().clear_bit_by_one());
+            self.info.regs.intr().write(|w| w.ahbcmderr().clear_bit_by_one());
             if intr.seqtimeout().bit_is_set() {
+                self.info.regs.intr().write(|w| w.seqtimeout().clear_bit_by_one());
                 Err(FlexSpiError::CmdExecErr {
                     result: CmdResult {
                         AhbReadCmdErr: true,
@@ -755,10 +756,7 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
                 })
             }
         } else if intr.ahbbustimeout().bit_is_set() {
-            self.info
-                .regs
-                .intr()
-                .modify(|_, w| w.ahbbustimeout().clear_bit_by_one());
+            self.info.regs.intr().write(|w| w.ahbbustimeout().clear_bit_by_one());
             Err(FlexSpiError::AhbBusTimeout {
                 result: CmdResult {
                     AhbReadCmdErr: true,
@@ -767,13 +765,10 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
                 },
             })
         } else if intr.datalearnfail().bit_is_set() {
-            self.info
-                .regs
-                .intr()
-                .modify(|_, w| w.datalearnfail().clear_bit_by_one());
+            self.info.regs.intr().write(|w| w.datalearnfail().clear_bit_by_one());
             Err(FlexSpiError::DataLearningFailed)
         } else if intr.ipcmdge().bit_is_set() {
-            self.info.regs.intr().modify(|_, w| w.ipcmdge().clear_bit_by_one());
+            self.info.regs.intr().write(|w| w.ipcmdge().clear_bit_by_one());
             Err(FlexSpiError::CmdGrantErr {
                 result: CmdResult {
                     AhbReadCmdErr: false,
@@ -782,7 +777,7 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
                 },
             })
         } else if intr.ahbcmdge().bit_is_set() {
-            self.info.regs.intr().modify(|_, w| w.ahbcmdge().clear_bit_by_one());
+            self.info.regs.intr().write(|w| w.ahbcmdge().clear_bit_by_one());
             Err(FlexSpiError::CmdGrantErr {
                 result: CmdResult {
                     AhbReadCmdErr: true,
@@ -1088,7 +1083,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
                 chunk.copy_from_slice(&data.to_le_bytes()[..chunk.len()]);
                 size -= chunk.len() as u32;
             }
-            self.info.regs.intr().modify(|_, w| w.iprxwa().clear_bit_by_one());
+            self.info.regs.intr().write(|w| w.iprxwa().clear_bit_by_one());
         }
 
         Ok(())
@@ -1144,7 +1139,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
                 });
             }
             // Clear out the water mark level data
-            self.info.regs.intr().modify(|_, w| w.iptxwe().clear_bit_by_one());
+            self.info.regs.intr().write(|w| w.iptxwe().clear_bit_by_one());
         }
 
         Ok(())
