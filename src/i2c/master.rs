@@ -514,6 +514,16 @@ impl<'a> I2cMaster<'a, Async> {
     ) -> Result<StartStopGuard> {
         let i2cregs = self.info.regs;
 
+        // Sentinel to perform corrective action if future is dropped
+        let on_drop = OnDrop::new(|| {
+            // Disable and re-enable master mode to clear out stalled HW state
+            // if we failed to complete sending of the address
+            // In practice, this seems to be only way to recover. Engaging with
+            // NXP to see if there is better way to handle this.
+            i2cregs.cfg().write(|w| w.msten().disabled());
+            i2cregs.cfg().write(|w| w.msten().enabled());
+        });
+
         // If there was a previous cancellation, wait for the remediation step by the
         // interrupt to complete.
         wait_remediation_complete(&self.info).await;
@@ -544,16 +554,6 @@ impl<'a> I2cMaster<'a, Async> {
             },
         )
         .await?;
-
-        // Sentinel to perform corrective action if future is dropped
-        let on_drop = OnDrop::new(|| {
-            // Disable and re-enable master mode to clear out stalled HW state
-            // if we failed to complete sending of the address
-            // In practice, this seems to be only way to recover. Engaging with
-            // NXP to see if there is better way to handle this.
-            i2cregs.cfg().write(|w| w.msten().disabled());
-            i2cregs.cfg().write(|w| w.msten().enabled());
-        });
 
         i2cregs.mstdat().write(|w|
             // SAFETY: only unsafe due to .bits usage
@@ -587,6 +587,16 @@ impl<'a> I2cMaster<'a, Async> {
         }
         let i2cregs = self.info.regs;
 
+        // Sentinel to perform corrective action if future is dropped
+        let on_drop = OnDrop::new(|| {
+            // Disable and re-enable master mode to clear out stalled HW state
+            // if we failed to complete sending of the address
+            // In practice, this seems to be only way to recover. Engaging with
+            // NXP to see if there is better way to handle this.
+            i2cregs.cfg().write(|w| w.msten().disabled());
+            i2cregs.cfg().write(|w| w.msten().enabled());
+        });
+
         // If there was a previous cancellation, wait for the remediation step by the
         // interrupt to complete.
         wait_remediation_complete(&self.info).await;
@@ -617,16 +627,6 @@ impl<'a> I2cMaster<'a, Async> {
             },
         )
         .await?;
-
-        // Sentinel to perform corrective action if future is dropped
-        let on_drop = OnDrop::new(|| {
-            // Disable and re-enable master mode to clear out stalled HW state
-            // if we failed to complete sending of the address
-            // In practice, this seems to be only way to recover. Engaging with
-            // NXP to see if there is better way to handle this.
-            i2cregs.cfg().write(|w| w.msten().disabled());
-            i2cregs.cfg().write(|w| w.msten().enabled());
-        });
 
         // The first byte of a 10-bit address is 11110XXX,
         // where XXX are the 2 most significant bits of the 10-bit address
