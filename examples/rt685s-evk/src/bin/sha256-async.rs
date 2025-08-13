@@ -3,8 +3,13 @@
 
 use defmt::{info, trace};
 use embassy_executor::Spawner;
-use embassy_imxrt::hashcrypt::{hasher, Hashcrypt};
+use embassy_imxrt::hashcrypt::{self, hasher, Hashcrypt};
+use embassy_imxrt::{bind_interrupts, peripherals};
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
+
+bind_interrupts!(struct Irqs {
+    HASHCRYPT => hashcrypt::InterruptHandler<peripherals::HASHCRYPT>;
+});
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -12,7 +17,7 @@ async fn main(_spawner: Spawner) {
     let mut hash = [0u8; hasher::HASH_LEN];
 
     info!("Initializing Hashcrypt");
-    let mut hashcrypt = Hashcrypt::new_async(p.HASHCRYPT, p.DMA0_CH30);
+    let mut hashcrypt = Hashcrypt::new_async(p.HASHCRYPT, Irqs, p.DMA0_CH30);
 
     info!("Starting hashes");
     // Data that fits into a single block
