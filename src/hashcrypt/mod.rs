@@ -1,11 +1,13 @@
 //! Hashcrypt
 use core::marker::PhantomData;
 
+use embassy_hal_internal::PeripheralType;
+use embassy_sync::waitqueue::AtomicWaker;
 use hasher::Hasher;
 
 use crate::clocks::enable_and_reset;
 use crate::peripherals::{DMA0_CH30, HASHCRYPT};
-use crate::{dma, pac, Peri};
+use crate::{dma, interrupt, pac, Peri};
 
 /// Hasher module
 pub mod hasher;
@@ -36,8 +38,46 @@ impl HashcryptDma for DMA0_CH30 {}
 pub struct Hashcrypt<'d, M: Mode> {
     hashcrypt: pac::Hashcrypt,
     dma_ch: Option<dma::channel::Channel<'d>>,
-    _peripheral: Peri<'d, HASHCRYPT>,
     _mode: PhantomData<M>,
+    _ownership: PhantomData<&'d ()>,
+}
+
+static WAKER: AtomicWaker = AtomicWaker::new();
+
+/// Hashcrypt interrupt handler.
+pub struct InterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        let reg = unsafe { crate::pac::Hashcrypt::steal() };
+
+        if reg.status().read().error().is_error() {
+            reg.intenclr().write(|w| w.error().clear_bit_by_one());
+            WAKER.wake();
+        }
+
+        if reg.status().read().digest().is_ready() {
+            reg.intenclr().write(|w| w.digest().clear_bit_by_one());
+            WAKER.wake();
+        }
+    }
+}
+
+trait SealedInstance {}
+
+/// Hashcrypt instance trait
+#[allow(private_bounds)]
+pub trait Instance: SealedInstance + PeripheralType {
+    /// Interrupt for this Hashcrypt.
+    type Interrupt: interrupt::typelevel::Interrupt;
+}
+
+impl SealedInstance for crate::peripherals::HASHCRYPT {}
+
+impl Instance for crate::peripherals::HASHCRYPT {
+    type Interrupt = crate::interrupt::typelevel::HASHCRYPT;
 }
 
 /// Hashcrypt mode
@@ -58,11 +98,11 @@ impl From<Algorithm> for u8 {
 
 impl<'d, M: Mode> Hashcrypt<'d, M> {
     /// Instantiate new Hashcrypt peripheral
-    fn new_inner(peripheral: Peri<'d, HASHCRYPT>, dma_ch: Option<dma::channel::Channel<'d>>) -> Self {
+    fn new_inner<T: Instance>(_peripheral: Peri<'d, T>, dma_ch: Option<dma::channel::Channel<'d>>) -> Self {
         enable_and_reset::<HASHCRYPT>();
 
         Self {
-            _peripheral: peripheral,
+            _ownership: PhantomData,
             _mode: PhantomData,
             dma_ch,
             hashcrypt: unsafe { pac::Hashcrypt::steal() },
@@ -84,7 +124,7 @@ impl<'d, M: Mode> Hashcrypt<'d, M> {
 
 impl<'d> Hashcrypt<'d, Blocking> {
     /// Create a new instance
-    pub fn new_blocking(peripheral: Peri<'d, HASHCRYPT>) -> Self {
+    pub fn new_blocking<T: Instance>(peripheral: Peri<'d, T>) -> Self {
         Self::new_inner(peripheral, None)
     }
 
@@ -97,7 +137,11 @@ impl<'d> Hashcrypt<'d, Blocking> {
 
 impl<'d> Hashcrypt<'d, Async> {
     /// Create a new instance
-    pub fn new_async(peripheral: Peri<'d, HASHCRYPT>, dma_ch: Peri<'d, impl HashcryptDma>) -> Self {
+    pub fn new_async<T: Instance>(
+        peripheral: Peri<'d, T>,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+        dma_ch: Peri<'d, impl HashcryptDma>,
+    ) -> Self {
         Self::new_inner(peripheral, dma::Dma::reserve_channel(dma_ch))
     }
 

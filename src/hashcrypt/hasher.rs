@@ -4,11 +4,10 @@ use core::marker::PhantomData;
 use core::task::Poll;
 
 use embassy_futures::select::select;
-use embassy_sync::waitqueue::AtomicWaker;
 
 use super::{Async, Blocking, Hashcrypt, Mode};
+use crate::dma;
 use crate::dma::transfer::{Transfer, Width};
-use crate::{dma, interrupt};
 
 /// Block length
 pub const BLOCK_LEN: usize = 64;
@@ -18,24 +17,6 @@ const END_BYTE: u8 = 0x80;
 
 // 9 from the end byte and the 64-bit length
 const LAST_BLOCK_MAX_DATA: usize = BLOCK_LEN - 9;
-
-static WAKER: AtomicWaker = AtomicWaker::new();
-
-#[cfg(feature = "rt")]
-#[interrupt]
-fn HASHCRYPT() {
-    let reg = unsafe { crate::pac::Hashcrypt::steal() };
-
-    if reg.status().read().error().is_error() {
-        reg.intenclr().write(|w| w.error().clear_bit_by_one());
-        WAKER.wake();
-    }
-
-    if reg.status().read().digest().is_ready() {
-        reg.intenclr().write(|w| w.digest().clear_bit_by_one());
-        WAKER.wake();
-    }
-}
 
 /// A hasher
 pub struct Hasher<'d, 'a, M: Mode> {
@@ -171,7 +152,7 @@ impl<'d, 'a> Hasher<'d, 'a, Async> {
                     return Poll::Ready(());
                 }
 
-                WAKER.register(cx.waker());
+                super::WAKER.register(cx.waker());
                 self.hashcrypt.hashcrypt.intenset().write(|w| w.error().interrupt());
                 Poll::Pending
             }),
@@ -184,7 +165,7 @@ impl<'d, 'a> Hasher<'d, 'a, Async> {
                 return Poll::Ready(());
             }
 
-            WAKER.register(cx.waker());
+            super::WAKER.register(cx.waker());
             self.hashcrypt.hashcrypt.intenset().write(|w| w.digest().interrupt());
             Poll::Pending
         })

@@ -615,7 +615,7 @@ impl<'d> Espi<'d> {
     }
 
     /// Complete port status
-    pub async fn complete_port(&mut self, port: usize) {
+    pub fn complete_port(&mut self, port: usize) {
         self.info.regs.port(port).stat().write(|w| {
             w.interr()
                 .clear_bit_by_one()

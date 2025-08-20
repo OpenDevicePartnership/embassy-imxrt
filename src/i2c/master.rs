@@ -267,11 +267,13 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
     }
 
     fn check_for_bus_errors(&self) -> Result<()> {
-        let i2cregs = self.info.regs;
+        let stat = self.info.regs.stat().read();
 
-        if i2cregs.stat().read().mstarbloss().is_arbitration_loss() {
+        if stat.mststate().is_nack_data() {
+            Err(TransferError::WriteFail.into())
+        } else if stat.mstarbloss().is_arbitration_loss() {
             Err(TransferError::ArbitrationLoss.into())
-        } else if i2cregs.stat().read().mstststperr().is_error() {
+        } else if stat.mstststperr().is_error() {
             Err(TransferError::StartStopError.into())
         } else {
             Ok(())
@@ -865,7 +867,9 @@ impl<'a> I2cMaster<'a, Async> {
 
                     let stat = i2cregs.stat().read();
 
-                    if stat.mstarbloss().is_arbitration_loss() {
+                    if stat.mststate().is_nack_data() {
+                        Poll::Ready(Err::<(), Error>(TransferError::WriteFail.into()))
+                    } else if stat.mstarbloss().is_arbitration_loss() {
                         Poll::Ready(Err::<(), Error>(TransferError::ArbitrationLoss.into()))
                     } else if stat.mstststperr().is_error() {
                         Poll::Ready(Err::<(), Error>(TransferError::StartStopError.into()))
@@ -888,7 +892,11 @@ impl<'a> I2cMaster<'a, Async> {
                     let stat = me.info.regs.stat().read();
 
                     if stat.mstpending().is_pending() {
-                        Poll::Ready(Ok::<(), Error>(()))
+                        if stat.mststate().is_nack_data() {
+                            Poll::Ready(Err::<(), Error>(TransferError::WriteFail.into()))
+                        } else {
+                            Poll::Ready(Ok::<(), Error>(()))
+                        }
                     } else if stat.mstarbloss().is_arbitration_loss() {
                         Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
                     } else if stat.mstststperr().is_error() {
@@ -923,7 +931,11 @@ impl<'a> I2cMaster<'a, Async> {
                         let stat = me.info.regs.stat().read();
 
                         if stat.mstpending().is_pending() {
-                            Poll::Ready(Ok::<(), Error>(()))
+                            if stat.mststate().is_nack_data() {
+                                Poll::Ready(Err::<(), Error>(TransferError::WriteFail.into()))
+                            } else {
+                                Poll::Ready(Ok::<(), Error>(()))
+                            }
                         } else if stat.mstarbloss().is_arbitration_loss() {
                             Poll::Ready(Err(TransferError::ArbitrationLoss.into()))
                         } else if stat.mstststperr().is_error() {
