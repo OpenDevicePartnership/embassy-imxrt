@@ -14,7 +14,13 @@ use crate::{interrupt, peripherals, Peri, PeripheralType};
 
 static RNG_WAKER: AtomicWaker = AtomicWaker::new();
 
-/// RNG ;error
+// The values are based on the NIST SP 800-90B recommendations for entropy source testing
+//   with α = 2 ^(-20), H = 0.8 (NXP recommendation, though questionable), W = 512 samples
+const REPETITION_THRESHOLD: usize = 26; // 1 + (-log2(α) / H)
+const ADAPTIVE_PROPORTION_THRESHOLD: usize = 348; // 1 + CRITBINOM(W, power(2, ( −H)), 1 − α).
+const ADAPTIVE_PROPORTION_WINDOW_SIZE: usize = 512;
+
+/// RNG error
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
@@ -59,6 +65,45 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 pub struct Rng<'d> {
     info: Info,
     _lifetime: PhantomData<&'d ()>,
+}
+
+fn sw_entropy_test(entropy: &[u32]) -> Result<(), Error> {
+    let mut repetition_count = 0;
+    let mut adaptive_proportion_count = 0;
+
+    let mut repetition_bit = 0;
+
+    for item in entropy.iter() {
+        for i in 0..(size_of_val(item) * 8) {
+            let bit = (*item >> i) & 0x1;
+
+            adaptive_proportion_count += bit;
+
+            if bit == repetition_bit {
+                repetition_count += 1;
+
+                if repetition_count >= REPETITION_THRESHOLD {
+                    error!("Repetition count exceeded threshold: {}", repetition_count);
+                    return Err(Error::SeedError);
+                }
+            } else {
+                repetition_count = 1;
+                repetition_bit = bit;
+            }
+        }
+    }
+
+    if adaptive_proportion_count as usize >= ADAPTIVE_PROPORTION_THRESHOLD
+        || (ADAPTIVE_PROPORTION_WINDOW_SIZE - adaptive_proportion_count as usize) >= ADAPTIVE_PROPORTION_THRESHOLD
+    {
+        error!(
+            "Adaptive proportion count exceeded threshold: {}",
+            adaptive_proportion_count
+        );
+        return Err(Error::SeedError);
+    }
+
+    Ok(())
 }
 
 impl<'d> Rng<'d> {
@@ -148,12 +193,11 @@ impl<'d> Rng<'d> {
                 *item = self.info.regs.ent(i).read().bits();
             }
 
-            // Read MCTL after reading ENT15
-            let _ = self.info.regs.mctl().read();
-
             if entropy.contains(&0) {
                 return Err(Error::SeedError);
             }
+
+            sw_entropy_test(&entropy)?;
 
             // SAFETY: entropy is the same for input and output types in
             // native endianness.
