@@ -330,7 +330,7 @@ impl<'a> FlexSpiNorFlash<'a> {
                         start: sequence::PAGE_PROGRAM,
                         count: 1,
                         address: address + i as u32 * 128,
-                        data_size: data.len() as u16,
+                        data_size: chunk.len() as u16,
                         parallel: false,
                     })
                     .map_err(|e| WriteError::Command(e.into()))?;
