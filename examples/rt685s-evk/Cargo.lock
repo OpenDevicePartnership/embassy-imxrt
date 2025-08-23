@@ -300,6 +300,7 @@ dependencies = [
  "embedded-io",
  "embedded-io-async",
  "embedded-mcu-hal",
+ "embedded-storage",
  "fixed",
  "itertools",
  "mimxrt600-fcb",

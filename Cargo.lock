@@ -293,6 +293,7 @@ dependencies = [
  "embedded-io",
  "embedded-io-async",
  "embedded-mcu-hal",
+ "embedded-storage",
  "fixed",
  "itertools",
  "log",
@@ -532,9 +533,9 @@ checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
 
 [[package]]
 name = "mimxrt600-fcb"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8507a7a1dd730be91a79e2b7a4af1e186a020e9bac06ff17dd760efc99f43e9c"
+checksum = "b1ebf867c0f22d440f0ad393c28d2007af23c08953b9111379dd711083ae19a9"
 dependencies = [
  "bitfield 0.15.0",
 ]

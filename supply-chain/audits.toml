@@ -7,6 +7,11 @@ criteria = "safe-to-deploy"
 version = "1.0.0"
 notes = "defmt-rtt is used for all our logging purposes. Version 1.0.0 merely stabilizes what was already available previously."
 
+[[audits.mimxrt600-fcb]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.1 -> 0.2.2"
+
 [[audits.mimxrt633s-pac]]
 who = "Felipe Balbi <febalbi@microsoft.com>"
 criteria = "safe-to-deploy"

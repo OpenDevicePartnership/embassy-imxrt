@@ -1,5 +1,5 @@
 [target.thumbv8m.main-none-eabihf]
-runner = 'probe-rs run --chip-description-path rt633.yaml --chip MIMXRT633SFVKB'
+runner = 'probe-rs run --chip-description-path rt633.yaml --chip MIMXRT633SFVKB --preverify --verify'
 
 rustflags = [
   "-C", "linker=flip-link",
