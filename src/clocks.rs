@@ -946,13 +946,30 @@ impl MainClkConfig {
         clkctl0.mainclkselb().write(|w| w.sel().main_1st_clk());
     }
 
-    fn init_main_clk() {
+    fn init_main_clk(&self) {
         // SAFETY:: unsafe needed to take pointers to Clkctl0 and Clkctl1
         // used to set the right HW frequency
         let clkctl0 = unsafe { crate::pac::Clkctl0::steal() };
         let clkctl1 = unsafe { crate::pac::Clkctl1::steal() };
 
-        clkctl0.mainclkselb().write(|w| w.sel().main_pll_clk());
+        let (clk_a, clk_b) = {
+            use mimxrt685s_pac::clkctl0::mainclksela::Sel as SelA;
+            use mimxrt685s_pac::clkctl0::mainclkselb::Sel as SelB;
+            match self.src {
+                MainClkSrc::FFROdiv4 => (Some(SelA::FfroDiv4), SelB::Main1stClk),
+                MainClkSrc::ClkIn => (Some(SelA::SysxtalClk), SelB::Main1stClk),
+                MainClkSrc::Lposc => (Some(SelA::Lposc), SelB::Main1stClk),
+                MainClkSrc::FFRO => (Some(SelA::FfroClk), SelB::Main1stClk),
+                MainClkSrc::SFRO => (None, SelB::SfroClk),
+                MainClkSrc::PllMain => (None, SelB::MainPllClk),
+                MainClkSrc::RTC32k => (None, SelB::Rtc32kClk),
+            }
+        };
+
+        if let Some(clk_a) = clk_a {
+            clkctl0.mainclksela().write(|w| w.sel().variant(clk_a));
+        }
+        clkctl0.mainclkselb().write(|w| w.sel().variant(clk_b));
 
         // Set PFC0DIV divider to value 2, Subtract 1 since 0-> 1, 1-> 2, etc...
         clkctl0.pfcdiv(0).modify(|_, w| w.reset().set_bit());
@@ -1096,7 +1113,7 @@ impl MultiSourceClock for MainClkConfig {
 
 impl ConfigurableClock for MainClkConfig {
     fn enable_and_reset(&self) -> Result<(), ClockError> {
-        MainClkConfig::init_main_clk();
+        self.init_main_clk();
         Ok(())
     }
     fn disable(&self) -> Result<(), ClockError> {
@@ -1513,9 +1530,10 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
         cc0.espiclksel().write(|w| w.sel().use_48_60m());
     }
 
+    config.main_clk.enable_and_reset()?;
+
     init_syscpuahb_clk();
 
-    config.main_clk.enable_and_reset()?;
     config.sys_clk.update_sys_core_clock();
     Ok(())
 }
