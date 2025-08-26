@@ -96,7 +96,7 @@ impl ClockConfig {
             main_clk: MainClkConfig {
                 state: State::Enabled,
                 //FFRO divided by 4 is reset values of Main Clk Sel A, Sel B
-                src: MainClkSrc::FFRO,
+                src: MainClkSrc::PllMain,
                 div_int: AtomicU32::new(4),
                 freq: AtomicU32::new(CORE_CPU_FREQ),
             },
