@@ -3,7 +3,7 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_imxrt::flexspi::nor::{
+use embassy_imxrt::flexspi::nor_storage_bus::{
     AhbConfig, FlexSpiFlashPort, FlexSpiFlashPortDeviceInstance, FlexspiAhbBufferConfig, FlexspiConfig,
     FlexspiConfigPortData, FlexspiDeviceConfig, FlexspiNorStorageBus,
 };
