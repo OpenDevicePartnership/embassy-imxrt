@@ -953,8 +953,8 @@ impl MainClkConfig {
         let clkctl1 = unsafe { crate::pac::Clkctl1::steal() };
 
         let (clk_a, clk_b) = {
-            use mimxrt685s_pac::clkctl0::mainclksela::Sel as SelA;
-            use mimxrt685s_pac::clkctl0::mainclkselb::Sel as SelB;
+            use pac::clkctl0::mainclksela::Sel as SelA;
+            use pac::clkctl0::mainclkselb::Sel as SelB;
             match self.src {
                 MainClkSrc::FFROdiv4 => (Some(SelA::FfroDiv4), SelB::Main1stClk),
                 MainClkSrc::ClkIn => (Some(SelA::SysxtalClk), SelB::Main1stClk),
