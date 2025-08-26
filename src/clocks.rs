@@ -95,9 +95,8 @@ impl ClockConfig {
             hclk: HclkConfig { state: State::Disabled },
             main_clk: MainClkConfig {
                 state: State::Enabled,
-                //FFRO divided by 4 is reset values of Main Clk Sel A, Sel B
                 src: MainClkSrc::PllMain,
-                div_int: AtomicU32::new(4),
+                div_int: AtomicU32::new(2),
                 freq: AtomicU32::new(CORE_CPU_FREQ),
             },
             main_pll_clk: MainPllClkConfig {
@@ -1341,12 +1340,13 @@ fn set_pad_voltage_range() {
 }
 
 /// Initialize AHB clock
-fn init_syscpuahb_clk() {
+fn init_syscpuahb_clk(divisor: u16) {
     // SAFETY: unsafe needed to take pointer to Clkctl0
     let clkctl0 = unsafe { crate::pac::Clkctl0::steal() };
     // SAFETY: unsafe needed to write the bits
-    // Set syscpuahbclkdiv to value 2, Subtract 1 since 0-> 1, 1-> 2, etc...
-    clkctl0.syscpuahbclkdiv().write(|w| unsafe { w.div().bits(2 - 1) });
+    clkctl0
+        .syscpuahbclkdiv()
+        .write(|w| unsafe { w.div().bits(divisor.saturating_sub(1) as u8) });
 
     while clkctl0.syscpuahbclkdiv().read().reqflag().bit_is_set() {}
 }
@@ -1530,9 +1530,13 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
         cc0.espiclksel().write(|w| w.sel().use_48_60m());
     }
 
+    // Increase divisor to safe value.
+    init_syscpuahb_clk(256);
+
     config.main_clk.enable_and_reset()?;
 
-    init_syscpuahb_clk();
+    // Set divisor to final value.
+    init_syscpuahb_clk(config.main_clk.div_int.load(Ordering::Relaxed) as u16);
 
     config.sys_clk.update_sys_core_clock();
     Ok(())
