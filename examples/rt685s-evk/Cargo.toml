@@ -40,6 +40,7 @@ embassy-time = { version = "0.5.0", features = [
     "defmt-timestamp-uptime",
 ] }
 storage_bus = { git = "https://github.com/OpenDevicePartnership/embedded-mcu" }
+embedded-hal-bus = "0.3.0"
 embedded-hal-1 = { package = "embedded-hal", version = "1.0" }
 embedded-hal-async = "1.0.0"
 futures = { version = "0.3.30", default-features = false, features = [
@@ -47,6 +48,7 @@ futures = { version = "0.3.30", default-features = false, features = [
 ] }
 embedded-storage = { version = "0.3" }
 embedded-storage-async = { version = "0.4.1" }
+is31fl3743b-driver = { version = "0.1.1", features = [ "is_blocking" ]}
 mimxrt600-fcb = "0.2.2"
 
 embedded-mcu-hal = { git = "https://github.com/OpenDevicePartnership/embedded-mcu", features = [
