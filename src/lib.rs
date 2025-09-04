@@ -35,6 +35,7 @@ pub mod i2c;
 pub mod iopctl;
 pub mod pwm;
 pub mod rng;
+pub mod spi;
 
 #[cfg(not(feature = "time-driver-rtc"))]
 pub mod rtc;
