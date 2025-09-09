@@ -309,7 +309,7 @@ impl<'a, M: Mode> Uart<'a, M> {
 
         if tx.is_some() {
             regs.fifocfg()
-                .modify(|_, w| w.emptytx().set_bit().enabletx().enabled().waketx().enabled());
+                .modify(|_, w| w.emptytx().set_bit().enabletx().enabled());
 
             // clear FIFO error
             regs.fifostat().write(|w| w.txerr().set_bit());
@@ -324,6 +324,8 @@ impl<'a, M: Mode> Uart<'a, M> {
 
             // clear FIFO error
             regs.fifostat().write(|w| w.rxerr().set_bit());
+        
+
         }
 
         if rts.is_some() && cts.is_some() {
