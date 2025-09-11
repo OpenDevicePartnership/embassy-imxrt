@@ -790,7 +790,7 @@ impl<'p> CountingTimer<'p, Async> {
 
 impl<'p> CountingTimer<'p, Blocking> {
     /// Creates a new `CountingTimer` in blocking mode.
-    pub fn new_blocking<T: Instance>(_inst: Peri<'_, T>, clk: impl ConfigurableClock) -> Self {
+    pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>, clk: impl ConfigurableClock) -> Self {
         let info = T::info();
 
         Self {
