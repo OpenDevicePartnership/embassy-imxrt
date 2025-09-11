@@ -6,13 +6,13 @@ use core::task::Poll;
 use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 
-use crate::clocks::{ClockConfig, ConfigurableClock, enable_and_reset};
+use crate::clocks::{enable_and_reset, ClockConfig, ConfigurableClock};
 use crate::interrupt::typelevel::Interrupt;
 use crate::iopctl::{DriveMode, DriveStrength, Inverter, IopctlPin as Pin, Pull, SlewRate};
-use crate::pac::Clkctl1;
 use crate::pac::clkctl1::ct32bitfclksel::Sel;
+use crate::pac::Clkctl1;
 use crate::pwm::{CentiPercent, Hertz, MicroSeconds};
-use crate::{Peri, PeripheralType, interrupt, peripherals};
+use crate::{interrupt, peripherals, Peri, PeripheralType};
 
 const COUNT_CHANNEL: usize = 20;
 const CAPTURE_CHANNEL: usize = 20;
