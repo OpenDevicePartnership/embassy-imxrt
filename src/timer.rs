@@ -654,7 +654,6 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Blocking, P> {
     pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>, pin: Peri<'p, P>, clk: impl ConfigurableClock) -> Self {
         let info = T::info();
         let module = info.module;
-        T::interrupt_enable();
         Self {
             id: COUNT_CHANNEL + module * CHANNEL_PER_MODULE + info.channel,
             event_clock_counts: 0,
@@ -794,7 +793,6 @@ impl CountingTimer<Blocking> {
     /// Creates a new `CountingTimer` in blocking mode.
     pub fn new_blocking<T: Instance>(_inst: Peri<'_, T>, clk: impl ConfigurableClock) -> Self {
         let info = T::info();
-        T::interrupt_enable();
         Self {
             id: info.module * CHANNEL_PER_MODULE + info.channel,
             clk_freq: clk.get_clock_rate().unwrap(),
