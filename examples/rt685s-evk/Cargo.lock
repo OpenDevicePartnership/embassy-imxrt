@@ -156,15 +156,6 @@ dependencies = [
 
 [[package]]
 name = "defmt"
-version = "0.3.100"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0963443817029b2024136fc4dd07a5107eb8f977eaf18fcd1fdeb11306b64ad"
-dependencies = [
- "defmt 1.0.1",
-]
-
-[[package]]
-name = "defmt"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "548d977b6da32fa1d1fda2876453da1e7df63ad0304c8b3dae4dbe7b96f39b78"
@@ -197,12 +188,12 @@ dependencies = [
 
 [[package]]
 name = "defmt-rtt"
-version = "0.4.2"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6eca0aae8aa2cf8333200ecbd236274697bc0a394765c858b3d9372eb1abcfa"
+checksum = "b2cac3b8a5644a9e02b75085ebad3b6deafdbdbdec04bb25086523828aa4dfd1"
 dependencies = [
  "critical-section",
- "defmt 0.3.100",
+ "defmt",
 ]
 
 [[package]]
@@ -246,7 +237,7 @@ checksum = "06070468370195e0e86f241c8e5004356d696590a678d47d6676795b2e439c6b"
 dependencies = [
  "cortex-m",
  "critical-section",
- "defmt 1.0.1",
+ "defmt",
  "document-features",
  "embassy-executor-macros",
  "embassy-executor-timer-queue",
@@ -284,7 +275,7 @@ checksum = "95285007a91b619dc9f26ea8f55452aa6c60f7115a4edc05085cd2bd3127cd7a"
 dependencies = [
  "cortex-m",
  "critical-section",
- "defmt 1.0.1",
+ "defmt",
  "num-traits",
 ]
 
@@ -296,7 +287,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "critical-section",
- "defmt 1.0.1",
+ "defmt",
  "document-features",
  "embassy-embedded-hal",
  "embassy-futures",
@@ -331,7 +322,7 @@ dependencies = [
  "chrono",
  "cortex-m",
  "cortex-m-rt",
- "defmt 0.3.100",
+ "defmt",
  "defmt-rtt",
  "embassy-executor",
  "embassy-futures",
@@ -360,7 +351,7 @@ checksum = "73974a3edbd0bd286759b3d483540f0ebef705919a5f56f4fc7709066f71689b"
 dependencies = [
  "cfg-if",
  "critical-section",
- "defmt 1.0.1",
+ "defmt",
  "embedded-io-async",
  "futures-core",
  "futures-sink",
@@ -375,7 +366,7 @@ checksum = "f4fa65b9284d974dad7a23bb72835c4ec85c0b540d86af7fc4098c88cff51d65"
 dependencies = [
  "cfg-if",
  "critical-section",
- "defmt 1.0.1",
+ "defmt",
  "document-features",
  "embassy-time-driver",
  "embedded-hal 0.2.7",
@@ -459,7 +450,7 @@ version = "0.1.0"
 source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#146fda33807af6aeabcade513914da95c926fbc9"
 dependencies = [
  "chrono",
- "defmt 1.0.1",
+ "defmt",
 ]
 
 [[package]]
@@ -652,27 +643,27 @@ dependencies = [
 
 [[package]]
 name = "mimxrt633s-pac"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "843c1c63c367293e4fa270cc161b5bdfef55b4c6a0a18768f737241fb24be70c"
+checksum = "a580cd0048e0e5b1eee17208b7f95ba05ec7ca0175789333b2fa7241798d3cdc"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "critical-section",
- "defmt 0.3.100",
+ "defmt",
  "vcell",
 ]
 
 [[package]]
 name = "mimxrt685s-pac"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c0b80e5add9dc74500acbb1ca70248e237d242b77988631e41db40a225f3a40"
+checksum = "8c8860258951178c4f91e42581ae8f33241a0e9a3e89bf2721d932ef366db51b"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "critical-section",
- "defmt 0.3.100",
+ "defmt",
  "vcell",
 ]
 
@@ -702,12 +693,12 @@ dependencies = [
 
 [[package]]
 name = "panic-probe"
-version = "0.3.2"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4047d9235d1423d66cc97da7d07eddb54d4f154d6c13805c6d0793956f4f25b0"
+checksum = "fd402d00b0fb94c5aee000029204a46884b1262e0c443f166d86d2c0747e1a1a"
 dependencies = [
  "cortex-m",
- "defmt 0.3.100",
+ "defmt",
 ]
 
 [[package]]

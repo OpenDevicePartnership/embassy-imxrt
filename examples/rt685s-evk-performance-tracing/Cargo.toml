@@ -11,13 +11,14 @@ debug = 2  # enough information for defmt/rtt
 
 [dependencies]
 
-panic-probe = { version = "0.3.1", features = ["print-defmt"] }
+panic-probe = { version = "1.0", features = ["print-defmt"] }
 cortex-m = { version = "0.7.7", features = [
     "inline-asm",
     "critical-section-single-core",
 ] }
-defmt = "0.3.6"
 cortex-m-rt = "0.7.3"
+defmt = "1.0"
+defmt-rtt = "1.0"
 embassy-imxrt = { version = "0.1.0", path = "../../", features = [
     "defmt",
     "time-driver",
@@ -51,7 +52,6 @@ embedded-storage-async = { version = "0.4.1" }
 mimxrt600-fcb = "0.2.2"
 rand = { version = "0.8.5", default-features = false }
 systemview-tracing = { git = "https://github.com/OpenDevicePartnership/systemview-tracing" }
-defmt-rtt = "1.0.0"
 
 [features]
 systemview-tracing = [

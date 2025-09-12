@@ -54,19 +54,15 @@ criteria = "safe-to-deploy"
 
 [[exemptions.darling]]
 version = "0.20.11"
-criteria = "safe-to-deploy"
+criteria = "safe-to-run"
 
 [[exemptions.darling_core]]
 version = "0.20.11"
-criteria = "safe-to-deploy"
+criteria = "safe-to-run"
 
 [[exemptions.darling_macro]]
 version = "0.20.11"
-criteria = "safe-to-deploy"
-
-[[exemptions.defmt]]
-version = "0.3.100"
-criteria = "safe-to-deploy"
+criteria = "safe-to-run"
 
 [[exemptions.defmt]]
 version = "1.0.1"
@@ -85,16 +81,8 @@ version = "0.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.embassy-executor]]
-version = "0.7.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.embassy-executor]]
 version = "0.9.0"
 criteria = "safe-to-run"
-
-[[exemptions.embassy-executor-macros]]
-version = "0.6.2"
-criteria = "safe-to-deploy"
 
 [[exemptions.embassy-executor-macros]]
 version = "0.7.0"
@@ -110,10 +98,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.embassy-sync]]
 version = "0.7.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.embassy-time]]
-version = "0.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.embassy-time]]
@@ -168,14 +152,6 @@ criteria = "safe-to-deploy"
 version = "0.3.31"
 criteria = "safe-to-deploy"
 
-[[exemptions.futures-task]]
-version = "0.3.31"
-criteria = "safe-to-deploy"
-
-[[exemptions.futures-util]]
-version = "0.3.31"
-criteria = "safe-to-deploy"
-
 [[exemptions.hash32]]
 version = "0.3.1"
 criteria = "safe-to-deploy"
@@ -186,7 +162,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.ident_case]]
 version = "1.0.1"
-criteria = "safe-to-deploy"
+criteria = "safe-to-run"
 
 [[exemptions.itertools]]
 version = "0.11.0"
@@ -200,16 +176,8 @@ criteria = "safe-to-deploy"
 version = "0.2.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.mimxrt685s-pac]]
-version = "0.4.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.paste]]
 version = "1.0.15"
-criteria = "safe-to-deploy"
-
-[[exemptions.pin-utils]]
-version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.portable-atomic]]
