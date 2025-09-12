@@ -28,6 +28,16 @@ criteria = "safe-to-deploy"
 version = "0.4.1"
 notes = "New version of mimxrt633s-pac merely introduces safe enum variants for IRULESTAT register. No new unsafe blocks are introduced."
 
+[[audits.mimxrt633s-pac]]
+who = "Felipe Balbi <febalbi@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "0.5.0"
+
+[[audits.mimxrt685s-pac]]
+who = "Felipe Balbi <febalbi@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "0.5.0"
+
 [[audits.static_cell]]
 who = "jerrysxie <jerryxie@microsoft.com>"
 criteria = "safe-to-run"
