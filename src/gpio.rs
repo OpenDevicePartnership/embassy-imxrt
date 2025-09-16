@@ -357,6 +357,15 @@ impl<'d> Flex<'d, SenseDisabled> {
     }
 }
 
+/// # Safety
+/// There's nothing that ties the Flex to a specific thread or interrupt.
+/// We need to impl this manually because an UnsafeCell is used which is not Send by default.
+unsafe impl<'d, S: Sense> core::marker::Send for Flex<'d, S> {}
+/// # Safety
+/// All non-mut operations are atomic thanks to the hardware having set and clear registers.
+/// We need to impl this manually because an UnsafeCell is used which is not Sync by default.
+unsafe impl<'d, S: Sense> core::marker::Sync for Flex<'d, S> {}
+
 /// Input pin
 pub struct Input<'d> {
     pin: Flex<'d, SenseEnabled>,
