@@ -95,7 +95,9 @@ impl<'a> Spi<'a, Blocking> {
     pub fn new_blocking_loopback<T: Instance>(_inner: Peri<'a, T>, config: Config) -> Self {
         Self::new_inner(_inner, None, None, None, config)
     }
+}
 
+impl<'a, M: IoMode> Spi<'a, M> {
     /// Read data from Spi blocking execution until done.
     pub fn blocking_read(&mut self, data: &mut [u8]) -> Result<(), Error> {
         critical_section::with(|_| {
@@ -917,7 +919,7 @@ impl_dma!(FLEXCOMM7, Tx, DMA0_CH15);
 
 // ==============================
 
-impl<'d> embedded_hal_02::blocking::spi::Transfer<u8> for Spi<'d, Blocking> {
+impl<'d, M: IoMode> embedded_hal_02::blocking::spi::Transfer<u8> for Spi<'d, M> {
     type Error = Error;
     fn transfer<'w>(&mut self, words: &'w mut [u8]) -> Result<&'w [u8], Self::Error> {
         self.blocking_transfer_in_place(words)?;
@@ -925,7 +927,7 @@ impl<'d> embedded_hal_02::blocking::spi::Transfer<u8> for Spi<'d, Blocking> {
     }
 }
 
-impl<'d> embedded_hal_02::blocking::spi::Write<u8> for Spi<'d, Blocking> {
+impl<'d, M: IoMode> embedded_hal_02::blocking::spi::Write<u8> for Spi<'d, M> {
     type Error = Error;
 
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
@@ -939,11 +941,11 @@ impl embedded_hal_1::spi::Error for Error {
     }
 }
 
-impl<'d> embedded_hal_1::spi::ErrorType for Spi<'d, Blocking> {
+impl<'d, M: IoMode> embedded_hal_1::spi::ErrorType for Spi<'d, M> {
     type Error = Error;
 }
 
-impl<'d> embedded_hal_1::spi::SpiBus<u8> for Spi<'d, Blocking> {
+impl<'d, M: IoMode> embedded_hal_1::spi::SpiBus<u8> for Spi<'d, M> {
     fn flush(&mut self) -> Result<(), Self::Error> {
         self.flush()
     }
@@ -965,7 +967,29 @@ impl<'d> embedded_hal_1::spi::SpiBus<u8> for Spi<'d, Blocking> {
     }
 }
 
-impl<'d> SetConfig for Spi<'d, Blocking> {
+impl<'d> embedded_hal_async::spi::SpiBus<u8> for Spi<'d, Async> {
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.async_flush().await
+    }
+
+    async fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+        self.async_write(words).await
+    }
+
+    async fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        self.async_read(words).await
+    }
+
+    async fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
+        self.async_transfer(read, write).await
+    }
+
+    async fn transfer_in_place(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        self.async_transfer_in_place(words).await
+    }
+}
+
+impl<'d, M: IoMode> SetConfig for Spi<'d, M> {
     type Config = Config;
     type ConfigError = ();
     fn set_config(&mut self, config: &Self::Config) -> Result<(), ()> {
