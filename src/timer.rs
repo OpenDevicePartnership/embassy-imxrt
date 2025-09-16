@@ -1,5 +1,5 @@
 //! Timer module for the NXP RT6xx family of microcontrollers
-use core::future::poll_fn;
+use core::future::{poll_fn, Future};
 use core::marker::PhantomData;
 use core::task::Poll;
 
@@ -576,7 +576,7 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
     /// Waits asynchronously for the capture timer to record an event timestamp.
     /// This API can capture time till the counter has not crossed the original position after rollover
     /// Once the counter crosses the original position, the captured time is not accurate
-    pub async fn capture_event_time_us(&mut self, edge: CaptureChEdge) -> u32 {
+    pub fn capture_event_time_us(&mut self, edge: CaptureChEdge) -> impl Future<Output = u32> + use<'_, 'p, P> {
         let reg = self.info.regs;
         self.start(edge);
 
@@ -599,19 +599,18 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
                 Poll::Pending
             }
         })
-        .await
     }
 
     /// Trigger capture twice, return time us between these two capture
     /// TODO: https://github.com/OpenDevicePartnership/embassy-imxrt/issues/229
-    pub async fn capture_cycle_time_us(&mut self, edge: CaptureChEdge) -> u32 {
+    pub fn capture_cycle_time_us(&mut self, edge: CaptureChEdge) -> impl Future<Output = u32> + use<'_, 'p, P> {
         let reg = self.info.regs;
         self.start(edge);
         let mut timer_hist = 0;
         let mut first_captured = false;
 
         // Implementation of waiting for the interrupt
-        poll_fn(|cx| {
+        poll_fn(move |cx| {
             WAKERS[self.id].register(cx.waker());
 
             if self.info.input_event_captured() {
@@ -636,7 +635,6 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
                 Poll::Pending
             }
         })
-        .await
     }
 }
 
@@ -771,7 +769,7 @@ impl<'p> CountingTimer<'p, Async> {
         }
     }
     /// Waits asynchronously for the countdown timer to complete.
-    pub async fn wait_us(&mut self, count_us: u32) {
+    pub fn wait_us(&mut self, count_us: u32) -> impl Future<Output = ()> + use<'_, 'p> {
         self.start(count_us);
 
         // Implementation of waiting for the interrupt
@@ -784,7 +782,6 @@ impl<'p> CountingTimer<'p, Async> {
             }
             Poll::Pending
         })
-        .await;
     }
 }
 
