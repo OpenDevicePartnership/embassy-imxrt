@@ -1,6 +1,6 @@
 //! Serial Peripheral Interface (SPI) driver.
 
-use core::future::poll_fn;
+use core::future::{poll_fn, Future};
 use core::marker::PhantomData;
 use core::task::Poll;
 
@@ -327,7 +327,9 @@ impl<'a> Spi<'a, Async> {
             *word = self.info.regs.fiford().read().rxdata().bits() as u8;
         }
 
-        self.async_flush().await
+        self.async_flush().await;
+
+        Ok(())
     }
 
     /// Write data to Spi async execution until done.
@@ -371,7 +373,9 @@ impl<'a> Spi<'a, Async> {
             });
         }
 
-        self.async_flush().await
+        self.async_flush().await;
+
+        Ok(())
     }
 
     /// Transfer data to SPI async execution until done.
@@ -443,7 +447,9 @@ impl<'a> Spi<'a, Async> {
             }
         }
 
-        self.async_flush().await
+        self.async_flush().await;
+
+        Ok(())
     }
 
     /// Transfer data in place to SPI async execution until done.
@@ -500,11 +506,13 @@ impl<'a> Spi<'a, Async> {
             *word = self.info.regs.fiford().read().rxdata().bits() as u8;
         }
 
-        self.async_flush().await
+        self.async_flush().await;
+
+        Ok(())
     }
 
     /// Async flush.
-    pub async fn async_flush(&mut self) -> Result<(), Error> {
+    pub fn async_flush(&mut self) -> impl Future<Output = ()> + use<'_, 'a> {
         self.wait_for(
             |me| {
                 if me.info.regs.stat().read().mstidle().bit_is_set() {
@@ -517,19 +525,16 @@ impl<'a> Spi<'a, Async> {
                 me.info.regs.intenset().write(|w| w.mstidleen().set_bit());
             },
         )
-        .await;
-
-        Ok(())
     }
 
     /// Calls `f` to check if we are ready or not.
     /// If not, `g` is called once the waker is set (to eg enable the required interrupts).
-    async fn wait_for<F, U, G>(&mut self, mut f: F, mut g: G) -> U
+    fn wait_for<F, U, G>(&mut self, mut f: F, mut g: G) -> impl Future<Output = U> + use<'_, 'a, F, U, G>
     where
         F: FnMut(&mut Self) -> Poll<U>,
         G: FnMut(&mut Self),
     {
-        poll_fn(|cx| {
+        poll_fn(move |cx| {
             // Register waker before checking condition, to ensure that wakes/interrupts
             // aren't lost between f() and g()
             self.info.waker.register(cx.waker());
@@ -541,7 +546,6 @@ impl<'a> Spi<'a, Async> {
 
             r
         })
-        .await
     }
 }
 
