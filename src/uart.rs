@@ -1,6 +1,6 @@
 //! Universal Asynchronous Receiver Transmitter (UART) driver.
 
-use core::future::poll_fn;
+use core::future::{poll_fn, Future};
 use core::marker::PhantomData;
 use core::task::Poll;
 
@@ -628,7 +628,7 @@ impl<'a> UartTx<'a, Async> {
     }
 
     /// Flush UART TX asynchronously.
-    pub async fn flush(&mut self) -> Result<()> {
+    pub fn flush(&mut self) -> impl Future<Output = Result<()>> + use<'_, 'a> {
         self.wait_on(
             |me| {
                 if me.info.regs.stat().read().txidle().bit_is_set() {
@@ -641,17 +641,16 @@ impl<'a> UartTx<'a, Async> {
                 me.info.regs.intenset().write(|w| w.txidleen().set_bit());
             },
         )
-        .await
     }
 
     /// Calls `f` to check if we are ready or not.
     /// If not, `g` is called once the waker is set (to eg enable the required interrupts).
-    async fn wait_on<F, U, G>(&mut self, mut f: F, mut g: G) -> U
+    fn wait_on<F, U, G>(&mut self, mut f: F, mut g: G) -> impl Future<Output = U> + use<'_, 'a, F, U, G>
     where
         F: FnMut(&mut Self) -> Poll<U>,
         G: FnMut(&mut Self),
     {
-        poll_fn(|cx| {
+        poll_fn(move |cx| {
             // Register waker before checking condition, to ensure that wakes/interrupts
             // aren't lost between f() and g()
             UART_WAKERS[self.info.index].register(cx.waker());
@@ -663,7 +662,6 @@ impl<'a> UartTx<'a, Async> {
 
             r
         })
-        .await
     }
 }
 
@@ -834,18 +832,18 @@ impl<'a> Uart<'a, Async> {
     }
 
     /// Read from UART RX.
-    pub async fn read(&mut self, buf: &mut [u8]) -> Result<()> {
-        self.rx.read(buf).await
+    pub fn read<'buf>(&mut self, buf: &'buf mut [u8]) -> impl Future<Output = Result<()>> + use<'_, 'a, 'buf> {
+        self.rx.read(buf)
     }
 
     /// Transmit the provided buffer.
-    pub async fn write(&mut self, buf: &[u8]) -> Result<()> {
-        self.tx.write(buf).await
+    pub fn write<'buf>(&mut self, buf: &'buf [u8]) -> impl Future<Output = Result<()>> + use<'_, 'a, 'buf> {
+        self.tx.write(buf)
     }
 
     /// Flush UART TX.
-    pub async fn flush(&mut self) -> Result<()> {
-        self.tx.flush().await
+    pub fn flush(&mut self) -> impl Future<Output = Result<()>> + use<'_, 'a> {
+        self.tx.flush()
     }
 }
 

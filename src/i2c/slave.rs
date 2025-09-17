@@ -1,6 +1,6 @@
 //! Implements I2C function support over flexcomm + gpios
 
-use core::future::poll_fn;
+use core::future::{poll_fn, Future};
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
 use core::task::Poll;
@@ -663,13 +663,13 @@ impl I2cSlave<'_, Async> {
         Err(TransferError::WriteFail.into())
     }
 
-    async fn poll_sw_action(&self) {
+    fn poll_sw_action(&self) -> impl Future<Output = ()> + use<'_> {
         let i2c = self.info.regs;
 
         i2c.intenset()
             .write(|w| w.slvpendingen().enabled().slvdeselen().enabled());
 
-        poll_fn(|cx: &mut core::task::Context<'_>| {
+        poll_fn(move |cx: &mut core::task::Context<'_>| {
             I2C_WAKERS[self.info.index].register(cx.waker());
 
             let stat = i2c.stat().read();
@@ -682,7 +682,6 @@ impl I2cSlave<'_, Async> {
 
             Poll::Pending
         })
-        .await;
     }
 
     /// Complete DMA and return bytes transfer

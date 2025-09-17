@@ -1,6 +1,6 @@
 //! Implements I2C function support over flexcomm + gpios
 
-use core::future::poll_fn;
+use core::future::{poll_fn, Future};
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU8, Ordering};
 use core::task::Poll;
@@ -147,9 +147,9 @@ fn force_clear_remediation(info: &Info) {
 
 /// Await the remediation step being completed by the interrupt, after
 /// a previous cancellation
-async fn wait_remediation_complete(info: &Info) {
+fn wait_remediation_complete(info: &Info) -> impl Future<Output = ()> {
     let index = info.index;
-    poll_fn(|cx| {
+    poll_fn(move |cx| {
         I2C_WAKERS[index].register(cx.waker());
         let rem = I2C_REMEDIATION[index].load(Ordering::Acquire);
         if rem == REMEDIATON_NONE {
@@ -158,7 +158,6 @@ async fn wait_remediation_complete(info: &Info) {
             Poll::Pending
         }
     })
-    .await;
 }
 
 /// Ten bit addresses start with first byte 0b11110XXX

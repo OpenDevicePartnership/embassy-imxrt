@@ -1,5 +1,5 @@
 /// I2C Master Driver
-use core::future::poll_fn;
+use core::future::{poll_fn, Future};
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
 use core::task::Poll;
@@ -963,7 +963,7 @@ impl<'a> I2cMaster<'a, Async> {
         }
     }
 
-    async fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self) -> Result<impl Future<Output = Result<()>> + use<'a, '_>> {
         // Procedure from 24.3.1.1 pg 545
         let i2cregs = self.info.regs;
 
@@ -973,7 +973,7 @@ impl<'a> I2cMaster<'a, Async> {
 
         i2cregs.mstctl().write(|w| w.mststop().set_bit());
 
-        self.wait_on(
+        Ok(self.wait_on(
             |me| {
                 let stat = me.info.regs.stat().read();
 
@@ -997,18 +997,17 @@ impl<'a> I2cMaster<'a, Async> {
                         .set_bit()
                 });
             },
-        )
-        .await
+        ))
     }
 
     /// Calls `f` to check if we are ready or not.
     /// If not, `g` is called once the waker is set (to eg enable the required interrupts).
-    async fn wait_on<F, U, G>(&mut self, mut f: F, mut g: G) -> U
+    fn wait_on<F, U, G>(&mut self, mut f: F, mut g: G) -> impl Future<Output = U> + use<'_, 'a, F, U, G>
     where
         F: FnMut(&mut Self) -> Poll<U>,
         G: FnMut(&mut Self),
     {
-        poll_fn(|cx| {
+        poll_fn(move |cx| {
             // Register waker before checking condition, to ensure that wakes/interrupts
             // aren't lost between f() and g()
             I2C_WAKERS[self.info.index].register(cx.waker());
@@ -1020,13 +1019,12 @@ impl<'a> I2cMaster<'a, Async> {
 
             r
         })
-        .await
     }
 
     /// During i2c start, poll for ready state and check for errors
-    async fn poll_for_ready(&mut self, is_read: bool) -> Result<()> {
+    fn poll_for_ready(&mut self, is_read: bool) -> impl Future<Output = Result<()>> + use<'a, '_> {
         self.wait_on(
-            |me| {
+            move |me| {
                 let stat = me.info.regs.stat().read();
 
                 if stat.mstpending().is_pending() {
@@ -1061,7 +1059,6 @@ impl<'a> I2cMaster<'a, Async> {
                 });
             },
         )
-        .await
     }
 }
 
@@ -1135,14 +1132,14 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I2c<A> for I2cMaster<'_, Async> {
     async fn read(&mut self, address: A, read: &mut [u8]) -> Result<()> {
         let guard = self.read_no_stop(address.into(), read, None).await?;
-        self.stop().await?;
+        self.stop()?.await?;
         guard.defuse();
         Ok(())
     }
 
     async fn write(&mut self, address: A, write: &[u8]) -> Result<()> {
         let guard = self.write_no_stop(address.into(), write, None).await?;
-        self.stop().await?;
+        self.stop()?.await?;
         guard.defuse();
         Ok(())
     }
@@ -1151,7 +1148,7 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I
         let address = address.into();
         let guard = self.write_no_stop(address, write, None).await?;
         let guard = self.read_no_stop(address, read, Some(guard)).await?;
-        self.stop().await?;
+        self.stop()?.await?;
         guard.defuse();
         Ok(())
     }
@@ -1172,7 +1169,7 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I
         }
 
         if let Some(guard) = guard {
-            self.stop().await?;
+            self.stop()?.await?;
             guard.defuse();
         }
 

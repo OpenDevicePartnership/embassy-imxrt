@@ -290,35 +290,35 @@ impl<'d> Flex<'d, SenseEnabled> {
 
     /// Wait until the pin is high. If it is already high, return immediately.
     #[inline]
-    pub async fn wait_for_high(&mut self) {
-        InputFuture::new(self.pin.reborrow(), InterruptType::Level, Level::High).await;
+    pub fn wait_for_high(&mut self) -> InputFuture<'_> {
+        InputFuture::new(self.pin.reborrow(), InterruptType::Level, Level::High)
     }
 
     /// Wait until the pin is low. If it is already low, return immediately.
     #[inline]
-    pub async fn wait_for_low(&mut self) {
-        InputFuture::new(self.pin.reborrow(), InterruptType::Level, Level::Low).await;
+    pub fn wait_for_low(&mut self) -> InputFuture<'_> {
+        InputFuture::new(self.pin.reborrow(), InterruptType::Level, Level::Low)
     }
 
     /// Wait for the pin to undergo a transition from low to high.
     #[inline]
-    pub async fn wait_for_rising_edge(&mut self) {
-        InputFuture::new(self.pin.reborrow(), InterruptType::Edge, Level::High).await;
+    pub fn wait_for_rising_edge(&mut self) -> InputFuture<'_> {
+        InputFuture::new(self.pin.reborrow(), InterruptType::Edge, Level::High)
     }
 
     /// Wait for the pin to undergo a transition from high to low.
     #[inline]
-    pub async fn wait_for_falling_edge(&mut self) {
-        InputFuture::new(self.pin.reborrow(), InterruptType::Edge, Level::Low).await;
+    pub fn wait_for_falling_edge(&mut self) -> InputFuture<'_> {
+        InputFuture::new(self.pin.reborrow(), InterruptType::Edge, Level::Low)
     }
 
     /// Wait for the pin to undergo any transition, i.e low to high OR high to low.
     #[inline]
-    pub async fn wait_for_any_edge(&mut self) {
+    pub fn wait_for_any_edge(&mut self) -> InputFuture<'_> {
         if self.is_high() {
-            InputFuture::new(self.pin.reborrow(), InterruptType::Edge, Level::Low).await;
+            InputFuture::new(self.pin.reborrow(), InterruptType::Edge, Level::Low)
         } else {
-            InputFuture::new(self.pin.reborrow(), InterruptType::Edge, Level::High).await;
+            InputFuture::new(self.pin.reborrow(), InterruptType::Edge, Level::High)
         }
     }
 
@@ -399,37 +399,38 @@ impl<'d> Input<'d> {
 
     /// Wait until the pin is high. If it is already high, return immediately.
     #[inline]
-    pub async fn wait_for_high(&mut self) {
-        self.pin.wait_for_high().await;
+    pub fn wait_for_high(&mut self) -> InputFuture<'_> {
+        self.pin.wait_for_high()
     }
 
     /// Wait until the pin is low. If it is already low, return immediately.
     #[inline]
-    pub async fn wait_for_low(&mut self) {
-        self.pin.wait_for_low().await;
+    pub fn wait_for_low(&mut self) -> InputFuture<'_> {
+        self.pin.wait_for_low()
     }
 
     /// Wait for the pin to undergo a transition from low to high.
     #[inline]
-    pub async fn wait_for_rising_edge(&mut self) {
-        self.pin.wait_for_rising_edge().await;
+    pub fn wait_for_rising_edge(&mut self) -> InputFuture<'_> {
+        self.pin.wait_for_rising_edge()
     }
 
     /// Wait for the pin to undergo a transition from high to low.
     #[inline]
-    pub async fn wait_for_falling_edge(&mut self) {
-        self.pin.wait_for_falling_edge().await;
+    pub fn wait_for_falling_edge(&mut self) -> InputFuture<'_> {
+        self.pin.wait_for_falling_edge()
     }
 
     /// Wait for the pin to undergo any transition, i.e low to high OR high to low.
     #[inline]
-    pub async fn wait_for_any_edge(&mut self) {
-        self.pin.wait_for_any_edge().await;
+    pub fn wait_for_any_edge(&mut self) -> InputFuture<'_> {
+        self.pin.wait_for_any_edge()
     }
 }
 
+/// A gpio future to be awaited
 #[must_use = "futures do nothing unless you `.await` or poll them"]
-struct InputFuture<'d> {
+pub struct InputFuture<'d> {
     pin: Peri<'d, AnyPin>,
 }
 
