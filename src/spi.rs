@@ -973,7 +973,9 @@ impl<'d, M: IoMode> embedded_hal_1::spi::SpiBus<u8> for Spi<'d, M> {
 
 impl<'d> embedded_hal_async::spi::SpiBus<u8> for Spi<'d, Async> {
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        self.async_flush().await
+        self.async_flush().await;
+
+        Ok(())
     }
 
     async fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
