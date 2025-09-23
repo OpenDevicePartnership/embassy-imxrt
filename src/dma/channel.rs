@@ -85,7 +85,7 @@ impl<'d> Channel<'d> {
         mem_len: usize,
         options: TransferOptions,
     ) {
-        if mem_len % options.width.byte_width() != 0 {
+        if !mem_len.is_multiple_of(options.width.byte_width()) {
             panic!(
                 "Memory length({}) must be a multiple of the transfer width({})",
                 mem_len,

@@ -293,6 +293,13 @@ impl<'d> Rng<'d> {
             .write(|w| unsafe { w.run6p_max().bits(0x07FE).run6p_rng().bits(0x07FF) });
         self.info.regs.scmisc().write(|w| unsafe { w.lrun_max().bits(0xFF) });
 
+        // This register does not reset to power-on reset value documented in the manual
+        // so we always set it to the recommended value from NXP SDK
+        self.info
+            .regs
+            .sdctl()
+            .write(|w| unsafe { w.ent_dly().bits(0xc80).samp_size().bits(0x200) });
+
         self.enable_interrupts();
 
         // Switch TRNG to Run Mode

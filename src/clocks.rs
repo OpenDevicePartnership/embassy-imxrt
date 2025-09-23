@@ -838,7 +838,7 @@ impl MainPllClkConfig {
     pub(self) fn calc_mult(rate: u32, base_freq: u32) -> Result<u8, ClockError> {
         const VALIDMULTS: [u8; 6] = [16, 17, 20, 22, 27, 33];
 
-        if rate > base_freq && rate % base_freq == 0 {
+        if rate > base_freq && rate.is_multiple_of(base_freq) {
             let mult = (rate / base_freq) as u8;
 
             if VALIDMULTS.contains(&mult) {

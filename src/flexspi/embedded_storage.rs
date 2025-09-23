@@ -83,7 +83,7 @@ impl<const READ_SIZE: u32, const WRITE_SIZE: u32, const ERASE_SIZE: u32> embedde
 
         let sector_size = self.flash.alignment().sector_size;
         let block_size = self.flash.alignment().block_size;
-        let blocks_are_sector_aligned = block_size % sector_size == 0;
+        let blocks_are_sector_aligned = block_size.is_multiple_of(sector_size);
 
         let mut from = from;
         while from < to {
@@ -91,7 +91,7 @@ impl<const READ_SIZE: u32, const WRITE_SIZE: u32, const ERASE_SIZE: u32> embedde
             //  * blocks must be sector aligned (TODO: verify this in FlexSpiNorFlash constructor and rely on it unconditionally?).
             //  * remaining erase size must be at-least a block
             //  * current offset must be block aligned
-            if blocks_are_sector_aligned && to - from >= block_size && from % block_size == 0 {
+            if blocks_are_sector_aligned && to - from >= block_size && from.is_multiple_of(block_size) {
                 // SAFETY: The safety requirements have been shifted to the caller of the constructor.
                 unsafe {
                     self.flash.erase_block(from).map_err(Error::EraseBlockFailed)?;
@@ -216,7 +216,7 @@ impl From<IncorrectConstGeneric> for Error {
 
 fn check_const_size_parameter(given: u32, driver: u32) -> bool {
     // The given const param must be a multiple of the driver value (but it can not be zero if the driver value is non-zero).
-    given >= driver && given % driver == 0
+    given >= driver && given.is_multiple_of(driver)
 }
 
 impl embedded_storage::nor_flash::NorFlashError for Error {
