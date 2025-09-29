@@ -17,6 +17,7 @@
         //"${workspaceFolder}/Cargo.toml",
         "${workspaceFolder}/examples/rt633/Cargo.toml",
         "${workspaceFolder}/examples/rt685s-evk/Cargo.toml",
+        "${workspaceFolder}/examples/trustzone/Cargo.toml",
     ],
     "rust-analyzer.cargo.features": [
         // Comment out these features when working on the examples.
