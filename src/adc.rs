@@ -14,6 +14,7 @@ use crate::clocks::enable_and_reset;
 use crate::interrupt::typelevel::Binding;
 use crate::iopctl::{DriveMode, DriveStrength, Function, Inverter, IopctlPin, Pull, SlewRate};
 use crate::pac::adc0;
+use crate::pac::adc0::cmdh::Avgs;
 use crate::peripherals::ADC0;
 use crate::{interrupt, peripherals};
 
@@ -42,24 +43,78 @@ impl Default for Config {
     }
 }
 
+/// ADC channel averaging
+#[derive(Clone, Copy, PartialEq)]
+pub enum Average {
+    /// Single conversion. No average selected.
+    _1,
+    /// Average of 2 conversions.
+    _2,
+    /// Average of 4 conversions.
+    _4,
+    /// Average of 8 conversions.
+    _8,
+    /// Average of 16 conversions.
+    _16,
+    /// Average of 32 conversions.
+    _32,
+    /// Average of 64 conversions.
+    _64,
+    /// Average of 128 conversions.
+    _128,
+}
+
+impl From<Average> for Avgs {
+    fn from(value: Average) -> Self {
+        match value {
+            Average::_1 => Avgs::Avgs0,
+            Average::_2 => Avgs::Avgs1,
+            Average::_4 => Avgs::Avgs2,
+            Average::_8 => Avgs::Avgs3,
+            Average::_16 => Avgs::Avgs4,
+            Average::_32 => Avgs::Avgs5,
+            Average::_64 => Avgs::Avgs6,
+            Average::_128 => Avgs::Avgs7,
+        }
+    }
+}
+
 /// ADC channel config
 pub struct ChannelConfig<'d> {
     /// Positive channel to sample
     p_channel: Peri<'d, AnyInput>,
     /// An optional negative channel to sample
     n_channel: Option<Peri<'d, AnyInput>>,
+    /// Conversion average
+    average: Average,
 }
 
 impl<'d> ChannelConfig<'d> {
     /// Default configuration for single ended channel sampling.
     pub fn single_ended(input: Peri<'d, impl Input>) -> Self {
+        Self::single_ended_with_average(input, Average::_1)
+    }
+
+    /// Default configuration for single ended channel sampling with average.
+    pub fn single_ended_with_average(input: Peri<'d, impl Input>, average: Average) -> Self {
         Self {
             p_channel: input.into(),
             n_channel: None,
+            average,
         }
     }
+
     /// Default configuration for differential channel sampling.
     pub fn differential(p_input: Peri<'d, impl Input>, n_input: Peri<'d, impl Input>) -> Result<Self, Error> {
+        Self::differential_with_average(p_input, n_input, Average::_1)
+    }
+
+    /// Default configuration for differential channel sampling with average.
+    pub fn differential_with_average(
+        p_input: Peri<'d, impl Input>,
+        n_input: Peri<'d, impl Input>,
+        average: Average,
+    ) -> Result<Self, Error> {
         // Check matching positive and negative pin are passed in
         // Do not need to check for side as there are only 1 channel for each
         //   polarity
@@ -70,6 +125,7 @@ impl<'d> ChannelConfig<'d> {
         Ok(Self {
             p_channel: p_input.into(),
             n_channel: Some(n_input.into()),
+            average,
         })
     }
 }
@@ -198,7 +254,7 @@ impl<const N: usize> Adc<'_, N> {
                     .sts()
                     .sts_7()
                     .avgs()
-                    .avgs_0()
+                    .variant(ch.average.into())
                     .loop_()
                     .loop_0()
                     .next()
