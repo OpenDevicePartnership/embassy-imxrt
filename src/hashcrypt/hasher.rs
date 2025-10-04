@@ -78,7 +78,7 @@ impl<'d, 'a> Hasher<'d, 'a, Blocking> {
 
     /// Submit one or more blocks of data to the hasher, data must be a multiple of the block length
     pub fn submit_blocks(&mut self, data: &[u8]) {
-        if data.is_empty() || data.len() % BLOCK_LEN != 0 {
+        if data.is_empty() || !data.len().is_multiple_of(BLOCK_LEN) {
             panic!("Invalid data length");
         }
 
@@ -128,7 +128,7 @@ impl<'d, 'a> Hasher<'d, 'a, Async> {
     }
 
     async fn transfer(&mut self, data: &[u8]) {
-        if data.is_empty() || data.len() % BLOCK_LEN != 0 {
+        if data.is_empty() || !data.len().is_multiple_of(BLOCK_LEN) {
             panic!("Invalid data length");
         }
 

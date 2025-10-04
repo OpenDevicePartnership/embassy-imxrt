@@ -1,8 +1,6 @@
 //! DMA channel & request
 
-use core::future::poll_fn;
 use core::marker::PhantomData;
-use core::task::Poll;
 
 use embassy_sync::waitqueue::AtomicWaker;
 
@@ -35,15 +33,13 @@ impl<'d> Channel<'d> {
     }
 
     /// Writes from a memory buffer to another memory buffer
-    pub async fn write_to_memory(
+    pub fn write_to_memory(
         &'d self,
         src_buf: &'d [u8],
         dst_buf: &'d mut [u8],
         options: TransferOptions,
     ) -> Transfer<'d> {
-        let transfer = Transfer::new_write_mem(self, src_buf, dst_buf, options);
-        self.poll_transfer_complete().await;
-        transfer
+        Transfer::new_write_mem(self, src_buf, dst_buf, options)
     }
 
     /// Return a reference to the channel's waker
@@ -80,30 +76,6 @@ impl<'d> Channel<'d> {
             unsafe { w.bits(1 << channel) });
     }
 
-    async fn poll_transfer_complete(&'d self) {
-        poll_fn(|cx| {
-            // TODO - handle transfer failure
-
-            let channel = self.info.ch_num;
-
-            // Has the transfer already completed?
-            // TODO: Is this necessary? We could check once after registration
-            if self.info.regs.active0().read().act().bits() & (1 << channel) == 0 {
-                return Poll::Ready(());
-            }
-
-            DMA_WAKERS[channel].register(cx.waker());
-
-            // Has the transfer completed now?
-            if self.info.regs.active0().read().act().bits() & (1 << channel) == 0 {
-                Poll::Ready(())
-            } else {
-                Poll::Pending
-            }
-        })
-        .await;
-    }
-
     /// Prepare the DMA channel for the transfer
     pub fn configure_channel(
         &self,
@@ -113,7 +85,7 @@ impl<'d> Channel<'d> {
         mem_len: usize,
         options: TransferOptions,
     ) {
-        if mem_len % options.width.byte_width() != 0 {
+        if !mem_len.is_multiple_of(options.width.byte_width()) {
             panic!(
                 "Memory length({}) must be a multiple of the transfer width({})",
                 mem_len,

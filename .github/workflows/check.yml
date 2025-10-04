@@ -50,7 +50,7 @@ jobs:
         run: cargo fmt --check
         working-directory: ${{ matrix.workdir }}
 
-  clippy:
+  clippy-examples:
     runs-on: ubuntu-latest
     name: ${{ matrix.toolchain }} / clippy
 
@@ -62,8 +62,8 @@ jobs:
       fail-fast: false
       matrix:
         # Get early warning of new lints which are regularly introduced in beta channels.
-        toolchain: [stable, beta]
-        workdir: [ ".", "examples/rt633", "examples/rt685s-evk"]
+        toolchain: [stable]
+        workdir: ["examples/rt633", "examples/rt685s-evk"]
 
     steps:
       - uses: actions/checkout@v4
@@ -77,11 +77,9 @@ jobs:
           components: clippy
 
       - name: cargo clippy
-        uses: giraffate/clippy-action@v1
-        with:
-          reporter: 'github-pr-review'
-          clippy_flags: -- -Dwarnings -F clippy::suspicious -F clippy::correctness -F clippy::perf -F clippy::style
-          workdir: ${{ matrix.workdir }}
+        working-directory: ${{ matrix.workdir }}
+        run: |
+          cargo clippy --locked -- -Dwarnings -D clippy::suspicious -D clippy::correctness -D clippy::perf -D clippy::style
 
   # Enable once we have a released crate
   # semver:
@@ -136,6 +134,9 @@ jobs:
 
       - name: Install stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: clippy
 
       - name: rustup target add thumbv8m.main-none-eabihf
         run: rustup target add thumbv8m.main-none-eabihf
@@ -176,7 +177,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        msrv: ["1.85"] # We're relying on namespaced-features, which
+        msrv: ["1.90"] # We're relying on namespaced-features, which
                        # was released in 1.60
                        #
                        # We also depend on `fixed' which requires rust
@@ -189,6 +190,8 @@ jobs:
                        # collapse_debuginfo
                        #
                        # embassy upstream switched to rust 1.85
+                       #
+                       # unsigned_is_multiple_of requires 1.90, else we get clippy warnings
 
     name: ubuntu / ${{ matrix.msrv }}
     steps:

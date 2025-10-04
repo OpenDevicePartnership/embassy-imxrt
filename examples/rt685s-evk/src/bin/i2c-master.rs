@@ -35,7 +35,6 @@ async fn main(_spawner: Spawner) {
 
     // Acc is connected to P0_18_FC2_SCL and P0_17_FC2_SDA for I2C
     // Acc RESET gpio is P1_7_RST
-    info!("i2c example - embassy_imxrt::init");
     let p = embassy_imxrt::init(Default::default());
 
     info!("i2c example - Configure GPIOs");

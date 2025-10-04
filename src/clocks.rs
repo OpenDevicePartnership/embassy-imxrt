@@ -95,9 +95,8 @@ impl ClockConfig {
             hclk: HclkConfig { state: State::Disabled },
             main_clk: MainClkConfig {
                 state: State::Enabled,
-                //FFRO divided by 4 is reset values of Main Clk Sel A, Sel B
-                src: MainClkSrc::FFRO,
-                div_int: AtomicU32::new(4),
+                src: MainClkSrc::PllMain,
+                div_int: AtomicU32::new(2),
                 freq: AtomicU32::new(CORE_CPU_FREQ),
             },
             main_pll_clk: MainPllClkConfig {
@@ -839,7 +838,7 @@ impl MainPllClkConfig {
     pub(self) fn calc_mult(rate: u32, base_freq: u32) -> Result<u8, ClockError> {
         const VALIDMULTS: [u8; 6] = [16, 17, 20, 22, 27, 33];
 
-        if rate > base_freq && rate % base_freq == 0 {
+        if rate > base_freq && rate.is_multiple_of(base_freq) {
             let mult = (rate / base_freq) as u8;
 
             if VALIDMULTS.contains(&mult) {
@@ -946,13 +945,30 @@ impl MainClkConfig {
         clkctl0.mainclkselb().write(|w| w.sel().main_1st_clk());
     }
 
-    fn init_main_clk() {
+    fn init_main_clk(&self) {
         // SAFETY:: unsafe needed to take pointers to Clkctl0 and Clkctl1
         // used to set the right HW frequency
         let clkctl0 = unsafe { crate::pac::Clkctl0::steal() };
         let clkctl1 = unsafe { crate::pac::Clkctl1::steal() };
 
-        clkctl0.mainclkselb().write(|w| w.sel().main_pll_clk());
+        let (clk_a, clk_b) = {
+            use pac::clkctl0::mainclksela::Sel as SelA;
+            use pac::clkctl0::mainclkselb::Sel as SelB;
+            match self.src {
+                MainClkSrc::FFROdiv4 => (Some(SelA::FfroDiv4), SelB::Main1stClk),
+                MainClkSrc::ClkIn => (Some(SelA::SysxtalClk), SelB::Main1stClk),
+                MainClkSrc::Lposc => (Some(SelA::Lposc), SelB::Main1stClk),
+                MainClkSrc::FFRO => (Some(SelA::FfroClk), SelB::Main1stClk),
+                MainClkSrc::SFRO => (None, SelB::SfroClk),
+                MainClkSrc::PllMain => (None, SelB::MainPllClk),
+                MainClkSrc::RTC32k => (None, SelB::Rtc32kClk),
+            }
+        };
+
+        if let Some(clk_a) = clk_a {
+            clkctl0.mainclksela().write(|w| w.sel().variant(clk_a));
+        }
+        clkctl0.mainclkselb().write(|w| w.sel().variant(clk_b));
 
         // Set PFC0DIV divider to value 2, Subtract 1 since 0-> 1, 1-> 2, etc...
         clkctl0.pfcdiv(0).modify(|_, w| w.reset().set_bit());
@@ -1096,7 +1112,7 @@ impl MultiSourceClock for MainClkConfig {
 
 impl ConfigurableClock for MainClkConfig {
     fn enable_and_reset(&self) -> Result<(), ClockError> {
-        MainClkConfig::init_main_clk();
+        self.init_main_clk();
         Ok(())
     }
     fn disable(&self) -> Result<(), ClockError> {
@@ -1324,12 +1340,13 @@ fn set_pad_voltage_range() {
 }
 
 /// Initialize AHB clock
-fn init_syscpuahb_clk() {
+fn init_syscpuahb_clk(divisor: u16) {
     // SAFETY: unsafe needed to take pointer to Clkctl0
     let clkctl0 = unsafe { crate::pac::Clkctl0::steal() };
     // SAFETY: unsafe needed to write the bits
-    // Set syscpuahbclkdiv to value 2, Subtract 1 since 0-> 1, 1-> 2, etc...
-    clkctl0.syscpuahbclkdiv().write(|w| unsafe { w.div().bits(2 - 1) });
+    clkctl0
+        .syscpuahbclkdiv()
+        .write(|w| unsafe { w.div().bits(divisor.saturating_sub(1) as u8) });
 
     while clkctl0.syscpuahbclkdiv().read().reqflag().bit_is_set() {}
 }
@@ -1513,9 +1530,14 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
         cc0.espiclksel().write(|w| w.sel().use_48_60m());
     }
 
-    init_syscpuahb_clk();
+    // Increase divisor to safe value.
+    init_syscpuahb_clk(256);
 
     config.main_clk.enable_and_reset()?;
+
+    // Set divisor to final value.
+    init_syscpuahb_clk(config.main_clk.div_int.load(Ordering::Relaxed) as u16);
+
     config.sys_clk.update_sys_core_clock();
     Ok(())
 }

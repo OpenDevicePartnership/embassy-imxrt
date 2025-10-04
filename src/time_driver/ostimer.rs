@@ -93,8 +93,7 @@ impl OsTimer {
 
         let gray_timestamp = dec_to_gray(timestamp);
 
-        os().match_l()
-            .write(|w| unsafe { w.bits(gray_timestamp as u32 & 0xffff_ffff) });
+        os().match_l().write(|w| unsafe { w.bits(gray_timestamp as u32) });
         os().match_h()
             .write(|w| unsafe { w.bits((gray_timestamp >> 32) as u32) });
 

@@ -3,7 +3,7 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_imxrt::flexspi::nor::{
+use embassy_imxrt::flexspi::nor_storage_bus::{
     AhbConfig, FlexSpiFlashPort, FlexSpiFlashPortDeviceInstance, FlexspiAhbBufferConfig, FlexspiConfig,
     FlexspiConfigPortData, FlexspiDeviceConfig, FlexspiNorStorageBus,
 };
@@ -166,11 +166,11 @@ impl<T: BlockingNorStorageBusDriver> BlockingNorFlash for MacronixDeviceDriver<T
             return Err(NorErrorType::FlashStorageErrorOutOfBounds);
         }
 
-        if from % Self::ERASE_SIZE as u32 != 0 {
+        if !from.is_multiple_of(Self::ERASE_SIZE as u32) {
             return Err(NorErrorType::FlashStorageErrorNotAligned);
         }
 
-        if to % Self::ERASE_SIZE as u32 != 0 {
+        if !to.is_multiple_of(Self::ERASE_SIZE as u32) {
             return Err(NorErrorType::FlashStorageErrorNotAligned);
         }
 

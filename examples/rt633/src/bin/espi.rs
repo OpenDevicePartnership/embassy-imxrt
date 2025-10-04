@@ -94,14 +94,14 @@ async fn main(_spawner: Spawner) {
                     "eSPI PeripheralEvent Port: {}, direction: {}, address: {}, offset: {}, length: {}",
                     port_event.port, port_event.direction, port_event.offset, port_event.base_addr, port_event.length,
                 );
-                espi.complete_port(port_event.port).await;
+                espi.complete_port(port_event.port);
             }
             Ok(Event::OOBEvent(port_event)) => {
                 info!(
                     "eSPI OOBEvent Port: {}, direction: {}, address: {}, offset: {}, length: {}",
                     port_event.port, port_event.direction, port_event.offset, port_event.base_addr, port_event.length,
                 );
-                espi.complete_port(port_event.port).await;
+                espi.complete_port(port_event.port);
             }
             Ok(Event::WireChange(event)) => {
                 info!("Wire Change! {}", event);

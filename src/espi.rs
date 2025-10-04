@@ -187,9 +187,9 @@ pub enum PortConfig {
     MasterFlash,
 }
 
-impl Into<Type> for PortConfig {
-    fn into(self) -> Type {
-        match self {
+impl From<PortConfig> for Type {
+    fn from(val: PortConfig) -> Self {
+        match val {
             PortConfig::Unconfigured => Type::Unconfigured,
             PortConfig::AcpiEndpoint { .. } => Type::AcpiEnd,
             PortConfig::AcpiIndex => Type::AcpiIndex,
@@ -435,10 +435,7 @@ pub enum BootStatus {
 
 impl From<BootStatus> for bool {
     fn from(status: BootStatus) -> bool {
-        match status {
-            BootStatus::Success => true,
-            _ => false,
-        }
+        matches!(status, BootStatus::Success)
     }
 }
 
@@ -451,6 +448,7 @@ pub struct Espi<'d> {
 
 impl<'d> Espi<'d> {
     /// Instantiates new eSPI peripheral and initializes to default values.
+    #[allow(clippy::too_many_arguments)]
     pub fn new<T: Instance>(
         _peripheral: Peri<'d, T>,
         _clk: Peri<'d, impl ClkPin<T>>,
@@ -478,7 +476,7 @@ impl<'d> Espi<'d> {
 
         let mut instance = Espi::<'d> {
             info: T::info(),
-            config: config,
+            config,
             _phantom: PhantomData,
         };
 
@@ -658,26 +656,24 @@ impl<'d> Espi<'d> {
                 };
 
                 Poll::Ready(Ok(Event::PeripheralEvent(PortEvent {
-                    port: port,
+                    port,
                     base_addr: address,
                     offset: idxoff,
-                    length: length,
-                    direction: direction,
+                    length,
+                    direction,
                 })))
             }
             PortConfig::MailboxSplitOOB { offset, .. } => {
                 let address = self.config.ram_base + offset as u32;
                 Poll::Ready(Ok(Event::OOBEvent(PortEvent {
-                    port: port,
+                    port,
                     base_addr: address,
                     offset: 0,
-                    length: length,
-                    direction: direction,
+                    length,
+                    direction,
                 })))
             }
-            _ => {
-                return Poll::Pending;
-            }
+            _ => Poll::Pending,
         }
     }
 
@@ -832,7 +828,8 @@ impl<'d> Espi<'d> {
     /// Warning: This directly returns memory buffer based on port config, memory.x
     /// must have memory properly carved out to prevent back access
     ///
-    /// SAFETY: OOB port config must point to valid memory region that has been carved
+    /// # Safety
+    /// OOB port config must point to valid memory region that has been carved
     /// out in memory.x to prevent access to code region. After calling oob_write_data
     /// must wait for Event::OOBEvent with direction: true to indicate previous write
     /// has completed. Not waiting for previous transaction can lead to corruption of

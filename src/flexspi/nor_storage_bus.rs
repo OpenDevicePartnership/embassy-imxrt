@@ -13,8 +13,6 @@ use storage_bus::nor::{
 };
 
 use crate::clocks::enable_and_reset;
-#[cfg(feature = "time")]
-use crate::flexspi::is_expired;
 use crate::iopctl::IopctlPin as Pin;
 use crate::pac::flexspi::ahbcr::*;
 use crate::pac::flexspi::flshcr1::*;
@@ -23,6 +21,11 @@ use crate::pac::flexspi::flshcr4::*;
 use crate::pac::flexspi::mcr0::*;
 use crate::pac::flexspi::mcr2::*;
 use crate::{interrupt, peripherals};
+
+#[cfg(feature = "time")]
+pub(crate) fn is_expired(start: Instant, timeout: u64) -> bool {
+    Instant::now().duration_since(start).as_millis() > timeout
+}
 
 macro_rules! configure_ports_a {
     ($port:expr, $regs: ident, $device_config: ident, $flash_size: ident) => {
@@ -459,6 +462,7 @@ impl From<FlexSpiError> for NorStorageBusError {
 
 impl FlexSpiError {
     /// Get the description of the error
+    #[cfg(feature = "defmt")]
     pub fn describe<M: Mode>(&self, flexspi: &FlexspiNorStorageBus<M>) {
         match self {
             FlexSpiError::CmdGrantErr { result } => {
@@ -597,7 +601,7 @@ impl FlexSpiError {
     }
 }
 
-impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
+impl BlockingNorStorageBusDriver for FlexspiNorStorageBus<'_, Blocking> {
     fn send_command(
         &mut self,
         cmd: NorStorageCmd,
@@ -619,6 +623,7 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
 
         // Check for any errors during the transfer
         self.check_transfer_status().map_err(|e| {
+            #[cfg(feature = "defmt")]
             e.describe(self);
             <FlexSpiError as Into<FlexSpiError>>::into(e)
         })?;
@@ -647,7 +652,7 @@ impl<'d> BlockingNorStorageBusDriver for FlexspiNorStorageBus<'d, Blocking> {
     }
 }
 
-impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
+impl<M: Mode> FlexspiNorStorageBus<'_, M> {
     /// Set the command sequence in the FlexSPI LUT to use.
     ///
     /// All commands sent over the FlexSPI bus are first programmed into a lookup-table.
@@ -984,7 +989,7 @@ impl<'d, M: Mode> FlexspiNorStorageBus<'d, M> {
     }
 }
 
-impl<'d> FlexspiNorStorageBus<'d, Blocking> {
+impl FlexspiNorStorageBus<'_, Blocking> {
     fn read_data(&mut self, cmd: NorStorageCmd, read_buf: &mut [u8]) -> Result<(), NorStorageBusError> {
         let size = cmd.data_bytes.ok_or(NorStorageBusError::StorageBusInternalError)?;
 
@@ -1036,8 +1041,9 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
 
         let error = self.check_transfer_status();
 
-        if let Err(e) = error {
-            e.describe(self);
+        if let Err(_e) = error {
+            #[cfg(feature = "defmt")]
+            _e.describe(self);
             return Err(NorStorageBusError::StorageBusIoError);
         }
 
@@ -1092,12 +1098,13 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
     fn write_cmd_data(&mut self, write_data: &[u8]) -> Result<(), NorStorageBusError> {
         // Check for any errors during the transfer
         let error = self.check_transfer_status();
-        if let Err(e) = error {
-            e.describe(self);
+        if let Err(_e) = error {
+            #[cfg(feature = "defmt")]
+            _e.describe(self);
             return Err(NorStorageBusError::StorageBusIoError);
         }
 
-        let num_tx_watermark_slot = self.tx_watermark / FIFO_SLOT_SIZE as u8;
+        let num_tx_watermark_slot = self.tx_watermark / FIFO_SLOT_SIZE;
 
         for watermark_sized_chunk in write_data.chunks(self.tx_watermark as usize) {
             // Wait for space in TX FIFO
@@ -1148,6 +1155,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
 
 impl FlexSpiConfigurationPort {
     /// Initialize FlexSPI
+    #[allow(clippy::result_unit_err)]
     pub fn configure_flexspi(&mut self, config: &FlexspiConfig) -> Result<(), ()> {
         let regs = self.info.regs;
 
@@ -1332,6 +1340,7 @@ impl FlexSpiConfigurationPort {
     }
 
     /// Configure the flash self.flexspi_ref based on the external flash device
+    #[allow(clippy::result_unit_err)]
     pub fn configure_device_port(
         &self,
         device_config: &FlexspiDeviceConfig,
@@ -1379,34 +1388,32 @@ impl FlexSpiConfigurationPort {
                         .ovrdval()
                         .bits(0x00)
                 };
+            } else if device_config.flexspi_root_clk >= CLOCK_100MHZ {
+                unsafe {
+                    w.dllen()
+                        .set_bit()
+                        .slvdlytarget()
+                        .bits(0xF)
+                        .ovrden()
+                        .clear_bit()
+                        .ovrdval()
+                        .bits(0x00);
+                }
             } else {
-                if device_config.flexspi_root_clk >= CLOCK_100MHZ {
-                    unsafe {
-                        w.dllen()
-                            .set_bit()
-                            .slvdlytarget()
-                            .bits(0xF)
-                            .ovrden()
-                            .clear_bit()
-                            .ovrdval()
-                            .bits(0x00);
-                    }
-                } else {
-                    let temp = (device_config.data_valid_time) as u32 * 1000; /* Convert data valid time in ns to ps. */
-                    let mut dll_value = temp / DELAYCELLUNIT;
-                    if dll_value * DELAYCELLUNIT < temp {
-                        dll_value += 1;
-                    }
-                    unsafe {
-                        w.dllen()
-                            .clear_bit()
-                            .slvdlytarget()
-                            .bits(0x00)
-                            .ovrden()
-                            .set_bit()
-                            .ovrdval()
-                            .bits((dll_value) as u8);
-                    }
+                let temp = (device_config.data_valid_time) as u32 * 1000; /* Convert data valid time in ns to ps. */
+                let mut dll_value = temp / DELAYCELLUNIT;
+                if dll_value * DELAYCELLUNIT < temp {
+                    dll_value += 1;
+                }
+                unsafe {
+                    w.dllen()
+                        .clear_bit()
+                        .slvdlytarget()
+                        .bits(0x00)
+                        .ovrden()
+                        .set_bit()
+                        .ovrdval()
+                        .bits((dll_value) as u8);
                 }
             }
             w
@@ -1554,6 +1561,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
     }
 
     /// Create a new FlexSPI instance in blocking mode with octal configuration
+    #[allow(clippy::too_many_arguments)]
     pub fn new_blocking_octal_config<T: Instance>(
         _inst: Peri<'d, T>,
         data0: Peri<'d, impl FlexSpiPin>,
