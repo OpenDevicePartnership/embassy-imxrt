@@ -124,6 +124,9 @@ impl SpeedRegisterSettings {
                     rounded_divide(SFRO_CLOCK_SPEED_HZ, target_freq_hz * u32::from(hi_clocks + lo_clocks)) as u16;
                 (hi_clocks, lo_clocks, clock_div_multiplier)
             })
+            .filter(|(hi_clocks, lo_clocks, clock_div_multiplier)| {
+                get_freq_hz(*hi_clocks, *lo_clocks, *clock_div_multiplier, SFRO_CLOCK_SPEED_HZ) <= target_freq_hz
+            })
             .min_by(|a, b| {
                 let (hi_a, lo_a, div_a) = a;
                 let (hi_b, lo_b, div_b) = b;
