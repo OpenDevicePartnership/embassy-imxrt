@@ -1,6 +1,6 @@
 //! Implements I2C function support over flexcomm + gpios
 
-use core::future::{poll_fn, Future};
+use core::future::{Future, poll_fn};
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU8, Ordering};
 use core::task::Poll;
@@ -10,7 +10,7 @@ use paste::paste;
 use sealed::Sealed;
 
 use crate::iopctl::IopctlPin as Pin;
-use crate::{dma, interrupt, PeripheralType};
+use crate::{PeripheralType, dma, interrupt};
 
 /// I2C Master Driver
 pub mod master;

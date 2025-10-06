@@ -1,7 +1,7 @@
 //! Low level FlexSPI peripheral access.
 
 use crate::peripherals::FLEXSPI;
-use crate::{pac, Peri};
+use crate::{Peri, pac};
 
 /// Constants used by inline assembly.
 #[cfg(target_arch = "arm")]
@@ -209,7 +209,7 @@ impl<'a> FlexSpi<'a> {
     /// TODO: Loading the instructions over the data bus works,
     /// but the end-user may need more control over the address of the function
     /// if they are using TrustZone.
-    #[link_section = ".data"]
+    #[unsafe(link_section = ".data")]
     #[inline(never)]
     unsafe fn _trigger_command_and_wait(&mut self) -> pac::flexspi::intr::R {
         #[cfg(not(target_arch = "arm"))]
@@ -289,7 +289,7 @@ impl<'a> FlexSpi<'a> {
     /// TODO: Loading the instructions over the data bus works,
     /// but the end-user may need more control over the address of the function
     /// if they are using TrustZone.
-    #[link_section = ".data"]
+    #[unsafe(link_section = ".data")]
     #[inline(never)]
     unsafe fn _trigger_command_and_wait_write(&mut self) -> (u32, pac::flexspi::intr::R) {
         #[cfg(not(target_arch = "arm"))]

@@ -7,7 +7,7 @@ use hasher::Hasher;
 
 use crate::clocks::enable_and_reset;
 use crate::peripherals::{DMA0_CH30, HASHCRYPT};
-use crate::{dma, interrupt, pac, Peri};
+use crate::{Peri, dma, interrupt, pac};
 
 /// Hasher module
 pub mod hasher;

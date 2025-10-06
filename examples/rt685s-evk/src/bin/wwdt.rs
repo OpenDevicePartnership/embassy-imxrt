@@ -4,7 +4,7 @@
 use cortex_m::peripheral::NVIC;
 use defmt::{info, warn};
 use embassy_executor::Spawner;
-use embassy_imxrt::pac::{interrupt, Interrupt};
+use embassy_imxrt::pac::{Interrupt, interrupt};
 use embassy_imxrt::wwdt::WindowedWatchdog;
 use embassy_time::Timer;
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};

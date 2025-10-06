@@ -3,18 +3,18 @@
 use mimxrt600_fcb::FlexSpiLutOpcode::{CMD_SDR, RADDR_SDR, READ_SDR, STOP, WRITE_SDR};
 use mimxrt600_fcb::FlexSpiNumPads::Single;
 use mimxrt600_fcb::{
-    flexspi_lut_seq, ControllerMiscOption, FlexSPIFlashConfigurationBlock, SFlashPadType, SerialClkFreq, SerialNORType,
+    ControllerMiscOption, FlexSPIFlashConfigurationBlock, SFlashPadType, SerialClkFreq, SerialNORType, flexspi_lut_seq,
 };
 use {defmt_rtt as _, panic_probe as _};
 
 // auto-generated version information from Cargo.toml
 include!(concat!(env!("OUT_DIR"), "/biv.rs"));
 
-#[link_section = ".otfad"]
+#[unsafe(link_section = ".otfad")]
 #[used]
 static OTFAD: [u8; 256] = [0; 256];
 
-#[link_section = ".fcb"]
+#[unsafe(link_section = ".fcb")]
 #[used]
 static FCB: FlexSPIFlashConfigurationBlock = FlexSPIFlashConfigurationBlock::build()
     .device_mode_cfg_enable(0)
@@ -111,6 +111,6 @@ static FCB: FlexSPIFlashConfigurationBlock = FlexSPIFlashConfigurationBlock::bui
     .block_size(0x8_000)
     .flash_state_ctx(0);
 
-#[link_section = ".keystore"]
+#[unsafe(link_section = ".keystore")]
 #[used]
 static KEYSTORE: [u8; 2048] = [0; 2048];

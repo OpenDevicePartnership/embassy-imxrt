@@ -17,7 +17,7 @@ bind_interrupts!(struct Irqs {
     ESPI => InterruptHandler<ESPI>;
 });
 
-extern "C" {
+unsafe extern "C" {
     static __start_espi_data: u8;
     static __end_espi_data: u8;
 }

@@ -13,7 +13,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use crate::clocks::enable_and_reset;
 use crate::dma::channel::Channel;
 use crate::peripherals::{self, DMA0};
-use crate::{interrupt, Peri, PeripheralType};
+use crate::{Peri, PeripheralType, interrupt};
 
 // TODO:
 //

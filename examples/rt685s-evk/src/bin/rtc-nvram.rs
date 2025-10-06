@@ -93,7 +93,12 @@ async fn main(spawner: embassy_executor::Spawner) {
     //       to provide some functionality, you won't have to change your code to accommodate as long as you're
     //       not overcommitting the total number of registers on your platform.
     //       If you do overcommit, the code will not compile, which will help catch the issue early.
-    let [shared_ticker_register, unshared_ticker_register, static_ticker_register, ..] = rtc_nvram.storage();
+    let [
+        shared_ticker_register,
+        unshared_ticker_register,
+        static_ticker_register,
+        ..,
+    ] = rtc_nvram.storage();
 
     // Unshared ticker example - you can just give the mutable borrow of the storage cell to the task.
     spawner.must_spawn(unshared_ticker(unshared_ticker_register));

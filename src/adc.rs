@@ -7,7 +7,7 @@ use core::marker::PhantomData;
 use core::task::Poll;
 
 use embassy_hal_internal::interrupt::InterruptExt;
-use embassy_hal_internal::{impl_peripheral, Peri, PeripheralType};
+use embassy_hal_internal::{Peri, PeripheralType, impl_peripheral};
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::clocks::enable_and_reset;

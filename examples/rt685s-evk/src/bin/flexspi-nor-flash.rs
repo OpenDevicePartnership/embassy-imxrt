@@ -65,7 +65,10 @@ async fn do_main(p: &mut embassy_imxrt::Peripherals) -> Result<(), ()> {
         last_sector_addr
     );
     blink_until_button(&mut button1, &mut blue, 100, 900).await;
-    defmt::info!("Button User_1 pressed. Now press and release button User_2 to continue erasing and programming last sector (0x{:08X}) of flash", last_sector_addr);
+    defmt::info!(
+        "Button User_1 pressed. Now press and release button User_2 to continue erasing and programming last sector (0x{:08X}) of flash",
+        last_sector_addr
+    );
     blink_until_button(&mut button2, &mut blue, 100, 200).await;
     defmt::info!(
         "Button User_2 pressed. Erasing and programming last sector (0x{:08X}) of flash",

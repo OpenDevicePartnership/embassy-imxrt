@@ -1,16 +1,16 @@
 //! Implements I2C function support over flexcomm + gpios
 
-use core::future::{poll_fn, Future};
+use core::future::{Future, poll_fn};
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
 use core::task::Poll;
 
-use embassy_hal_internal::drop::OnDrop;
 use embassy_hal_internal::Peri;
+use embassy_hal_internal::drop::OnDrop;
 
 use super::{
-    Async, Blocking, Info, Instance, InterruptHandler, Mode, Result, SclPin, SdaPin, SlaveDma, TransferError,
-    I2C_REMEDIATION, I2C_WAKERS, REMEDIATON_SLAVE_NAK, TEN_BIT_PREFIX,
+    Async, Blocking, I2C_REMEDIATION, I2C_WAKERS, Info, Instance, InterruptHandler, Mode, REMEDIATON_SLAVE_NAK, Result,
+    SclPin, SdaPin, SlaveDma, TEN_BIT_PREFIX, TransferError,
 };
 use crate::flexcomm::FlexcommRef;
 use crate::interrupt::typelevel::Interrupt;

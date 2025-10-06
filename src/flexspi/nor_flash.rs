@@ -1,8 +1,8 @@
 //! FlexSPI FLASH driver.
 
 use super::peripheral::{CommandSequence, FlexSpi, InvalidCommandSequence};
-use crate::peripherals::FLEXSPI;
 use crate::Peri;
+use crate::peripherals::FLEXSPI;
 
 /// FlexSPI NOR FLASH driver.
 ///

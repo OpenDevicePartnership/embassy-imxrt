@@ -4,11 +4,11 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use paste::paste;
 
-use crate::clocks::{disable, enable_and_reset, SysconPeripheral};
+use crate::clocks::{SysconPeripheral, disable, enable_and_reset};
 use crate::peripherals::{
-    FLEXCOMM0, FLEXCOMM1, FLEXCOMM14, FLEXCOMM15, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7,
+    FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7, FLEXCOMM14, FLEXCOMM15,
 };
-use crate::{pac, PeripheralType};
+use crate::{PeripheralType, pac};
 
 /// clock selection option
 #[derive(Copy, Clone, Debug)]
@@ -329,11 +329,17 @@ macro_rules! into_mode {
     }
 }
 
-into_mode!(usart, FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7);
+into_mode!(
+    usart, FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7
+);
 
-into_mode!(spi, FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7, FLEXCOMM14);
+into_mode!(
+    spi, FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7, FLEXCOMM14
+);
 
-into_mode!(i2c, FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7, FLEXCOMM15);
+into_mode!(
+    i2c, FLEXCOMM0, FLEXCOMM1, FLEXCOMM2, FLEXCOMM3, FLEXCOMM4, FLEXCOMM5, FLEXCOMM6, FLEXCOMM7, FLEXCOMM15
+);
 
 into_mode!(
     i2s_transmit,

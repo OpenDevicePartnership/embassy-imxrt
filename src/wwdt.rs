@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 
 use embassy_hal_internal::{Peri, PeripheralType};
 
-use crate::clocks::{enable_and_reset, SysconPeripheral};
+use crate::clocks::{SysconPeripheral, enable_and_reset};
 use crate::peripherals::{WDT0, WDT1};
 
 /// Windowed watchdog timer (WWDT) driver.

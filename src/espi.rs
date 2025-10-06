@@ -8,7 +8,7 @@ use core::task::Poll;
 use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 
-use crate::clocks::{enable_and_reset, SysconPeripheral};
+use crate::clocks::{SysconPeripheral, enable_and_reset};
 use crate::gpio::{DriveMode, DriveStrength, Function, GpioPin as Pin, Inverter, Pull, SlewRate};
 use crate::interrupt::typelevel::Interrupt;
 pub use crate::pac::espi::espicap::{Flashmx, Maxspd, Safera, Spicap};
@@ -17,7 +17,7 @@ pub use crate::pac::espi::port::cfg::Direction;
 use crate::pac::espi::port::cfg::Type;
 pub use crate::pac::espi::port::ramuse::Len;
 pub use crate::pac::espi::stataddr::Base;
-use crate::{interrupt, peripherals, Peri, PeripheralType};
+use crate::{Peri, PeripheralType, interrupt, peripherals};
 
 // This controller has 5 different eSPI ports
 const ESPI_PORTS: usize = 5;
@@ -840,7 +840,7 @@ impl<'d> Espi<'d> {
                 // All OOB is split so add offset from read buffer
                 let buf_len = (1 << (<Len as Into<u8>>::into(length) + 2)) as u32;
                 let buf_addr = (self.config.ram_base + offset as u32 + buf_len) as *mut u8;
-                Ok(slice::from_raw_parts_mut(buf_addr, buf_len as usize))
+                Ok(unsafe { slice::from_raw_parts_mut(buf_addr, buf_len as usize) })
             }
             _ => Err(Error::InvalidPort),
         }

@@ -1,10 +1,10 @@
 //! RTC Driver.
 use core::cell::RefCell;
-use core::sync::atomic::{compiler_fence, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering, compiler_fence};
 
 use critical_section::CriticalSection;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time_driver::Driver;
 use embassy_time_queue_utils::Queue;
 
@@ -55,19 +55,19 @@ impl Rtc {
     /// Access the GPREG0 register to use it as a 31-bit counter.
     #[inline]
     unsafe fn counter_reg(&self) -> &pac::rtc::Gpreg {
-        rtc().gpreg(0)
+        unsafe { rtc().gpreg(0) }
     }
 
     /// Access the GPREG1 register to use it as a compare register for triggering alarms.
     #[inline]
     unsafe fn compare_reg(&self) -> &pac::rtc::Gpreg {
-        rtc().gpreg(1)
+        unsafe { rtc().gpreg(1) }
     }
 
     /// Access the GPREG2 register to use it to enable or disable interrupts (int_en).
     #[inline]
     unsafe fn int_en_reg(&self) -> &pac::rtc::Gpreg {
-        rtc().gpreg(2)
+        unsafe { rtc().gpreg(2) }
     }
 
     fn init(&'static self, irq_prio: crate::interrupt::Priority) {

@@ -1,22 +1,22 @@
 /// I2C Master Driver
-use core::future::{poll_fn, Future};
+use core::future::{Future, poll_fn};
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
 use core::task::Poll;
 
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{Either, select};
 use embassy_hal_internal::drop::OnDrop;
 use itertools::Itertools;
 
 use super::{
-    force_clear_remediation, wait_remediation_complete, Async, Blocking, Error, Info, Instance, InterruptHandler,
-    MasterDma, Mode, Result, SclPin, SdaPin, TransferError, I2C_REMEDIATION, I2C_WAKERS, REMEDIATON_MASTER_STOP,
-    TEN_BIT_PREFIX,
+    Async, Blocking, Error, I2C_REMEDIATION, I2C_WAKERS, Info, Instance, InterruptHandler, MasterDma, Mode,
+    REMEDIATON_MASTER_STOP, Result, SclPin, SdaPin, TEN_BIT_PREFIX, TransferError, force_clear_remediation,
+    wait_remediation_complete,
 };
 use crate::flexcomm::FlexcommRef;
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::i2c0::msttime::{Mstsclhigh, Mstscllow};
-use crate::{dma, interrupt, Peri};
+use crate::{Peri, dma, interrupt};
 
 /// Bus speed (nominal SCL, no clock stretching)
 #[derive(Clone, Copy)]

@@ -2,7 +2,7 @@
 //!
 //! Also known as IO Pin Configuration (IOCON)
 
-use crate::pac::{iopctl, Iopctl};
+use crate::pac::{Iopctl, iopctl};
 
 // A generic pin of any type.
 //
@@ -266,9 +266,9 @@ impl FC15Pin {
         let iopctl = unsafe { crate::pac::Iopctl::steal() };
 
         let reg = if pin == 0 {
-            &*iopctl.fc15_i2c_scl().as_ptr().cast()
+            unsafe { &*iopctl.fc15_i2c_scl().as_ptr().cast() }
         } else {
-            &*iopctl.fc15_i2c_sda().as_ptr().cast()
+            unsafe { &*iopctl.fc15_i2c_sda().as_ptr().cast() }
         };
 
         Self { reg }

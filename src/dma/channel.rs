@@ -5,8 +5,8 @@ use core::marker::PhantomData;
 use embassy_sync::waitqueue::AtomicWaker;
 
 use super::{DESCRIPTORS, DMA_WAKERS};
-use crate::dma::transfer::{Direction, Transfer, TransferOptions};
 use crate::dma::DmaInfo;
+use crate::dma::transfer::{Direction, Transfer, TransferOptions};
 
 /// DMA channel
 pub struct Channel<'d> {

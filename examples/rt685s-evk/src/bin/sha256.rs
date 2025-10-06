@@ -3,7 +3,7 @@
 
 use defmt::{info, trace};
 use embassy_executor::Spawner;
-use embassy_imxrt::hashcrypt::{hasher, Hashcrypt};
+use embassy_imxrt::hashcrypt::{Hashcrypt, hasher};
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 #[embassy_executor::main]
