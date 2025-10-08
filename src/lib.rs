@@ -36,6 +36,7 @@ pub mod iopctl;
 pub mod pwm;
 pub mod rng;
 pub mod spi;
+pub mod uuid;
 
 #[cfg(not(feature = "time-driver-rtc"))]
 pub mod rtc;
