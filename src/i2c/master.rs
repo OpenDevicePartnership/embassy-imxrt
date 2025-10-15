@@ -114,7 +114,7 @@ impl SpeedRegisterSettings {
         // Figure out what we need to set the clock divider to in order to hit the I2C speed the user requested.  Again, we may not
         // be able to be exact, so we need to find the closest viable option.
         //
-        let (result_clocks_hi, result_clocks_lo, result_div_multiplier) = (MIN_CLOCKS..=MAX_CLOCKS)
+        let (result_clocks_hi, result_clocks_lo, mut result_div_multiplier) = (MIN_CLOCKS..=MAX_CLOCKS)
             .cartesian_product(MIN_CLOCKS..=MAX_CLOCKS)
             .filter(|(hi_clocks, lo_clocks)| get_duty_cycle(*hi_clocks, *lo_clocks) == duty_cycle.value)
             .map(|(hi_clocks, lo_clocks)| {
@@ -140,12 +140,22 @@ impl SpeedRegisterSettings {
         // A clock divider of 1 means 'divide clocks by 2', not 'divide clocks by 1', so we need to account for that.
         //
         const CLOCK_DIV_MULTIPLIER_OFFSET: u16 = 1;
+
+        let mut actual_freq_hz =
+            SFRO_CLOCK_SPEED_HZ / (u32::from(result_clocks_hi + result_clocks_lo) * u32::from(result_div_multiplier));
+
+        // If frequency exceeds target, increment divider to stay under target
+        if actual_freq_hz >= target_freq_hz {
+            result_div_multiplier += 1;
+            actual_freq_hz = SFRO_CLOCK_SPEED_HZ
+                / (u32::from(result_clocks_hi + result_clocks_lo) * u32::from(result_div_multiplier));
+        }
+
         Ok(Self {
             scl_high_clocks: result_clocks_hi.to_clocks_enum(),
             scl_low_clocks: result_clocks_lo.to_clocks_enum(),
             clock_div_multiplier: result_div_multiplier - CLOCK_DIV_MULTIPLIER_OFFSET,
-            _actual_freq_hz: SFRO_CLOCK_SPEED_HZ
-                / (u32::from(result_clocks_hi + result_clocks_lo) * u32::from(result_div_multiplier)),
+            _actual_freq_hz: actual_freq_hz,
         })
     }
 }
