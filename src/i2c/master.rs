@@ -34,12 +34,7 @@ pub enum Speed {
     High,
 }
 
-/// Divide integers rounding up rather than down
-fn divide_rounded_up(numerator: u32, denominator: u32) -> u32 {
-    (numerator / denominator) + if numerator % denominator != 0 { 1 } else { 0 }
-}
-
-// Compute target duty cycle based on the specified hi/lo clock counts.
+/// Compute target duty cycle based on the specified hi/lo clock counts.
 fn get_duty_cycle(hi_clocks: u8, lo_clocks: u8) -> u8 {
     assert!(hi_clocks >= MIN_CLOCKS && hi_clocks <= MAX_CLOCKS);
     assert!(lo_clocks >= MIN_CLOCKS && lo_clocks <= MAX_CLOCKS);
@@ -123,9 +118,9 @@ impl SpeedRegisterSettings {
             .map(|(hi_clocks, lo_clocks)| {
                 // As speeds increase, clock_div_multiplier will approach 1, and this can cause nontrivial overshoot of the target frequency in
                 // cases where the clock_div_multiplier is low. To mitigate this, we round up rather than down when calculating clock_div_multiplier
-                // because overshoot is preferable to undershoot in these cases.
+                // because undershoot is preferable to overshoot in these cases.
                 let clock_div_multiplier =
-                    divide_rounded_up(SFRO_CLOCK_SPEED_HZ, target_freq_hz * u32::from(hi_clocks + lo_clocks)) as u16;
+                    SFRO_CLOCK_SPEED_HZ.div_ceil(target_freq_hz * u32::from(hi_clocks + lo_clocks)) as u16;
                 (hi_clocks, lo_clocks, clock_div_multiplier)
             })
             .filter(|(hi_clocks, lo_clocks, clock_div_multiplier)| {
