@@ -65,6 +65,7 @@ async fn main(_spawner: Spawner) {
         let config = i2c::master::Config {
             speed: i2c::master::Speed::Fast,
             duty_cycle: i2c::master::DutyCycle::new(50).unwrap(),
+            ..Default::default()
         };
 
         info!("i2c example - I2cMaster::new after drop");

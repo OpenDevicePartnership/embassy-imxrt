@@ -34,12 +34,10 @@ pub enum Speed {
     High,
 }
 
-/// Divide integers rounding to the nearest whole number rather than always down
-fn rounded_divide(numerator: u32, denominator: u32) -> u32 {
-    (numerator + denominator / 2) / denominator
-}
-
+/// Compute target duty cycle based on the specified hi/lo clock counts.
 fn get_duty_cycle(hi_clocks: u8, lo_clocks: u8) -> u8 {
+    assert!((MIN_CLOCKS..=MAX_CLOCKS).contains(&hi_clocks));
+    assert!((MIN_CLOCKS..=MAX_CLOCKS).contains(&lo_clocks));
     let total_clocks = u16::from(hi_clocks + lo_clocks);
     (100 * u16::from(hi_clocks) / total_clocks) as u8
 }
@@ -70,7 +68,7 @@ impl ToClocksEnum<Mstscllow> for u8 {
             7 => Mstscllow::Clocks7,
             8 => Mstscllow::Clocks8,
             9 => Mstscllow::Clocks9,
-            _ => panic!("Invalid value for Mstscllow"),
+            _ => unreachable!("Invalid value for Mstscllow"),
         }
     }
 }
@@ -86,7 +84,7 @@ impl ToClocksEnum<Mstsclhigh> for u8 {
             7 => Mstsclhigh::Clocks7,
             8 => Mstsclhigh::Clocks8,
             9 => Mstsclhigh::Clocks9,
-            _ => panic!("Invalid value for Mstsclhigh"),
+            _ => unreachable!("Invalid value for Mstsclhigh"),
         }
     }
 }
@@ -100,16 +98,20 @@ struct SpeedRegisterSettings {
 }
 
 impl SpeedRegisterSettings {
-    fn new(duty_cycle: DutyCycle, speed: Speed) -> Result<Self> {
+    fn new(duty_cycle: DutyCycle, speed: Speed, strict_mode: bool) -> Result<Self> {
         const CLOCK_SPEED_HZ: u32 = 48_000_000;
 
-        let target_freq_hz: u32 = match speed {
+        let mut target_freq_hz: u32 = match speed {
             Speed::Standard => 100_000,   // 100 KHz
             Speed::Fast => 400_000,       // 400 KHz
             Speed::FastPlus => 1_000_000, // 1 MHz
 
             _ => return Err(Error::UnsupportedConfiguration),
         };
+
+        if strict_mode {
+            target_freq_hz = target_freq_hz * 97 / 100;
+        }
 
         // Figure out what we need to set the clock divider to in order to hit the I2C speed the user requested.  Again, we may not
         // be able to be exact, so we need to find the closest viable option.
@@ -119,25 +121,17 @@ impl SpeedRegisterSettings {
             .cartesian_product((MIN_CLOCKS..=MAX_CLOCKS).rev())
             .filter(|(hi_clocks, lo_clocks)| get_duty_cycle(*hi_clocks, *lo_clocks) == duty_cycle.value)
             .map(|(hi_clocks, lo_clocks)| {
-                // As speeds increase, clock_div_multiplier will approach 1, so rounding to the nearest whole number (rather than always down
-                // as normal integer division does) can meaningfully reduce error in the actual speed in cases where the remainder is high.
+                // As speeds increase, clock_div_multiplier will approach 1, and this can cause nontrivial overshoot of the target frequency in
+                // cases where the clock_div_multiplier is low. To mitigate this, we round up rather than down when calculating clock_div_multiplier
+                // because undershoot is preferable to overshoot in these cases.
                 let clock_div_multiplier =
-                    rounded_divide(CLOCK_SPEED_HZ, target_freq_hz * u32::from(hi_clocks + lo_clocks)) as u16;
+                    CLOCK_SPEED_HZ.div_ceil(target_freq_hz * u32::from(hi_clocks + lo_clocks)) as u16;
                 (hi_clocks, lo_clocks, clock_div_multiplier)
             })
             .filter(|(hi_clocks, lo_clocks, clock_div_multiplier)| {
-                // Require the resulting frequency to be strictly below `target_freq_hz`.
-                //
-                // This is necessary because hardware clock dividers and scalers can introduce
-                // rounding errors or imprecisions, causing the actual I2C clock to slightly exceed
-                // the calculated value. By enforcing a strict inequality, we ensure that the actual
-                // I2C clock frequency will not exceed the requested maximum, which is important for
-                // I2C compliance and to avoid violating timing requirements of connected devices.
-                get_freq_hz(*hi_clocks, *lo_clocks, *clock_div_multiplier, CLOCK_SPEED_HZ) < target_freq_hz
+                get_freq_hz(*hi_clocks, *lo_clocks, *clock_div_multiplier, CLOCK_SPEED_HZ) <= target_freq_hz
             })
-            .min_by(|a, b| {
-                let (hi_a, lo_a, div_a) = a;
-                let (hi_b, lo_b, div_b) = b;
+            .min_by(|(hi_a, lo_a, div_a), (hi_b, lo_b, div_b)| {
                 let freq_a = get_freq_hz(*hi_a, *lo_a, *div_a, CLOCK_SPEED_HZ);
                 let freq_b = get_freq_hz(*hi_b, *lo_b, *div_b, CLOCK_SPEED_HZ);
 
@@ -220,6 +214,11 @@ pub struct Config {
 
     /// The target duty cycle (percentage of time to hold the SCL line high per bit).
     pub duty_cycle: DutyCycle,
+
+    /// Enable strict mode
+    ///
+    /// If enabled, this flag will add a 3% margin to the target frequency when calculating the clock settings to prevent jitter from causing the clock speed to exceed the target speed.
+    pub strict_mode: bool,
 }
 
 impl Default for Config {
@@ -227,6 +226,7 @@ impl Default for Config {
         Self {
             speed: Speed::Standard,
             duty_cycle: Default::default(),
+            strict_mode: false,
         }
     }
 }
@@ -251,7 +251,7 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
         let info = T::info();
         let regs = info.regs;
 
-        let speed_settings = SpeedRegisterSettings::new(config.duty_cycle, config.speed)?;
+        let speed_settings = SpeedRegisterSettings::new(config.duty_cycle, config.speed, config.strict_mode)?;
 
         regs.msttime().write(|w| {
             w.mstsclhigh()

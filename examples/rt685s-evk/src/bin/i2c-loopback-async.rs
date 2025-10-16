@@ -111,6 +111,7 @@ async fn main(spawner: Spawner) {
     let config = i2c::master::Config {
         speed: i2c::master::Speed::Fast,
         duty_cycle: DutyCycle::new(50).unwrap(),
+        ..Default::default()
     };
     let master = I2cMaster::new_async(p.FLEXCOMM4, p.PIO0_29, p.PIO0_30, Irqs, config, p.DMA0_CH9).unwrap();
 
