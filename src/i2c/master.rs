@@ -34,12 +34,15 @@ pub enum Speed {
     High,
 }
 
-/// Divide integers rounding to the nearest whole number rather than always down
-fn rounded_divide(numerator: u32, denominator: u32) -> u32 {
-    (numerator + denominator / 2) / denominator
+/// Divide integers rounding up rather than down
+fn divide_rounded_up(numerator: u32, denominator: u32) -> u32 {
+    (numerator / denominator) + if numerator % denominator != 0 { 1 } else { 0 }
 }
 
+// Compute target duty cycle based on the specified hi/lo clock counts.
 fn get_duty_cycle(hi_clocks: u8, lo_clocks: u8) -> u8 {
+    assert!(hi_clocks >= MIN_CLOCKS && hi_clocks <= MAX_CLOCKS);
+    assert!(lo_clocks >= MIN_CLOCKS && lo_clocks <= MAX_CLOCKS);
     let total_clocks = u16::from(hi_clocks + lo_clocks);
     (100 * u16::from(hi_clocks) / total_clocks) as u8
 }
@@ -70,7 +73,7 @@ impl ToClocksEnum<Mstscllow> for u8 {
             7 => Mstscllow::Clocks7,
             8 => Mstscllow::Clocks8,
             9 => Mstscllow::Clocks9,
-            _ => panic!("Invalid value for Mstscllow"),
+            _ => unreachable!("Invalid value for Mstscllow"),
         }
     }
 }
@@ -86,7 +89,7 @@ impl ToClocksEnum<Mstsclhigh> for u8 {
             7 => Mstsclhigh::Clocks7,
             8 => Mstsclhigh::Clocks8,
             9 => Mstsclhigh::Clocks9,
-            _ => panic!("Invalid value for Mstsclhigh"),
+            _ => unreachable!("Invalid value for Mstsclhigh"),
         }
     }
 }
@@ -100,7 +103,7 @@ struct SpeedRegisterSettings {
 }
 
 impl SpeedRegisterSettings {
-    fn new(duty_cycle: DutyCycle, speed: Speed) -> Result<Self> {
+    fn new(duty_cycle: DutyCycle, speed: Speed, undershoot_target_speed: bool) -> Result<Self> {
         const SFRO_CLOCK_SPEED_HZ: u32 = 16_000_000;
 
         let target_freq_hz: u32 = match speed {
@@ -114,28 +117,44 @@ impl SpeedRegisterSettings {
         // Figure out what we need to set the clock divider to in order to hit the I2C speed the user requested.  Again, we may not
         // be able to be exact, so we need to find the closest viable option.
         //
-        let (result_clocks_hi, result_clocks_lo, result_div_multiplier) = (MIN_CLOCKS..=MAX_CLOCKS)
+        let (result_clocks_hi, result_clocks_lo, mut result_div_multiplier) = (MIN_CLOCKS..=MAX_CLOCKS)
             .cartesian_product(MIN_CLOCKS..=MAX_CLOCKS)
             .filter(|(hi_clocks, lo_clocks)| get_duty_cycle(*hi_clocks, *lo_clocks) == duty_cycle.value)
             .map(|(hi_clocks, lo_clocks)| {
-                // As speeds increase, clock_div_multiplier will approach 1, so rounding to the nearest whole number (rather than always down
-                // as normal integer division does) can meaningfully reduce error in the actual speed in cases where the remainder is high.
+                // As speeds increase, clock_div_multiplier will approach 1, and this can cause nontrivial overshoot of the target frequency in
+                // cases where the clock_div_multiplier is low. To mitigate this, we round up rather than down when calculating clock_div_multiplier
+                // because overshoot is preferable to undershoot in these cases.
                 let clock_div_multiplier =
-                    rounded_divide(SFRO_CLOCK_SPEED_HZ, target_freq_hz * u32::from(hi_clocks + lo_clocks)) as u16;
+                    divide_rounded_up(SFRO_CLOCK_SPEED_HZ, target_freq_hz * u32::from(hi_clocks + lo_clocks)) as u16;
                 (hi_clocks, lo_clocks, clock_div_multiplier)
             })
             .filter(|(hi_clocks, lo_clocks, clock_div_multiplier)| {
                 get_freq_hz(*hi_clocks, *lo_clocks, *clock_div_multiplier, SFRO_CLOCK_SPEED_HZ) <= target_freq_hz
             })
-            .min_by(|a, b| {
-                let (hi_a, lo_a, div_a) = a;
-                let (hi_b, lo_b, div_b) = b;
+            .min_by(|(hi_a, lo_a, div_a), (hi_b, lo_b, div_b)| {
                 let freq_a = get_freq_hz(*hi_a, *lo_a, *div_a, SFRO_CLOCK_SPEED_HZ);
                 let freq_b = get_freq_hz(*hi_b, *lo_b, *div_b, SFRO_CLOCK_SPEED_HZ);
 
-                target_freq_hz.abs_diff(freq_a).cmp(&target_freq_hz.abs_diff(freq_b))
+                target_freq_hz
+                    .abs_diff(freq_a)
+                    .cmp(&target_freq_hz.abs_diff(freq_b))
+                    // In cases of a tie, higher clock dividers are preferable because they let us undershoot in smaller increments, thus minimizing
+                    // how much speed we need to give up to get slightly under the target speed.
+                    .then(div_a.cmp(div_b).reverse())
             })
             .ok_or(Error::UnsupportedConfiguration)?;
+
+        if undershoot_target_speed
+            && target_freq_hz
+                == get_freq_hz(
+                    result_clocks_hi,
+                    result_clocks_lo,
+                    result_div_multiplier,
+                    SFRO_CLOCK_SPEED_HZ,
+                )
+        {
+            result_div_multiplier += 1;
+        }
 
         // A clock divider of 1 means 'divide clocks by 2', not 'divide clocks by 1', so we need to account for that.
         //
@@ -212,6 +231,12 @@ pub struct Config {
 
     /// The target duty cycle (percentage of time to hold the SCL line high per bit).
     pub duty_cycle: DutyCycle,
+
+    /// If false, we may slightly overshoot the target speed in some cases due to part-to-part variation, but the bus will run at the target speed on average (if the hardware supports it).
+    ///
+    /// If true, always slightly underclock the bus speed to ensure that part-to-part variation doesn't cause any single wave to overshoot the requested speed.
+    /// This will cause the bus to run slightly slower than the target speed at all times, but may prevent issues with sensitive I2C devices that are intolerant of slight overshoot caused by part-to-part variation.
+    pub undershoot_target_speed: bool,
 }
 
 impl Default for Config {
@@ -219,6 +244,7 @@ impl Default for Config {
         Self {
             speed: Speed::Standard,
             duty_cycle: Default::default(),
+            undershoot_target_speed: false,
         }
     }
 }
@@ -243,7 +269,8 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
         let info = T::info();
         let regs = info.regs;
 
-        let speed_settings = SpeedRegisterSettings::new(config.duty_cycle, config.speed)?;
+        let speed_settings =
+            SpeedRegisterSettings::new(config.duty_cycle, config.speed, config.undershoot_target_speed)?;
 
         regs.msttime().write(|w| {
             w.mstsclhigh()
