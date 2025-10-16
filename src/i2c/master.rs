@@ -36,8 +36,8 @@ pub enum Speed {
 
 /// Compute target duty cycle based on the specified hi/lo clock counts.
 fn get_duty_cycle(hi_clocks: u8, lo_clocks: u8) -> u8 {
-    assert!(hi_clocks >= MIN_CLOCKS && hi_clocks <= MAX_CLOCKS);
-    assert!(lo_clocks >= MIN_CLOCKS && lo_clocks <= MAX_CLOCKS);
+    assert!((MIN_CLOCKS..=MAX_CLOCKS).contains(&hi_clocks));
+    assert!((MIN_CLOCKS..=MAX_CLOCKS).contains(&lo_clocks));
     let total_clocks = u16::from(hi_clocks + lo_clocks);
     (100 * u16::from(hi_clocks) / total_clocks) as u8
 }
