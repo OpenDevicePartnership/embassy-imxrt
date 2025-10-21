@@ -101,7 +101,7 @@ struct SpeedRegisterSettings {
 
 impl SpeedRegisterSettings {
     fn new(duty_cycle: DutyCycle, speed: Speed) -> Result<Self> {
-        const SFRO_CLOCK_SPEED_HZ: u32 = 16_000_000;
+        const CLOCK_SPEED_HZ: u32 = 48_000_000;
 
         let target_freq_hz: u32 = match speed {
             Speed::Standard => 100_000,   // 100 KHz
@@ -122,17 +122,17 @@ impl SpeedRegisterSettings {
                 // As speeds increase, clock_div_multiplier will approach 1, so rounding to the nearest whole number (rather than always down
                 // as normal integer division does) can meaningfully reduce error in the actual speed in cases where the remainder is high.
                 let clock_div_multiplier =
-                    rounded_divide(SFRO_CLOCK_SPEED_HZ, target_freq_hz * u32::from(hi_clocks + lo_clocks)) as u16;
+                    rounded_divide(CLOCK_SPEED_HZ, target_freq_hz * u32::from(hi_clocks + lo_clocks)) as u16;
                 (hi_clocks, lo_clocks, clock_div_multiplier)
             })
             .filter(|(hi_clocks, lo_clocks, clock_div_multiplier)| {
-                get_freq_hz(*hi_clocks, *lo_clocks, *clock_div_multiplier, SFRO_CLOCK_SPEED_HZ) <= target_freq_hz
+                get_freq_hz(*hi_clocks, *lo_clocks, *clock_div_multiplier, CLOCK_SPEED_HZ) <= target_freq_hz
             })
             .min_by(|a, b| {
                 let (hi_a, lo_a, div_a) = a;
                 let (hi_b, lo_b, div_b) = b;
-                let freq_a = get_freq_hz(*hi_a, *lo_a, *div_a, SFRO_CLOCK_SPEED_HZ);
-                let freq_b = get_freq_hz(*hi_b, *lo_b, *div_b, SFRO_CLOCK_SPEED_HZ);
+                let freq_a = get_freq_hz(*hi_a, *lo_a, *div_a, CLOCK_SPEED_HZ);
+                let freq_b = get_freq_hz(*hi_b, *lo_b, *div_b, CLOCK_SPEED_HZ);
 
                 target_freq_hz.abs_diff(freq_a).cmp(&target_freq_hz.abs_diff(freq_b))
             })
@@ -145,7 +145,7 @@ impl SpeedRegisterSettings {
             scl_high_clocks: result_clocks_hi.to_clocks_enum(),
             scl_low_clocks: result_clocks_lo.to_clocks_enum(),
             clock_div_multiplier: result_div_multiplier - CLOCK_DIV_MULTIPLIER_OFFSET,
-            _actual_freq_hz: SFRO_CLOCK_SPEED_HZ
+            _actual_freq_hz: CLOCK_SPEED_HZ
                 / (u32::from(result_clocks_hi + result_clocks_lo) * u32::from(result_div_multiplier)),
         })
     }
@@ -234,7 +234,7 @@ impl<'a, M: Mode> I2cMaster<'a, M> {
         dma_ch: Option<dma::channel::Channel<'a>>,
     ) -> Result<Self> {
         // TODO - clock integration
-        let clock = crate::flexcomm::Clock::Sfro;
+        let clock = crate::flexcomm::Clock::Ffro;
         let flexcomm = T::enable(clock);
         T::into_i2c();
 
