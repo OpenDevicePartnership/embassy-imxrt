@@ -115,7 +115,8 @@ impl SpeedRegisterSettings {
         // be able to be exact, so we need to find the closest viable option.
         //
         let (result_clocks_hi, result_clocks_lo, result_div_multiplier) = (MIN_CLOCKS..=MAX_CLOCKS)
-            .cartesian_product(MIN_CLOCKS..=MAX_CLOCKS)
+            .rev()
+            .cartesian_product((MIN_CLOCKS..=MAX_CLOCKS).rev())
             .filter(|(hi_clocks, lo_clocks)| get_duty_cycle(*hi_clocks, *lo_clocks) == duty_cycle.value)
             .map(|(hi_clocks, lo_clocks)| {
                 // As speeds increase, clock_div_multiplier will approach 1, so rounding to the nearest whole number (rather than always down
