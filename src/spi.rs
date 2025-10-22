@@ -791,8 +791,7 @@ macro_rules! impl_instance {
     }
 }
 
-// REVISIT: Add support for FLEXCOMM14 with high speed SPI.
-impl_instance!(0, 1, 2, 3, 4, 5, 6, 7);
+impl_instance!(0, 1, 2, 3, 4, 5, 6, 7, 14);
 
 mod sealed {
     /// Seal a trait
@@ -881,6 +880,11 @@ impl_pin_trait!(FLEXCOMM7, sck, PIO4_0, F1);
 impl_pin_trait!(FLEXCOMM7, miso, PIO4_1, F1);
 impl_pin_trait!(FLEXCOMM7, mosi, PIO4_2, F1);
 
+// FLEXCOMM14
+impl_pin_trait!(FLEXCOMM14, sck, PIO1_11, F1);
+impl_pin_trait!(FLEXCOMM14, miso, PIO1_12, F1);
+impl_pin_trait!(FLEXCOMM14, mosi, PIO1_13, F1);
+
 /// Spi Tx DMA trait.
 #[allow(private_bounds)]
 pub trait TxDma<T: Instance>: dma::Instance {}
@@ -920,6 +924,9 @@ impl_dma!(FLEXCOMM6, Tx, DMA0_CH13);
 
 impl_dma!(FLEXCOMM7, Rx, DMA0_CH14);
 impl_dma!(FLEXCOMM7, Tx, DMA0_CH15);
+
+impl_dma!(FLEXCOMM14, Rx, DMA0_CH16);
+impl_dma!(FLEXCOMM14, Tx, DMA0_CH17);
 
 // ==============================
 
