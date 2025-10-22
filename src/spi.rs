@@ -791,7 +791,6 @@ macro_rules! impl_instance {
     }
 }
 
-// REVISIT: Add support for FLEXCOMM14 with high speed SPI.
 impl_instance!(0, 1, 2, 3, 4, 5, 6, 7, 14);
 
 mod sealed {
