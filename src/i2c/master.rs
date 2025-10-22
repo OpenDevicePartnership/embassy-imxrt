@@ -224,7 +224,7 @@ pub struct Config {
 
     /// Enable strict mode
     ///
-    /// If enabled, this flag will add a 3% margin to the target frequency when calculating the clock settings to prevent jitter from causing the clock speed to exceed the target speed.
+    /// If enabled, this flag will reduce the target frequency by 3% when calculating the clock settings to provide some margin, which should prevent jitter from causing the clock speed to exceed the target speed.
     pub strict_mode: bool,
 }
 
