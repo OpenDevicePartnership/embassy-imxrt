@@ -129,14 +129,7 @@ impl SpeedRegisterSettings {
                 (hi_clocks, lo_clocks, clock_div_multiplier)
             })
             .filter(|(hi_clocks, lo_clocks, clock_div_multiplier)| {
-                // Require the resulting frequency to be strictly below `target_freq_hz`.
-                //
-                // This is necessary because hardware clock dividers and scalers can introduce
-                // rounding errors or imprecisions, causing the actual I2C clock to slightly exceed
-                // the calculated value. By enforcing a strict inequality, we ensure that the actual
-                // I2C clock frequency will not exceed the requested maximum, which is important for
-                // I2C compliance and to avoid violating timing requirements of connected devices.
-                get_freq_hz(*hi_clocks, *lo_clocks, *clock_div_multiplier, CLOCK_SPEED_HZ) < target_freq_hz
+                get_freq_hz(*hi_clocks, *lo_clocks, *clock_div_multiplier, CLOCK_SPEED_HZ) <= target_freq_hz
             })
             .min_by(|(hi_a, lo_a, div_a), (hi_b, lo_b, div_b)| {
                 let freq_a = get_freq_hz(*hi_a, *lo_a, *div_a, CLOCK_SPEED_HZ);
