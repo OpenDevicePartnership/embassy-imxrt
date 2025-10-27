@@ -2,7 +2,8 @@
 
 use core::marker::PhantomData;
 
-use crate::clocks::{SysconPeripheral, enable_and_reset};
+use crate::clocks::periph_helpers::NoConfig;
+use crate::clocks::{SealedSysconPeripheral, SysconPeripheral, enable_and_reset};
 pub use crate::pac::crc_engine::mode::CrcPolynomial as Polynomial;
 use crate::{Peri, PeripheralType, peripherals};
 
@@ -72,9 +73,15 @@ impl Default for Config {
 
 impl<'d> Crc<'d> {
     /// Instantiates new CRC peripheral and initializes to default values.
-    pub fn new<T: Instance>(_peripheral: Peri<'d, T>, config: Config) -> Self {
+    #[allow(private_bounds)]
+    pub fn new<T: Instance + SealedSysconPeripheral<SysconPeriphConfig = NoConfig>>(
+        _peripheral: Peri<'d, T>,
+        config: Config,
+    ) -> Self {
         // enable CRC clock
-        enable_and_reset::<T>();
+        //
+        // "NoConfig" peripherals can't fail, we can ignore the result.
+        _ = enable_and_reset::<T>(&NoConfig);
 
         let mut instance = Self {
             info: T::info(),

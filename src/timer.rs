@@ -1,16 +1,17 @@
 //! Timer module for the NXP RT6xx family of microcontrollers
-use core::future::{Future, poll_fn};
+use core::future::poll_fn;
 use core::marker::PhantomData;
+use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::Poll;
 
 use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 
-use crate::clocks::{ClockConfig, ConfigurableClock, enable_and_reset};
+use crate::clocks::config::PoweredClock;
+use crate::clocks::periph_helpers::{CTimerInstance, CTimerSel, CtimerConfig, NoConfig};
+use crate::clocks::{ClockError, SysconPeripheral, enable_and_reset};
 use crate::interrupt::typelevel::Interrupt;
 use crate::iopctl::{DriveMode, DriveStrength, Inverter, IopctlPin as Pin, Pull, SlewRate};
-use crate::pac::Clkctl1;
-use crate::pac::clkctl1::ct32bitfclksel::Sel;
 use crate::pwm::{CentiPercent, Hertz, MicroSeconds};
 use crate::{Peri, PeripheralType, interrupt, peripherals};
 
@@ -160,6 +161,7 @@ pub struct CountingTimer<'p, M: Mode> {
 struct Info {
     regs: &'static crate::pac::ctimer0::RegisterBlock,
     inputmux: &'static crate::pac::inputmux::RegisterBlock,
+    freq: &'static AtomicU32,
     module: usize,
     channel: usize,
 }
@@ -170,6 +172,7 @@ struct Info {
 unsafe impl Send for Info {}
 
 trait SealedInstance {
+    type AssociatedSysconPeripheral: SysconPeripheral;
     fn info() -> Info;
 }
 
@@ -178,6 +181,8 @@ trait SealedInstance {
 pub trait Instance: SealedInstance + PeripheralType + 'static + Send {
     /// Interrupt for this SPI instance.
     type Interrupt: interrupt::typelevel::Interrupt;
+    /// Clock Frequency of this timer's peripheral clock
+    fn clock() -> u32;
 }
 
 /// Interrupt handler for the CTimer modules.
@@ -355,33 +360,7 @@ impl Info {
     }
 
     fn pwm_get_clock_freq(&self) -> u32 {
-        // SAFETY: This has no safety impact as we are getting a singleton register instance here and its dropped it the end of the function
-        let reg = unsafe { Clkctl1::steal() };
-
-        let clksel = reg.ct32bitfclksel(self.channel).read().sel().variant();
-        let mut freq: u32 = 0;
-
-        if let Some(clk) = clksel {
-            match clk {
-                Sel::MainClk => {
-                    freq = ClockConfig::crystal().main_clk.get_clock_rate().unwrap();
-                }
-                Sel::SfroClk => {
-                    freq = ClockConfig::crystal().sfro.get_clock_rate().unwrap();
-                }
-                Sel::FfroClk => {
-                    freq = ClockConfig::crystal().ffro.get_clock_rate().unwrap();
-                }
-                Sel::Lposc => {
-                    freq = ClockConfig::crystal().lposc.get_clock_rate().unwrap();
-                }
-                //TODO: Add get clock frequency for clock sources audio pll, mclk_in
-                _ => {
-                    freq = 0;
-                }
-            }
-        }
-        freq
+        self.freq.load(Ordering::Relaxed)
     }
 
     fn pwm_configure(&self, period: u32) {
@@ -415,6 +394,8 @@ macro_rules! impl_instance {
     ($n:expr, $channel:expr) => {
         paste! {
             impl SealedInstance for crate::peripherals::[<CTIMER $n _ COUNT _ CHANNEL $channel>] {
+                type AssociatedSysconPeripheral = crate::peripherals::[<CTIMER $n _ COUNT _ CHANNEL0>];
+
                 fn info() -> Info {
                     //SAFETY - This code is safe as we are getting register block pointer to do configuration
                     Info {
@@ -422,27 +403,37 @@ macro_rules! impl_instance {
                         inputmux: unsafe { &*crate::pac::Inputmux::ptr() },
                         module: $n,
                         channel: $channel,
+                        freq: &[<CTIMER $n _CLK>],
                     }
                 }
             }
 
             impl SealedInstance for crate::peripherals::[<CTIMER $n _ CAPTURE _ CHANNEL $channel>] {
+                type AssociatedSysconPeripheral = crate::peripherals::[<CTIMER $n _ COUNT _ CHANNEL0>];
+
                 fn info() -> Info {
                     Info {
                         regs: unsafe { &*crate::pac::[<Ctimer $n>]::ptr() },
                         inputmux: unsafe { &*crate::pac::Inputmux::ptr() },
                         module: $n,
                         channel: $channel,
+                        freq: &[<CTIMER $n _CLK>],
                     }
                 }
             }
 
             impl Instance for crate::peripherals::[<CTIMER $n _ COUNT _ CHANNEL $channel>] {
                 type Interrupt = crate::interrupt::typelevel::[<CTIMER $n>];
+                fn clock() -> u32 {
+                    [<CTIMER $n _CLK>].load(Ordering::Relaxed)
+                }
             }
 
             impl Instance for crate::peripherals::[<CTIMER $n _ CAPTURE _ CHANNEL $channel>] {
                 type Interrupt = crate::interrupt::typelevel::[<CTIMER $n>];
+                fn clock() -> u32 {
+                    [<CTIMER $n _CLK>].load(Ordering::Relaxed)
+                }
             }
         }
     };
@@ -551,12 +542,7 @@ impl<M: Mode, P: CaptureEvent> CaptureTimer<'_, M, P> {
 
 impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
     /// Creates a new `CaptureTimer` in asynchronous mode.
-    pub fn new_async<T: Instance>(
-        _inst: Peri<'p, T>,
-        pin: Peri<'p, P>,
-        clk: impl ConfigurableClock,
-        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'p,
-    ) -> Self {
+    pub fn new_async<T: Instance>(_inst: Peri<'p, T>, pin: Peri<'p, P>) -> Self {
         let info = T::info();
         let module = info.module;
 
@@ -566,7 +552,7 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
         Self {
             id: COUNT_CHANNEL + module * CHANNEL_PER_MODULE + info.channel,
             event_clock_counts: 0,
-            clk_freq: clk.get_clock_rate().unwrap(),
+            clk_freq: T::clock(),
             _phantom: core::marker::PhantomData,
             info,
             event_pin: pin,
@@ -640,14 +626,14 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
 
 impl<'p, P: CaptureEvent> CaptureTimer<'p, Blocking, P> {
     /// Creates a new `CaptureTimer` in blocking mode.
-    pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>, pin: Peri<'p, P>, clk: impl ConfigurableClock) -> Self {
+    pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>, pin: Peri<'p, P>) -> Self {
         let info = T::info();
         let module = info.module;
 
         Self {
             id: COUNT_CHANNEL + module * CHANNEL_PER_MODULE + info.channel,
             event_clock_counts: 0,
-            clk_freq: clk.get_clock_rate().unwrap(),
+            clk_freq: T::clock(),
             _phantom: core::marker::PhantomData,
             info,
             event_pin: pin,
@@ -750,11 +736,7 @@ impl<'p, M: Mode> CountingTimer<'p, M> {
 
 impl<'p> CountingTimer<'p, Async> {
     /// Creates a new `CountingTimer` in asynchronous mode.
-    pub fn new_async<T: Instance>(
-        _inst: Peri<'p, T>,
-        clk: impl ConfigurableClock,
-        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'p,
-    ) -> Self {
+    pub fn new_async<T: Instance>(_inst: Peri<'_, T>) -> Self {
         let info = T::info();
 
         T::Interrupt::unpend();
@@ -762,7 +744,7 @@ impl<'p> CountingTimer<'p, Async> {
 
         Self {
             id: info.module * CHANNEL_PER_MODULE + info.channel,
-            clk_freq: clk.get_clock_rate().unwrap(),
+            clk_freq: T::clock(),
             timeout: 0,
             _phantom: core::marker::PhantomData,
             info,
@@ -787,12 +769,12 @@ impl<'p> CountingTimer<'p, Async> {
 
 impl<'p> CountingTimer<'p, Blocking> {
     /// Creates a new `CountingTimer` in blocking mode.
-    pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>, clk: impl ConfigurableClock) -> Self {
+    pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>) -> Self {
         let info = T::info();
 
         Self {
             id: info.module * CHANNEL_PER_MODULE + info.channel,
-            clk_freq: clk.get_clock_rate().unwrap(),
+            clk_freq: T::clock(),
             timeout: 0,
             _phantom: core::marker::PhantomData,
             info,
@@ -1077,31 +1059,74 @@ impl<'p> CTimerPwmPeriodChannel<'p> {
     }
 }
 
-/// Initializes the timer modules and returns a `CTimerManager` in the initialized state.
+struct TimerClocks {
+    ctimer0: u32,
+    ctimer1: u32,
+    ctimer2: u32,
+    ctimer3: u32,
+    ctimer4: u32,
+}
+
+/// Initializes the timer modules and returns a `TimerClocks` containing the base
+/// frequency of all timers.
+fn enable_all() -> core::result::Result<TimerClocks, ClockError> {
+    let ctimer0 = enable_and_reset::<peripherals::CTIMER0_COUNT_CHANNEL0>(&CtimerConfig {
+        source: CTimerSel::SfroClk,
+        instance: CTimerInstance::CTimer0,
+        // TODO: AlwaysEnabled?
+        powered: PoweredClock::AlwaysEnabled,
+    })?;
+    let ctimer1 = enable_and_reset::<peripherals::CTIMER1_COUNT_CHANNEL0>(&CtimerConfig {
+        source: CTimerSel::SfroClk,
+        instance: CTimerInstance::CTimer1,
+        // TODO: AlwaysEnabled?
+        powered: PoweredClock::AlwaysEnabled,
+    })?;
+    let ctimer2 = enable_and_reset::<peripherals::CTIMER2_COUNT_CHANNEL0>(&CtimerConfig {
+        source: CTimerSel::SfroClk,
+        instance: CTimerInstance::CTimer2,
+        // TODO: AlwaysEnabled?
+        powered: PoweredClock::AlwaysEnabled,
+    })?;
+    let ctimer3 = enable_and_reset::<peripherals::CTIMER3_COUNT_CHANNEL0>(&CtimerConfig {
+        source: CTimerSel::SfroClk,
+        instance: CTimerInstance::CTimer3,
+        // TODO: AlwaysEnabled?
+        powered: PoweredClock::AlwaysEnabled,
+    })?;
+    let ctimer4 = enable_and_reset::<peripherals::CTIMER4_COUNT_CHANNEL0>(&CtimerConfig {
+        source: CTimerSel::SfroClk,
+        instance: CTimerInstance::CTimer4,
+        // TODO: AlwaysEnabled?
+        powered: PoweredClock::AlwaysEnabled,
+    })?;
+    enable_and_reset::<peripherals::PIMCTL>(&NoConfig)?;
+    Ok(TimerClocks {
+        ctimer0,
+        ctimer1,
+        ctimer2,
+        ctimer3,
+        ctimer4,
+    })
+}
+
+static CTIMER0_CLK: AtomicU32 = AtomicU32::new(0);
+static CTIMER1_CLK: AtomicU32 = AtomicU32::new(0);
+static CTIMER2_CLK: AtomicU32 = AtomicU32::new(0);
+static CTIMER3_CLK: AtomicU32 = AtomicU32::new(0);
+static CTIMER4_CLK: AtomicU32 = AtomicU32::new(0);
+
+/// Statically initialize all timers
+///
+/// Must only be called once
 pub fn init() {
-    // SAFETY: This has no safety impact as we are getting a singleton register instance here and its dropped it the end of the function
-    let reg = unsafe { Clkctl1::steal() };
-
-    // Initialization steps from NXP TRM
-    //
-    // • Enable the clock to the CTIMER in the CLKCTL1_PSCCTL2 register
-    //          This enables the register interface and the peripheral function clock.
-    // • Clear the CTIMER peripheral reset in the RSTCTL1_PRSTCTL2 register
-    // (Section 4.5.4.4) by writing to the RSTCTL1_PRSTCTL2_CLR register (Section 4.5.4.10).
-    enable_and_reset::<peripherals::CTIMER0_COUNT_CHANNEL0>();
-    enable_and_reset::<peripherals::CTIMER1_COUNT_CHANNEL0>();
-    enable_and_reset::<peripherals::CTIMER2_COUNT_CHANNEL0>();
-    enable_and_reset::<peripherals::CTIMER3_COUNT_CHANNEL0>();
-    enable_and_reset::<peripherals::CTIMER4_COUNT_CHANNEL0>();
-    enable_and_reset::<peripherals::PIMCTL>();
-
-    // • Select a clock source for the CTIMER using the appropriate CT32BIT0FCLKSEL
-    // register (see Section 4.5.2.55 through Section 4.5.2.59).
-    reg.ct32bitfclksel(0).write(|w| w.sel().sfro_clk());
-    reg.ct32bitfclksel(1).write(|w| w.sel().sfro_clk());
-    reg.ct32bitfclksel(2).write(|w| w.sel().sfro_clk());
-    reg.ct32bitfclksel(3).write(|w| w.sel().sfro_clk());
-    reg.ct32bitfclksel(4).write(|w| w.sel().sfro_clk());
+    let clocks = enable_all().expect("Initializing timers should not fail");
+    // TODO: "swap" and ensure clocks not previously initialized?
+    CTIMER0_CLK.store(clocks.ctimer0, Ordering::Relaxed);
+    CTIMER1_CLK.store(clocks.ctimer1, Ordering::Relaxed);
+    CTIMER2_CLK.store(clocks.ctimer2, Ordering::Relaxed);
+    CTIMER3_CLK.store(clocks.ctimer3, Ordering::Relaxed);
+    CTIMER4_CLK.store(clocks.ctimer4, Ordering::Relaxed);
 }
 
 impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {

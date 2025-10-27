@@ -6,6 +6,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use hasher::Hasher;
 
 use crate::clocks::enable_and_reset;
+use crate::clocks::periph_helpers::NoConfig;
 use crate::peripherals::{DMA0_CH30, HASHCRYPT};
 use crate::{Peri, dma, interrupt, pac};
 
@@ -99,7 +100,8 @@ impl From<Algorithm> for u8 {
 impl<'d, M: Mode> Hashcrypt<'d, M> {
     /// Instantiate new Hashcrypt peripheral
     fn new_inner<T: Instance>(_peripheral: Peri<'d, T>, dma_ch: Option<dma::channel::Channel<'d>>) -> Self {
-        enable_and_reset::<HASHCRYPT>();
+        // NoConfig clocks can't fail
+        _ = enable_and_reset::<HASHCRYPT>(&NoConfig);
 
         Self {
             _ownership: PhantomData,

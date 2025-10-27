@@ -10,7 +10,9 @@ use embassy_hal_internal::interrupt::InterruptExt;
 use embassy_hal_internal::{Peri, PeripheralType, impl_peripheral};
 use embassy_sync::waitqueue::AtomicWaker;
 
+use crate::clocks::config::PoweredClock;
 use crate::clocks::enable_and_reset;
+use crate::clocks::periph_helpers::{AdcConfig, AdcSel0, AdcSel1};
 use crate::interrupt::typelevel::Binding;
 use crate::iopctl::{DriveMode, DriveStrength, Function, Inverter, IopctlPin, Pull, SlewRate};
 use crate::pac::adc0;
@@ -157,27 +159,23 @@ struct Info {
 
 impl<const N: usize> Adc<'_, N> {
     fn init() {
-        let clkctl0 = unsafe { crate::pac::Clkctl0::steal() };
+        // TODO: "Call the POWER_SetAnalogBuffer API (see Section 6.4.8)
+        // to enable the analog buffer used by the ADC and the comparator."
+
+        // Enables clock, selects clock source, sets clock divide, resets peripheral
+        enable_and_reset::<ADC0>(&AdcConfig {
+            sel0: AdcSel0::Lposc,
+            sel1: AdcSel1::Adc0fclksel0MuxOut,
+            div: 0,
+            powered: PoweredClock::NormalEnabledDeepSleepDisabled,
+        })
+        .expect("Adc setup shouldn't fail");
         let sysctl0 = unsafe { crate::pac::Sysctl0::steal() };
 
         // Power up ADC block
         sysctl0
             .pdruncfg0_clr()
             .write(|w| w.adc_pd().set_bit().adc_lp().set_bit());
-
-        // Configure ADC clock mux
-        // Select LPOSC for now, unless we want to speed up the clocks
-        clkctl0.adc0fclksel0().write(|w| w.sel().lposc());
-        clkctl0.adc0fclksel1().write(|w| w.sel().adc0fclksel0_mux_out());
-
-        // Set ADC clock divisor
-        clkctl0.adc0fclkdiv().modify(|_, w| w.reset().set_bit());
-        clkctl0
-            .adc0fclkdiv()
-            .write(|w| unsafe { w.div().bits(0x0).halt().clear_bit() });
-        while clkctl0.adc0fclkdiv().read().reqflag().bit_is_set() {}
-
-        enable_and_reset::<ADC0>();
     }
 
     fn configure_adc(&mut self, config: Config) {

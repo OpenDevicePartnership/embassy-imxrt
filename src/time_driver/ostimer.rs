@@ -9,6 +9,7 @@ use embassy_time_queue_utils::Queue;
 
 use super::AlarmState;
 use crate::clocks::enable;
+use crate::clocks::periph_helpers::{OsEventClockSelect, OsEventConfig};
 use crate::interrupt::InterruptExt;
 use crate::{interrupt, pac};
 
@@ -66,7 +67,10 @@ impl OsTimer {
 
         // Enable clocks. Documentation advises AGAINST resetting this
         // peripheral.
-        enable::<crate::peripherals::OS_EVENT>();
+        enable::<crate::peripherals::OS_EVENT>(&OsEventConfig {
+            select: OsEventClockSelect::Lposc,
+        })
+        .expect("ostimer should not fail");
 
         // Make sure interrupt is masked
         os().osevent_ctrl().modify(|_, w| w.ostimer_intena().clear_bit());

@@ -4,6 +4,8 @@ use core::marker::PhantomData;
 
 use embassy_hal_internal::{Peri, PeripheralType};
 
+use crate::clocks::config::PoweredClock;
+use crate::clocks::periph_helpers::{WdtClkSel, WdtConfig, WdtInstance};
 use crate::clocks::{SysconPeripheral, enable_and_reset};
 use crate::peripherals::{WDT0, WDT1};
 
@@ -43,17 +45,17 @@ impl SealedInstance for crate::peripherals::WDT0 {
     }
 
     fn init() {
-        init_lposc();
-
-        // REVISIT: Can we do this generically?
-        let clkctl0 = unsafe { &*crate::pac::Clkctl0::ptr() };
-        clkctl0.wdt0fclksel().modify(|_, w| w.sel().lposc());
+        enable_and_reset::<WDT0>(&WdtConfig {
+            source: WdtClkSel::LpOsc1m,
+            instance: WdtInstance::Wwdt0,
+            // TODO: Always enabled?
+            powered: PoweredClock::AlwaysEnabled,
+        })
+        .expect("lposc should be active");
 
         // Allow WDT0 interrupts to wake device from deep-sleep mode
         let sysctl0 = unsafe { &*crate::pac::Sysctl0::ptr() };
         sysctl0.starten0_set().write(|w| w.wdt0().set_bit());
-
-        enable_and_reset::<WDT0>();
     }
 }
 impl Instance for crate::peripherals::WDT0 {}
@@ -67,13 +69,13 @@ impl SealedInstance for crate::peripherals::WDT1 {
     }
 
     fn init() {
-        init_lposc();
-
-        // Enable WWDT1 clock and set LPOSC as clock source
-        let clkctl1 = unsafe { &*crate::pac::Clkctl1::ptr() };
-        clkctl1.wdt1fclksel().modify(|_, w| w.sel().lposc());
-
-        enable_and_reset::<WDT1>();
+        enable_and_reset::<WDT1>(&WdtConfig {
+            source: WdtClkSel::LpOsc1m,
+            instance: WdtInstance::Wwdt1,
+            // TODO: Always enabled?
+            powered: PoweredClock::AlwaysEnabled,
+        })
+        .expect("lposc should be active");
     }
 }
 impl Instance for crate::peripherals::WDT1 {}
@@ -104,18 +106,6 @@ const fn time_to_counter(time_us: u32) -> u32 {
 /// Converts a WWDT counter value to a time in microseconds.
 const fn counter_to_time(counter: u32) -> u32 {
     (counter + 1) * (US_PER_TICK * PSC)
-}
-
-/// Initializes low-power oscillator.
-fn init_lposc() {
-    // Enable low power oscillator
-    let sysctl0 = unsafe { &*crate::pac::Sysctl0::ptr() };
-    sysctl0.pdruncfg0_clr().write(|w| w.lposc_pd().set_bit());
-
-    // Wait for low-power oscillator to be ready (typically 64 us)
-    // Busy loop seems better here than trying to shoe-in an async delay
-    let clkctl0 = unsafe { &*crate::pac::Clkctl0::ptr() };
-    while clkctl0.lposcctl0().read().clkrdy().bit_is_clear() {}
 }
 
 impl<'d> WindowedWatchdog<'d> {
