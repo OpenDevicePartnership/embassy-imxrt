@@ -355,13 +355,13 @@ fn main() -> ! {
         rprintln!("Enabling SAU");
         cp.SAU.enable();
 
-        rprintln!("Lock secure MPU and VTOR (not SAU)");
-        // Cannot lock SAU as we still need to enable it.
-        // 0x5 region seems to be translated to 0x4 when SAU is already enabled.
+        rprintln!("Lock secure MPU, VTOR and SAU");
         reg_modify_checked!(ahb_secure_ctrl.cm33_lock_reg(), |_, w| {
             w.lock_s_mpu()
                 .blocked()
                 .lock_s_vtor()
+                .blocked()
+                .lock_sau()
                 .blocked()
                 .cm33_lock_reg_lock()
                 .blocked()
