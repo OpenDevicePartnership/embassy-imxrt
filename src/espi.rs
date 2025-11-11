@@ -98,9 +98,10 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 }
 
 /// eSPI Port configuration.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum PortConfig {
     /// Unconfigured
+    #[default]
     Unconfigured,
 
     /// ACPI-style Endpoint
@@ -202,12 +203,6 @@ impl From<PortConfig> for Type {
             PortConfig::MemSingle => Type::BusMMemS,
             PortConfig::MasterFlash => Type::BusMFlashS,
         }
-    }
-}
-
-impl Default for PortConfig {
-    fn default() -> Self {
-        Self::Unconfigured
     }
 }
 
