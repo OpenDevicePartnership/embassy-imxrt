@@ -405,60 +405,136 @@ fn main() -> ! {
 }
 
 fn set_ram_secure(mut region: Range<u32>, ahb_secure_ctrl: &ahb_secure_ctrl::RegisterBlock) {
-    let address_to_block = |address: u32| {
-        const BLOCK_SIZE_TABLE: &[(u32, u32, u32)] = &[
-            (
-                0x2010_0000,
-                8192,
-                0x4_0000 / 0x400 + 0x4_0000 / 0x800 + 0x8_0000 / 0x1000,
-            ),
-            (0x2008_0000, 4096, 0x4_0000 / 0x400 + 0x4_0000 / 0x800),
-            (0x2004_0000, 2048, 0x4_0000 / 0x400),
-            (0x2000_0000, 1024, 0),
-        ];
+    // A block of RAM memory for which a rule can be set.
+    struct Block {
+        pub index: u32,
+        pub start: u32,
+        pub size: u32,
+    }
 
-        let (block_start, block_size, previous_blocks) = BLOCK_SIZE_TABLE
-            .iter()
-            .find(|(block_address, _, _)| address >= *block_address)
-            .unwrap();
+    impl Block {
+        pub fn from_address(address: u32) -> Self {
+            const BLOCK_SIZE_TABLE: &[(u32, u32, u32)] = &[
+                (
+                    0x2010_0000,
+                    8192,
+                    0x4_0000 / 0x400 + 0x4_0000 / 0x800 + 0x8_0000 / 0x1000,
+                ),
+                (0x2008_0000, 4096, 0x4_0000 / 0x400 + 0x4_0000 / 0x800),
+                (0x2004_0000, 2048, 0x4_0000 / 0x400),
+                (0x2000_0000, 1024, 0),
+            ];
 
-        (
-            *previous_blocks + (address - *block_start) / *block_size,
-            *block_start + (address - *block_start) / *block_size * *block_size,
-            *block_size,
-        )
-    };
+            let (block_start, block_size, previous_blocks) = BLOCK_SIZE_TABLE
+                .into_iter()
+                .find(|(block_address, _, _)| address >= *block_address)
+                .unwrap();
 
-    // Make sure the end of the range is at a boundary
-    let (_, block_start, _) = address_to_block(region.end);
-    assert_eq!(region.end, block_start);
-
-    while !region.is_empty() {
-        let (block_index, block_start, block_size) = address_to_block(region.start);
-        assert_eq!(region.start, block_start);
-
-        let register_index = block_index / 8;
-        let rule_index = block_index % 8;
-
-        let base_ptr = ahb_secure_ctrl.ram00_rule(0).as_ptr();
-
-        rprintln!(
-            "Ram region {:#010X}..={:#010X} to secure ({}, {})",
-            block_start,
-            block_start + block_size - 1,
-            register_index,
-            rule_index
-        );
-
-        unsafe {
-            let target_register = base_ptr.add(register_index as usize);
-            let current_val = target_register.read_volatile();
-            target_register.write_volatile(
-                current_val & !(0b11 << (rule_index * 4)) | ((Rule0::SecurePrivUserAllowed as u32) << (rule_index * 4)),
-            );
+            Block {
+                index: previous_blocks + (address - block_start) / block_size,
+                start: block_start + (address - block_start) / block_size * block_size,
+                size: *block_size,
+            }
         }
 
-        region.start += block_size;
+        /// Fetch the index number of the register containing the current rule block.
+        fn register_index(&self) -> u32 {
+            self.index / 8
+        }
+
+        pub fn register(&self) -> Register {
+            Register {
+                index: self.register_index(),
+            }
+        }
+
+        pub fn rule_index(&self) -> u32 {
+            self.index % 8
+        }
+    }
+
+    struct Register {
+        index: u32,
+    }
+
+    impl Register {
+        /// RAM region (or RAM peripheral block RAM00 to RAM29)
+        const fn region(&self) -> u32 {
+            self.index / 4
+        }
+
+        /// RAM region (or RAM peripheral block RAM00 to RAM29)
+        const fn subregion(&self) -> u32 {
+            self.index % 4
+        }
+
+        /// Compute the register address which contains the rule bits for this block.
+        pub fn address(&self, ahb_secure_ctrl: &ahb_secure_ctrl::RegisterBlock) -> *mut u32 {
+            // RAM subregion, each region has 4 denoted by RAMXX_RULE0 to RAMXX_RULES3
+            let subregion = self.subregion() % 4;
+
+            // For each region which is not contiguously set after the previous region, the register offset.
+            // All other not specified regions follow contiguously.
+            const REGION_TABLE: [(u32, u32); 9] = [
+                (28, 0x2D0),
+                (24, 0x280),
+                (20, 0x230),
+                (16, 0x1E0),
+                (12, 0x190),
+                (8, 0x140),
+                (4, 0xF0),
+                (2, 0xC0),
+                (0, 0x90),
+            ];
+
+            const BASE_OFFSET: u32 = REGION_TABLE.last().unwrap().1;
+
+            let (region_start, offset) = REGION_TABLE
+                .into_iter()
+                .find(|(region_start, _)| self.region() >= *region_start)
+                .unwrap();
+
+            let offset = offset + (self.region() - region_start) * 0x10 + subregion * 4;
+
+            let real_offset = (offset - BASE_OFFSET) as usize;
+            let base_ptr = ahb_secure_ctrl.ram00_rule(0).as_ptr();
+            unsafe { base_ptr.byte_add(real_offset) }
+        }
+    }
+
+    // Make sure the end of the range is at a boundary
+    let block = Block::from_address(region.end);
+    assert_eq!(region.end, block.start);
+
+    while !region.is_empty() {
+        let block = Block::from_address(region.start);
+        assert_eq!(region.start, block.start);
+
+        let rule_index = block.rule_index();
+        let target_register = block.register();
+
+        rprintln!(
+            "Ram region {:#010X}..={:#010X} to secure (RAM{:#02}_RULE{} offset {} @ {:?})",
+            block.start,
+            block.start + block.size - 1,
+            target_register.region(),
+            target_register.subregion(),
+            rule_index,
+            target_register.address(ahb_secure_ctrl)
+        );
+
+        unsafe { rtt_target::UpChannel::conjure(0).unwrap().flush() };
+
+        unsafe {
+            let target_register = target_register.address(ahb_secure_ctrl);
+            let current_val = target_register.read_volatile();
+            let new_val =
+                current_val & !(0b11 << (rule_index * 4)) | ((Rule0::SecurePrivUserAllowed as u32) << (rule_index * 4));
+            target_register.write_volatile(new_val);
+            assert_eq!(target_register.read_volatile(), new_val);
+        }
+
+        region.start += block.size;
     }
 }
 
