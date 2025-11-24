@@ -5,7 +5,7 @@ use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use defmt;
 use paste::paste;
 
-use crate::pac;
+use crate::{fsl_power, pac};
 
 /// Clock configuration;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,9 +65,20 @@ impl ClockConfig {
     /// Clock configuration derived from external crystal.
     #[must_use]
     pub fn crystal() -> Self {
+        #[cfg(not(feature = "slow-clocks"))]
         const CORE_CPU_FREQ: u32 = 500_000_000;
+        #[cfg(not(feature = "slow-clocks"))]
         const PLL_CLK_FREQ: u32 = 528_000_000;
+        #[cfg(not(feature = "slow-clocks"))]
         const SYS_CLK_FREQ: u32 = CORE_CPU_FREQ / 2;
+
+        #[cfg(feature = "slow-clocks")]
+        // Reduced clock speeds for power optimization, SFRO(16Mhz) * 16 = 256 MHz
+        const SLOW_PLL_CLK_FREQ: u32 = 256_000_000;
+        #[cfg(feature = "slow-clocks")]
+        // Reduced clock speeds for power optimization, 256 MHz * (18/31) = 148 MHz
+        const SLOW_CORE_CPU_FREQ: u32 = 148_000_000;
+
         Self {
             lposc: LposcConfig {
                 state: State::Enabled,
@@ -97,13 +108,22 @@ impl ClockConfig {
                 state: State::Enabled,
                 src: MainClkSrc::PllMain,
                 div_int: AtomicU32::new(2),
+                #[cfg(not(feature = "slow-clocks"))]
                 freq: AtomicU32::new(CORE_CPU_FREQ),
+                #[cfg(feature = "slow-clocks")]
+                freq: AtomicU32::new(SLOW_CORE_CPU_FREQ),
             },
             main_pll_clk: MainPllClkConfig {
                 state: State::Enabled,
                 src: MainPllClkSrc::SFRO,
+                #[cfg(not(feature = "slow-clocks"))]
                 freq: AtomicU32::new(PLL_CLK_FREQ),
+                #[cfg(feature = "slow-clocks")]
+                freq: AtomicU32::new(SLOW_PLL_CLK_FREQ),
                 mult: AtomicU8::new(16),
+                #[cfg(feature = "slow-clocks")]
+                pfd0: 32, //
+                #[cfg(not(feature = "slow-clocks"))]
                 pfd0: 19, //
                 pfd1: 0,  // future field
                 pfd2: 19, // 0x13
@@ -112,11 +132,20 @@ impl ClockConfig {
                 aux1_div: 0,
             },
             sys_clk: SysClkConfig {
+                #[cfg(not(feature = "slow-clocks"))]
                 sysclkfreq: AtomicU32::new(SYS_CLK_FREQ),
+                #[cfg(feature = "slow-clocks")]
+                sysclkfreq: AtomicU32::new(SLOW_CORE_CPU_FREQ),
             },
             sys_osc: SysOscConfig { state: State::Enabled },
             //adc: Some(AdcConfig {}), // TODO: add config
         }
+    }
+}
+
+impl Default for ClockConfig {
+    fn default() -> Self {
+        Self::crystal()
     }
 }
 
@@ -688,7 +717,7 @@ impl MultiSourceClock for MainPllClkConfig {
 
 impl ConfigurableClock for MainPllClkConfig {
     fn enable_and_reset(&self) -> Result<(), ClockError> {
-        MainPllClkConfig::init_syspll();
+        MainPllClkConfig::init_syspll(&self);
 
         MainPllClkConfig::init_syspll_pfd0(self.pfd0);
 
@@ -851,7 +880,7 @@ impl MainPllClkConfig {
         }
     }
 
-    pub(self) fn init_syspll() {
+    pub(self) fn init_syspll(&self) {
         // SAFETY: unsafe needed to take pointers to Sysctl0 and Clkctl0
         let clkctl0 = unsafe { crate::pac::Clkctl0::steal() };
         let sysctl0 = unsafe { crate::pac::Sysctl0::steal() };
@@ -861,13 +890,35 @@ impl MainPllClkConfig {
             .pdruncfg0_set()
             .write(|w| w.syspllldo_pd().set_pdruncfg0().syspllana_pd().set_pdruncfg0());
 
-        clkctl0.syspll0clksel().write(|w| w.sel().ffro_div_2());
+        match self.src {
+            MainPllClkSrc::ClkIn => {
+                clkctl0.syspll0clksel().write(|w| w.sel().sysxtal_clk());
+            }
+            MainPllClkSrc::FFRO => {
+                // FFRO Clock is divided by 2
+                clkctl0.syspll0clksel().write(|w| w.sel().ffro_div_2());
+            }
+            MainPllClkSrc::SFRO => {
+                clkctl0.syspll0clksel().write(|w| w.sel().sfro_clk());
+            }
+        }
+
         // SAFETY: unsafe needed to write the bits for both num and denom
         clkctl0.syspll0num().write(|w| unsafe { w.num().bits(0x0) });
         clkctl0.syspll0denom().write(|w| unsafe { w.denom().bits(0x1) });
 
-        // kCLOCK_SysPllMult22
-        clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22());
+        // kCLOCK_SetSysPll<Mult>
+        // Use the mult defined in main pll config
+        // if invalid, use 22 as default instead of panicking
+        match self.mult.load(Ordering::Relaxed) {
+            16 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_16()),
+            17 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_17()),
+            20 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_20()),
+            22 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22()),
+            27 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_27()),
+            33 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_33()),
+            _ => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22()),
+        };
 
         // Clear System PLL reset
         clkctl0.syspll0ctl0().modify(|_, w| w.reset().normal());
@@ -890,7 +941,7 @@ impl MainPllClkConfig {
     /// enables default settings for pfd2 bits
     pub(self) fn init_syspll_pfd2(config_bits: u8) {
         // SAFETY: unsafe needed to take pointer to Clkctl0 and write specific bits
-        // needed to change the output of pfd0
+        // needed to change the output of pfd2
         let clkctl0 = unsafe { crate::pac::Clkctl0::steal() };
 
         // Disable the clock output first.
@@ -1521,6 +1572,13 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
     MainClkConfig::reset_main_clk();
 
     config.main_pll_clk.enable_and_reset()?;
+
+    fsl_power::set_ldo_voltage_for_freq(
+        fsl_power::TempRange::TempN20CtoP85C,
+        fsl_power::VoltOpRange::Low,
+        config.main_clk.freq.load(Ordering::Relaxed),
+        0,
+    );
 
     // Move FLEXSPI clock source from main clock to FFRO to avoid instruction/data fetch issue in XIP when
     // updating PLL and main clock.

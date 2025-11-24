@@ -29,6 +29,7 @@ pub mod flash;
 pub mod flexcomm;
 /// Flexspi driver
 pub mod flexspi;
+pub mod fsl_power;
 pub mod gpio;
 pub mod hashcrypt;
 pub mod i2c;
