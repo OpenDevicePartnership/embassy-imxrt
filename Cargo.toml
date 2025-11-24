@@ -37,6 +37,9 @@ defmt = [
     "mimxrt633s-pac?/defmt",
 ]
 
+## Enable power optimizations for input clock LDO voltage and slower operating clock speeds
+slow-clocks = []
+
 ## Enable features requiring `embassy-time`
 time = ["dep:embassy-time", "embassy-embedded-hal/time"]
 
