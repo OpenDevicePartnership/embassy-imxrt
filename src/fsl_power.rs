@@ -226,10 +226,8 @@ pub fn calc_volt_level(freq_levels: &[u32], freq: u32) -> u32 {
             POWER_LDO_VOLT_LEVEL[idx]
         }
         // freq is not greater than any threshold (freq <= all values)
-        None => {
-            let idx = freq_levels.len() + POWER_LDO_VOLT_LEVEL.len() - freq_levels.len() - 1;
-            POWER_LDO_VOLT_LEVEL[idx]
-        }
+        // default to lowest voltage level
+        None => POWER_LDO_VOLT_LEVEL[POWER_LDO_VOLT_LEVEL.len() - 1],
     }
 }
 
@@ -292,10 +290,8 @@ pub fn set_ldo_voltage_for_freq(
     dsp_freq: u32,
 ) -> bool {
     critical_section::with(|_cs| {
-        // If not in FBB mode, enter it for optimal performance
-        if get_body_bias_mode() != BodyBiasMode::Fbb {
-            enter_fbb();
-        }
+        // Enter FBB mode for optimal performance
+        enter_fbb();
 
         let idx = temp_range as usize;
         if idx >= 2 {
@@ -421,62 +417,18 @@ mod tests {
 
     #[test]
     fn test_calc_volt_level_edges() {
-        // Use a small frequency table: descending values
         let table = [300 * MEGA, 200 * MEGA, 100 * MEGA];
-        // freq greater than first -> invalid
+        // freq > highest threshold -> invalid
         assert_eq!(calc_volt_level(&table, 400 * MEGA), POWER_INVALID_VOLT_LEVEL);
-        // freq equal to first -> not greater, so moves to next
-        let got_eq = calc_volt_level(&table, 300 * MEGA);
-        // compute expected via same index formula
-        let num = table.len();
-        let mut i = 0usize;
-        while i < num {
-            if 300 * MEGA > table[i] {
-                break;
-            }
-            i += 1;
-        }
-        let expected_eq = if i == 0 {
-            POWER_INVALID_VOLT_LEVEL
-        } else {
-            let idx = i + POWER_LDO_VOLT_LEVEL.len() - num - 1;
-            POWER_LDO_VOLT_LEVEL[idx]
-        };
-        assert_eq!(got_eq, expected_eq);
 
-        // freq between first and second
-        let got_mid = calc_volt_level(&table, 250 * MEGA);
-        let mut i = 0usize;
-        while i < num {
-            if 250 * MEGA > table[i] {
-                break;
-            }
-            i += 1;
-        }
-        let expected_mid = if i == 0 {
-            POWER_INVALID_VOLT_LEVEL
-        } else {
-            let idx = i + POWER_LDO_VOLT_LEVEL.len() - num - 1;
-            POWER_LDO_VOLT_LEVEL[idx]
-        };
-        assert_eq!(got_mid, expected_mid);
+        // freq = 300 MHz -> should use voltage level for <=300MHz range
+        assert_eq!(calc_volt_level(&table, 300 * MEGA), POWER_LDO_VOLT_LEVEL[3]);
 
-        // freq less than last -> uses last level
-        let got_low = calc_volt_level(&table, 50 * MEGA);
-        let mut i = 0usize;
-        while i < num {
-            if 50 * MEGA > table[i] {
-                break;
-            }
-            i += 1;
-        }
-        let expected_low = if i == 0 {
-            POWER_INVALID_VOLT_LEVEL
-        } else {
-            let idx = i + POWER_LDO_VOLT_LEVEL.len() - num - 1;
-            POWER_LDO_VOLT_LEVEL[idx]
-        };
-        assert_eq!(got_low, expected_low);
+        // freq between 200-300 MHz -> should use voltage for >200MHz range
+        assert_eq!(calc_volt_level(&table, 250 * MEGA), POWER_LDO_VOLT_LEVEL[2]);
+
+        // freq < 100 MHz -> should use lowest voltage
+        assert_eq!(calc_volt_level(&table, 50 * MEGA), POWER_LDO_VOLT_LEVEL[4]);
     }
 
     #[test]
