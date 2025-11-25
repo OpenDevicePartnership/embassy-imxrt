@@ -39,11 +39,11 @@ pub enum Clocks {
 pub struct ClockConfig {
     /// low-power oscillator config
     pub lposc: LposcConfig,
-    /// 16Mhz internal oscillator config
+    /// 16MHz internal oscillator config
     pub sfro: SfroConfig,
     /// Real Time Clock config
     pub rtc: RtcClkConfig,
-    /// 48/60 Mhz internal oscillator config
+    /// 48/60 MHz internal oscillator config
     pub ffro: FfroConfig,
     // pub pll: Option<PllPfdConfig>, //potentially covered in main pll clk
     /// External Clock-In config
@@ -65,19 +65,9 @@ impl ClockConfig {
     /// Clock configuration derived from external crystal.
     #[must_use]
     pub fn crystal() -> Self {
-        #[cfg(not(feature = "slow-clocks"))]
         const CORE_CPU_FREQ: u32 = 500_000_000;
-        #[cfg(not(feature = "slow-clocks"))]
         const PLL_CLK_FREQ: u32 = 528_000_000;
-        #[cfg(not(feature = "slow-clocks"))]
         const SYS_CLK_FREQ: u32 = CORE_CPU_FREQ / 2;
-
-        #[cfg(feature = "slow-clocks")]
-        // Reduced clock speeds for power optimization, SFRO(16Mhz) * 16 = 256 MHz
-        const SLOW_PLL_CLK_FREQ: u32 = 256_000_000;
-        #[cfg(feature = "slow-clocks")]
-        // Reduced clock speeds for power optimization, 256 MHz * (18/31) = 148 MHz
-        const SLOW_CORE_CPU_FREQ: u32 = 148_000_000;
 
         Self {
             lposc: LposcConfig {
@@ -108,22 +98,13 @@ impl ClockConfig {
                 state: State::Enabled,
                 src: MainClkSrc::PllMain,
                 div_int: AtomicU32::new(2),
-                #[cfg(not(feature = "slow-clocks"))]
                 freq: AtomicU32::new(CORE_CPU_FREQ),
-                #[cfg(feature = "slow-clocks")]
-                freq: AtomicU32::new(SLOW_CORE_CPU_FREQ),
             },
             main_pll_clk: MainPllClkConfig {
                 state: State::Enabled,
                 src: MainPllClkSrc::SFRO,
-                #[cfg(not(feature = "slow-clocks"))]
                 freq: AtomicU32::new(PLL_CLK_FREQ),
-                #[cfg(feature = "slow-clocks")]
-                freq: AtomicU32::new(SLOW_PLL_CLK_FREQ),
                 mult: AtomicU8::new(16),
-                #[cfg(feature = "slow-clocks")]
-                pfd0: 32, //
-                #[cfg(not(feature = "slow-clocks"))]
                 pfd0: 19, //
                 pfd1: 0,  // future field
                 pfd2: 19, // 0x13
@@ -132,10 +113,7 @@ impl ClockConfig {
                 aux1_div: 0,
             },
             sys_clk: SysClkConfig {
-                #[cfg(not(feature = "slow-clocks"))]
                 sysclkfreq: AtomicU32::new(SYS_CLK_FREQ),
-                #[cfg(feature = "slow-clocks")]
-                sysclkfreq: AtomicU32::new(SLOW_CORE_CPU_FREQ),
             },
             sys_osc: SysOscConfig { state: State::Enabled },
             //adc: Some(AdcConfig {}), // TODO: add config
@@ -269,7 +247,7 @@ pub struct RtcClkConfig {
 
 /// Valid FFRO Frequencies
 pub enum FfroFreq {
-    /// 48 Mhz Internal Oscillator
+    /// 48 MHz Internal Oscillator
     Ffro48m,
     /// 60 `MHz` Internal Oscillator
     Ffro60m,
@@ -469,6 +447,8 @@ pub enum ClockError {
     InvalidDiv,
     /// Error due to attempting to modify a clock output with an invalid multiplier
     InvalidMult,
+    /// Error due to attempting to set VDDCORE for an invalid frequency
+    VoltageSettingFailed,
 }
 
 /// Trait to configure one of the clocks
@@ -717,7 +697,7 @@ impl MultiSourceClock for MainPllClkConfig {
 
 impl ConfigurableClock for MainPllClkConfig {
     fn enable_and_reset(&self) -> Result<(), ClockError> {
-        MainPllClkConfig::init_syspll(&self);
+        self.init_syspll();
 
         MainPllClkConfig::init_syspll_pfd0(self.pfd0);
 
@@ -917,7 +897,10 @@ impl MainPllClkConfig {
             22 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22()),
             27 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_27()),
             33 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_33()),
-            _ => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22()),
+            _ => {
+                error!("Invalid SYSPLL multiplier, defaulting to 22");
+                clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22())
+            }
         };
 
         // Clear System PLL reset
@@ -1573,12 +1556,22 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
 
     config.main_pll_clk.enable_and_reset()?;
 
-    fsl_power::set_ldo_voltage_for_freq(
+    // From Table 23 of the data sheet, the low range (.8-1.0V) only applies if expected VDDCORE is <=1.0V
+    // 240MHz is the last entry at 1V, the next entry, 270MHz, says 1.1V
+    let volt_range = if config.main_clk.freq.load(Ordering::Relaxed) > 240_000_000 {
+        fsl_power::VoltOpRange::Full
+    } else {
+        fsl_power::VoltOpRange::Low
+    };
+
+    if !fsl_power::set_ldo_voltage_for_freq(
         fsl_power::TempRange::TempN20CtoP85C,
-        fsl_power::VoltOpRange::Low,
+        volt_range,
         config.main_clk.freq.load(Ordering::Relaxed),
         0,
-    );
+    ) {
+        return Err(ClockError::VoltageSettingFailed);
+    }
 
     // Move FLEXSPI clock source from main clock to FFRO to avoid instruction/data fetch issue in XIP when
     // updating PLL and main clock.
