@@ -410,15 +410,13 @@ impl<'a> I2cMaster<'a, Blocking> {
         Ok(())
     }
 
-    fn read_no_stop(&mut self, address: u16, read: &mut [u8]) -> Result<()> {
+    fn read_no_start_no_stop(&mut self, read: &mut [u8]) -> Result<()> {
         let i2cregs = self.info.regs;
 
         // read of 0 size is not allowed according to i2c spec
         if read.is_empty() {
             return Err(TransferError::OtherBusError.into());
         }
-
-        self.start(address, true)?;
 
         let read_len = read.len();
 
@@ -443,11 +441,9 @@ impl<'a> I2cMaster<'a, Blocking> {
         Ok(())
     }
 
-    fn write_no_stop(&mut self, address: u16, write: &[u8]) -> Result<()> {
+    fn write_no_start_no_stop(&mut self, write: &[u8]) -> Result<()> {
         // Procedure from 24.3.1.1 pg 545
         let i2cregs = self.info.regs;
-
-        self.start(address, false)?;
 
         for byte in write {
             i2cregs.mstdat().write(|w|
@@ -673,12 +669,7 @@ impl<'a> I2cMaster<'a, Async> {
         Ok(guard)
     }
 
-    async fn read_no_stop(
-        &mut self,
-        address: u16,
-        read: &mut [u8],
-        guard: Option<StartStopGuard>,
-    ) -> Result<StartStopGuard> {
+    async fn read_no_start_no_stop(&mut self, read: &mut [u8]) -> Result<()> {
         let i2cregs = self.info.regs;
 
         // read of 0 size is not allowed according to i2c spec
@@ -688,8 +679,6 @@ impl<'a> I2cMaster<'a, Async> {
         let Some((last_byte, dma_read)) = read.split_last_mut() else {
             return Err(TransferError::OtherBusError.into());
         };
-
-        let guard = self.start(address, true, guard).await?;
 
         if self.dma_ch.is_some() {
             if !dma_read.is_empty() {
@@ -822,22 +811,15 @@ impl<'a> I2cMaster<'a, Async> {
                 }
             }
         }
-        Ok(guard)
+        Ok(())
     }
 
-    async fn write_no_stop(
-        &mut self,
-        address: u16,
-        write: &[u8],
-        guard: Option<StartStopGuard>,
-    ) -> Result<StartStopGuard> {
+    async fn write_no_start_no_stop(&mut self, write: &[u8]) -> Result<()> {
         // Procedure from 24.3.1.1 pg 545
         let i2cregs = self.info.regs;
 
-        let guard = self.start(address, false, guard).await?;
-
         if write.is_empty() {
-            return Ok(guard);
+            return Ok(());
         }
 
         if self.dma_ch.is_some() {
@@ -928,7 +910,7 @@ impl<'a> I2cMaster<'a, Async> {
                 },
             )
             .await?;
-            Ok(guard)
+            Ok(())
         } else {
             for byte in write.iter() {
                 i2cregs.mstdat().write(|w|
@@ -970,7 +952,7 @@ impl<'a> I2cMaster<'a, Async> {
 
                 self.check_for_bus_errors()?;
             }
-            Ok(guard)
+            Ok(())
         }
     }
 
@@ -1101,40 +1083,64 @@ impl<M: Mode> embedded_hal_1::i2c::ErrorType for I2cMaster<'_, M> {
 // implement generic i2c interface for peripheral master type
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A> for I2cMaster<'_, Blocking> {
     fn read(&mut self, address: A, read: &mut [u8]) -> Result<()> {
-        self.read_no_stop(address.into(), read)?;
+        self.start(address.into(), true)?;
+        self.read_no_start_no_stop(read)?;
         self.stop()
     }
 
     fn write(&mut self, address: A, write: &[u8]) -> Result<()> {
-        self.write_no_stop(address.into(), write)?;
+        self.start(address.into(), false)?;
+        self.write_no_start_no_stop(write)?;
         self.stop()
     }
 
     fn write_read(&mut self, address: A, write: &[u8], read: &mut [u8]) -> Result<()> {
         let address = address.into();
-        self.write_no_stop(address, write)?;
-        self.read_no_stop(address, read)?;
+        self.start(address, false)?;
+        self.write_no_start_no_stop(write)?;
+        // Send repeated start
+        self.start(address, true)?;
+        self.read_no_start_no_stop(read)?;
         self.stop()
     }
 
     fn transaction(&mut self, address: A, operations: &mut [embedded_hal_1::i2c::Operation<'_>]) -> Result<()> {
-        let needs_stop = !operations.is_empty();
-        let address = address.into();
+        if operations.is_empty() {
+            return Ok(());
+        }
 
+        // Send beginning start
+        let address = address.into();
+        self.start(
+            address,
+            match operations[0] {
+                embedded_hal_1::i2c::Operation::Read(_) => true,
+                embedded_hal_1::i2c::Operation::Write(_) => false,
+            },
+        )?;
+
+        let mut last_seen_op: Option<&mut embedded_hal_1::i2c::Operation<'_>> = None;
         for op in operations {
             match op {
                 embedded_hal_1::i2c::Operation::Read(read) => {
-                    self.read_no_stop(address, read)?;
+                    if matches!(last_seen_op.as_ref(), Some(embedded_hal_1::i2c::Operation::Write(_))) {
+                        // We just sent a Write and now we have a Read, send restart.
+                        self.start(address, true)?;
+                    }
+                    self.read_no_start_no_stop(read)?;
                 }
                 embedded_hal_1::i2c::Operation::Write(write) => {
-                    self.write_no_stop(address, write)?;
+                    if matches!(last_seen_op.as_ref(), Some(embedded_hal_1::i2c::Operation::Read(_))) {
+                        // We just sent a Read and now we have a Write, send restart.
+                        self.start(address, false)?;
+                    }
+                    self.write_no_start_no_stop(write)?;
                 }
             }
+            last_seen_op = Some(op);
         }
 
-        if needs_stop {
-            self.stop()?;
-        }
+        self.stop()?;
 
         Ok(())
     }
@@ -1142,14 +1148,16 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A
 
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I2c<A> for I2cMaster<'_, Async> {
     async fn read(&mut self, address: A, read: &mut [u8]) -> Result<()> {
-        let guard = self.read_no_stop(address.into(), read, None).await?;
+        let guard = self.start(address.into(), true, None).await?;
+        self.read_no_start_no_stop(read).await?;
         self.stop()?.await?;
         guard.defuse();
         Ok(())
     }
 
     async fn write(&mut self, address: A, write: &[u8]) -> Result<()> {
-        let guard = self.write_no_stop(address.into(), write, None).await?;
+        let guard = self.start(address.into(), false, None).await?;
+        self.write_no_start_no_stop(write).await?;
         self.stop()?.await?;
         guard.defuse();
         Ok(())
@@ -1157,26 +1165,53 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I
 
     async fn write_read(&mut self, address: A, write: &[u8], read: &mut [u8]) -> Result<()> {
         let address = address.into();
-        let guard = self.write_no_stop(address, write, None).await?;
-        let guard = self.read_no_stop(address, read, Some(guard)).await?;
+        let guard = self.start(address, false, None).await?;
+        self.write_no_start_no_stop(write).await?;
+        let guard = self.start(address, false, Some(guard)).await?;
+        self.read_no_start_no_stop(read).await?;
         self.stop()?.await?;
         guard.defuse();
         Ok(())
     }
 
     async fn transaction(&mut self, address: A, operations: &mut [embedded_hal_1::i2c::Operation<'_>]) -> Result<()> {
-        let address = address.into();
-        let mut guard = None;
+        if operations.is_empty() {
+            return Ok(());
+        }
 
+        // Send beginning start
+        let address = address.into();
+        let mut guard = Some(
+            self.start(
+                address,
+                match operations[0] {
+                    embedded_hal_1::i2c::Operation::Read(_) => true,
+                    embedded_hal_1::i2c::Operation::Write(_) => false,
+                },
+                None,
+            )
+            .await?,
+        );
+
+        let mut last_seen_op: Option<&mut embedded_hal_1::i2c::Operation<'_>> = None;
         for op in operations {
             match op {
                 embedded_hal_1::i2c::Operation::Read(read) => {
-                    guard = Some(self.read_no_stop(address, read, guard).await?);
+                    if matches!(last_seen_op.as_ref(), Some(embedded_hal_1::i2c::Operation::Write(_))) {
+                        // We just sent a Write and now we have a Read, send restart.
+                        guard = Some(self.start(address, true, guard).await?);
+                    }
+                    self.read_no_start_no_stop(read).await?;
                 }
                 embedded_hal_1::i2c::Operation::Write(write) => {
-                    guard = Some(self.write_no_stop(address, write, guard).await?);
+                    if matches!(last_seen_op.as_ref(), Some(embedded_hal_1::i2c::Operation::Read(_))) {
+                        // We just sent a Read and now we have a Write, send restart.
+                        guard = Some(self.start(address, false, guard).await?);
+                    }
+                    self.write_no_start_no_stop(write).await?;
                 }
             }
+            last_seen_op = Some(op);
         }
 
         if let Some(guard) = guard {
