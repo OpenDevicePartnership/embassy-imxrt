@@ -32,7 +32,28 @@ pub const POWER_FULL_DSP_FREQ_LEVEL: [[u32; 5]; 2] = [
     [550 * MEGA, 440 * MEGA, 285 * MEGA, 170 * MEGA, 55 * MEGA],
 ];
 
-const POWER_LDO_VOLT_LEVEL: [u32; 5] = [0x32, 0x26, 0x1D, 0x13, 0x0A];
+/// LDO voltage levels corresponding to frequency thresholds
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LDOVoltLevel {
+    /// 1.13V LDO setting
+    Ldo1p13v = 0x32,
+    /// 1.0V LDO setting
+    Ldo1p0v = 0x26,
+    /// 0.9V LDO setting
+    Ldo0p9v = 0x1D,
+    /// 0.8V LDO setting
+    Ldo0p8v = 0x13,
+    /// 0.7V LDO setting
+    Ldo0p7v = 0x0A,
+}
+
+const POWER_LDO_VOLT_LEVEL: [LDOVoltLevel; 5] = [
+    LDOVoltLevel::Ldo1p13v,
+    LDOVoltLevel::Ldo1p0v,
+    LDOVoltLevel::Ldo0p9v,
+    LDOVoltLevel::Ldo0p8v,
+    LDOVoltLevel::Ldo0p7v,
+];
 
 /// Sentinel value indicating an invalid or unsupported voltage level
 pub const POWER_INVALID_VOLT_LEVEL: u32 = 0xFFFFFFFF;
@@ -84,6 +105,9 @@ pub fn restore_lvd() {
 ///
 /// This function triggers the PMC to apply power domain configuration changes.
 /// It waits for the PMC finite state machine to be idle before and after applying changes.
+///
+/// # Safety
+/// This function should not be called concurrently from multiple contexts
 pub fn apply_pd() {
     // SAFETY: unsafe needed to take pointer to PMC peripheral
     let pmc = unsafe { crate::pac::Pmc::steal() };
@@ -139,7 +163,9 @@ pub fn enter_fbb() {
     let pmc = unsafe { crate::pac::Pmc::steal() };
 
     // Set FBB enable bit in RUNCTRL register (bit 14)
-    pmc.runctrl().modify(|r, w| unsafe { w.bits(r.bits() | (1 << 14)) });
+    // Clear RBB bit (bit 13) if set
+    pmc.runctrl()
+        .modify(|r, w| unsafe { w.bits((r.bits() & !(1 << 13)) | (1 << 14)) });
 }
 
 /// LVD falling trip voltage values
@@ -205,14 +231,26 @@ pub fn get_lvd_falling_trip_voltage() -> LvdFallingTripVoltage {
     unsafe { core::mem::transmute(val) }
 }
 
-/// Calculates the required LDO voltage level for a given frequency
+/// Calculates the required LDO voltage level for a given frequency.
 ///
 /// # Arguments
-/// * `freq_levels` - Slice of frequency thresholds in descending order
-/// * `freq` - Target frequency in Hz
+/// * `freq_levels` - Slice of frequency thresholds in Hz, in descending order.
+///   The length of `freq_levels` must be less than or equal to `POWER_LDO_VOLT_LEVEL.len()`.
+///   Each threshold corresponds to a voltage level in `POWER_LDO_VOLT_LEVEL`, such that
+///   frequencies above a threshold require a higher voltage.
+/// * `freq` - Target frequency in Hz.
 ///
 /// # Returns
-/// LDO voltage register value, or `POWER_INVALID_VOLT_LEVEL` if frequency is too high
+/// LDO voltage register value, or `POWER_INVALID_VOLT_LEVEL` if frequency is too high.
+///
+/// # Example
+/// ```
+/// // Suppose POWER_LDO_VOLT_LEVEL = [0x1, 0x2, 0x3]
+/// // and freq_levels = [300_000_000, 200_000_000]
+/// // For freq = 250_000_000, the function returns 0x2
+/// // For freq = 350_000_000, the function returns POWER_INVALID_VOLT_LEVEL
+/// // For freq = 150_000_000, the function returns 0x3
+/// ```
 pub fn calc_volt_level(freq_levels: &[u32], freq: u32) -> u32 {
     // Find the first frequency threshold that freq is greater than
     let position = freq_levels.iter().position(|&threshold| freq > threshold);
@@ -223,11 +261,11 @@ pub fn calc_volt_level(freq_levels: &[u32], freq: u32) -> u32 {
         // freq is between thresholds - calculate voltage index
         Some(i) => {
             let idx = i + POWER_LDO_VOLT_LEVEL.len() - freq_levels.len() - 1;
-            POWER_LDO_VOLT_LEVEL[idx]
+            POWER_LDO_VOLT_LEVEL[idx] as u32
         }
         // freq is not greater than any threshold (freq <= all values)
         // default to lowest voltage level
-        None => POWER_LDO_VOLT_LEVEL[POWER_LDO_VOLT_LEVEL.len() - 1],
+        None => POWER_LDO_VOLT_LEVEL[POWER_LDO_VOLT_LEVEL.len() - 1] as u32,
     }
 }
 
@@ -315,18 +353,18 @@ pub fn set_ldo_voltage_for_freq(
             // Manage LVD thresholds to prevent false triggers during voltage change
             match volt {
                 // 0.8V desired - disable LVD entirely
-                v if v < 0x13 => {
+                v if v < LDOVoltLevel::Ldo0p8v as u32 => {
                     disable_lvd();
                 }
                 // 0.9V desired - decrease LVD level if higher than 795mV
-                v if v < 0x1D => {
+                v if v < LDOVoltLevel::Ldo0p9v as u32 => {
                     let current = get_lvd_falling_trip_voltage();
                     if (current as u8) > (LvdFallingTripVoltage::Vol795 as u8) {
                         set_lvd_falling_trip_voltage(LvdFallingTripVoltage::Vol795);
                     }
                 }
                 // 1.0V desired - decrease LVD level if higher than 885mV
-                v if v < 0x26 => {
+                v if v < LDOVoltLevel::Ldo1p0v as u32 => {
                     let current = get_lvd_falling_trip_voltage();
                     if (current as u8) > (LvdFallingTripVoltage::Vol885 as u8) {
                         set_lvd_falling_trip_voltage(LvdFallingTripVoltage::Vol885);
