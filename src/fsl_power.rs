@@ -347,7 +347,17 @@ pub fn set_ldo_voltage_for_freq(
 
         let cm33_volt = calc_volt_level(cm33_levels, cm33_freq);
         let dsp_volt = calc_volt_level(dsp_levels, dsp_freq);
-        let volt = core::cmp::max(cm33_volt, dsp_volt);
+
+        let volt = match (cm33_volt, dsp_volt, cm33_freq, dsp_freq) {
+            // Both cores active and valid - use higher voltage
+            (c, d, _, _) if c != POWER_INVALID_VOLT_LEVEL && d != POWER_INVALID_VOLT_LEVEL => core::cmp::max(c, d),
+            // Only CM33 active with valid frequency
+            (c, _, freq, _) if c != POWER_INVALID_VOLT_LEVEL && freq != 0 => c,
+            // Only DSP active with valid frequency
+            (_, d, _, freq) if d != POWER_INVALID_VOLT_LEVEL && freq != 0 => d,
+            // Invalid configuration
+            _ => POWER_INVALID_VOLT_LEVEL,
+        };
 
         if volt != POWER_INVALID_VOLT_LEVEL {
             // Manage LVD thresholds to prevent false triggers during voltage change
@@ -445,11 +455,9 @@ pub fn read_ldo_voltage_sleep() -> u8 {
     pmc.sleepctrl().read().corelvl().bits()
 }
 
-// Tests are disabled for embedded targets (no_std) as they require the Rust test framework.
-// These tests validate pure logic, constants, and data structures (no hardware access).
-// For embedded testing, use defmt-test or hardware integration tests.
-// The test code below serves as documentation and can be manually validated.
-#[cfg(all(test, not(target_arch = "arm")))]
+// Unit tests for power management functions
+// TODO: Figure out if `cargo test` can be fixed, linker issues for embedded targets
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -460,13 +468,13 @@ mod tests {
         assert_eq!(calc_volt_level(&table, 400 * MEGA), POWER_INVALID_VOLT_LEVEL);
 
         // freq = 300 MHz -> should use voltage level for <=300MHz range
-        assert_eq!(calc_volt_level(&table, 300 * MEGA), POWER_LDO_VOLT_LEVEL[3]);
+        assert_eq!(calc_volt_level(&table, 300 * MEGA), POWER_LDO_VOLT_LEVEL[3] as u32);
 
         // freq between 200-300 MHz -> should use voltage for >200MHz range
-        assert_eq!(calc_volt_level(&table, 250 * MEGA), POWER_LDO_VOLT_LEVEL[2]);
+        assert_eq!(calc_volt_level(&table, 250 * MEGA), POWER_LDO_VOLT_LEVEL[2] as u32);
 
         // freq < 100 MHz -> should use lowest voltage
-        assert_eq!(calc_volt_level(&table, 50 * MEGA), POWER_LDO_VOLT_LEVEL[4]);
+        assert_eq!(calc_volt_level(&table, 50 * MEGA), POWER_LDO_VOLT_LEVEL[4] as u32);
     }
 
     #[test]
