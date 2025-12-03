@@ -362,18 +362,18 @@ pub fn set_ldo_voltage_for_freq(
         if volt != POWER_INVALID_VOLT_LEVEL {
             // Manage LVD thresholds to prevent false triggers during voltage change
             match volt {
-                // 0.8V desired - disable LVD entirely
+                // <0.8V desired - disable LVD entirely
                 v if v < LDOVoltLevel::Ldo0p8v as u32 => {
                     disable_lvd();
                 }
-                // 0.9V desired - decrease LVD level if higher than 795mV
+                // [0.8-0.9V) desired - decrease LVD level if higher than 795mV
                 v if v < LDOVoltLevel::Ldo0p9v as u32 => {
                     let current = get_lvd_falling_trip_voltage();
                     if (current as u8) > (LvdFallingTripVoltage::Vol795 as u8) {
                         set_lvd_falling_trip_voltage(LvdFallingTripVoltage::Vol795);
                     }
                 }
-                // 1.0V desired - decrease LVD level if higher than 885mV
+                // [0.9-1.0V) desired - decrease LVD level if higher than 885mV
                 v if v < LDOVoltLevel::Ldo1p0v as u32 => {
                     let current = get_lvd_falling_trip_voltage();
                     if (current as u8) > (LvdFallingTripVoltage::Vol885 as u8) {
@@ -391,7 +391,7 @@ pub fn set_ldo_voltage_for_freq(
             apply_pd();
 
             // Re-enable LVD if voltage is high enough (>= 0.8V)
-            if volt >= 0x13 {
+            if volt >= LDOVoltLevel::Ldo0p8v as u32 {
                 restore_lvd();
             }
 
@@ -467,10 +467,10 @@ mod tests {
         // freq > highest threshold -> invalid
         assert_eq!(calc_volt_level(&table, 400 * MEGA), POWER_INVALID_VOLT_LEVEL);
 
-        // freq = 300 MHz -> should use voltage level for <=300MHz range
-        assert_eq!(calc_volt_level(&table, 300 * MEGA), POWER_LDO_VOLT_LEVEL[3] as u32);
+        // freq = 300 MHz -> freq > 200 but not freq > 300, so position=1, idx=2
+        assert_eq!(calc_volt_level(&table, 300 * MEGA), POWER_LDO_VOLT_LEVEL[2] as u32);
 
-        // freq between 200-300 MHz -> should use voltage for >200MHz range
+        // freq between 200-300 MHz -> freq > 200, so position=1, idx=2
         assert_eq!(calc_volt_level(&table, 250 * MEGA), POWER_LDO_VOLT_LEVEL[2] as u32);
 
         // freq < 100 MHz -> should use lowest voltage
