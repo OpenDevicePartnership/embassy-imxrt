@@ -20,11 +20,7 @@ async fn usart4_task(mut uart: Uart<'static, Async>) {
     loop {
         let mut rx_buf = [0; BUFLEN];
         uart.read(&mut rx_buf).await.unwrap();
-        for b in &rx_buf {
-            if *b != 0x55 {
-                panic!("unexpected byte 0x{:x}", *b);
-            }
-        }
+        assert!(rx_buf.iter().all(|b| *b == 0x55));
         info!("usart4_task read");
 
         Timer::after_millis(10).await;
@@ -46,16 +42,12 @@ async fn usart2_task(mut uart: Uart<'static, Async>) {
 
         let mut rx_buf = [0x00; BUFLEN];
         uart.read(&mut rx_buf).await.unwrap();
-        for b in &rx_buf {
-            if *b != 0xaa {
-                panic!("unexpected byte 0x{:x}", *b);
-            }
-        }
+        assert!(rx_buf.iter().all(|b| *b == 0xaa));
         info!("usart2_task read");
     }
 }
 
-/* WARNING: to enable HW flow control, a 0 ohm resistor on the EVK needs to be depopulated.
+/* WARNING: to enable HW flow control, a 0 ohm resistor on the EVK needs to moved to the neighboring pad.
  */
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
