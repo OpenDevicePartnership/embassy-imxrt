@@ -568,6 +568,8 @@ impl<'a> UartTx<'a, Async> {
             regs.fifocfg().modify(|_, w| w.dmatx().enabled());
 
             let transfer = Transfer::new_write(
+                #[allow(clippy::unwrap_used)]
+                // an async UART instance cannot be created without a dma channel
                 self._tx_dma.as_ref().unwrap(),
                 chunk,
                 regs.fifowr().as_ptr() as *mut u8,
@@ -577,7 +579,7 @@ impl<'a> UartTx<'a, Async> {
             let res = select(
                 transfer,
                 poll_fn(|cx| {
-                    UART_WAKERS[self.info.index].register(cx.waker());
+                    self.info.waker.register(cx.waker());
 
                     self.info.regs.intenset().write(|w| {
                         w.framerren()
@@ -653,7 +655,7 @@ impl<'a> UartTx<'a, Async> {
         poll_fn(move |cx| {
             // Register waker before checking condition, to ensure that wakes/interrupts
             // aren't lost between f() and g()
-            UART_WAKERS[self.info.index].register(cx.waker());
+            self.info.waker.register(cx.waker());
             let r = f(self);
 
             if r.is_pending() {
@@ -694,6 +696,8 @@ impl<'a> UartRx<'a, Async> {
             regs.fifocfg().modify(|_, w| w.dmarx().enabled());
 
             let transfer = Transfer::new_read(
+                #[allow(clippy::unwrap_used)]
+                // an async UART instance cannot be created without a dma channel
                 self._rx_dma.as_ref().unwrap(),
                 regs.fiford().as_ptr() as *mut u8,
                 chunk,
@@ -708,7 +712,7 @@ impl<'a> UartRx<'a, Async> {
             let res = select(
                 transfer,
                 poll_fn(|cx| {
-                    UART_WAKERS[self.info.index].register(cx.waker());
+                    self.info.waker.register(cx.waker());
 
                     self.info.regs.intenset().write(|w| {
                         w.framerren()
@@ -1091,7 +1095,7 @@ impl embedded_io_async::Write for Uart<'_, Async> {
 
 struct Info {
     regs: &'static crate::pac::usart0::RegisterBlock,
-    index: usize,
+    waker: &'static AtomicWaker,
 }
 
 // SAFETY: safety for Send here is the same as the other accessors to unsafe blocks: it must be done from a single executor context.
@@ -1101,7 +1105,7 @@ unsafe impl Send for Info {}
 
 trait SealedInstance {
     fn info() -> Info;
-    fn index() -> usize;
+    fn waker() -> &'static AtomicWaker;
 }
 
 /// UART interrupt handler.
@@ -1109,12 +1113,8 @@ pub struct InterruptHandler<T: Instance> {
     _phantom: PhantomData<T>,
 }
 
-const UART_COUNT: usize = 8;
-static UART_WAKERS: [AtomicWaker; UART_COUNT] = [const { AtomicWaker::new() }; UART_COUNT];
-
 impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
     unsafe fn on_interrupt() {
-        let waker = &UART_WAKERS[T::index()];
         let regs = T::info().regs;
         let stat = regs.intstat().read();
 
@@ -1138,7 +1138,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             });
         }
 
-        waker.wake();
+        T::waker().wake();
     }
 }
 
@@ -1157,13 +1157,13 @@ macro_rules! impl_instance {
                     fn info() -> Info {
                         Info {
                             regs: unsafe { &*crate::pac::[<Usart $n>]::ptr() },
-                            index: $n,
+                            waker: Self::waker(),
                         }
                     }
 
-                    #[inline]
-                    fn index() -> usize {
-                        $n
+                    fn waker() -> &'static AtomicWaker {
+                        static WAKER: AtomicWaker = AtomicWaker::new();
+                        &WAKER
                     }
                 }
 
