@@ -77,10 +77,7 @@ pub fn update_pmic_recovery_time(us: u32) {
 /// Disables the Low Voltage Detector (LVD)
 ///
 /// Disables LVD core reset and interrupt if they were enabled, saving the state
-pub fn disable_lvd() {
-    // SAFETY: unsafe needed to take pointer to PMC peripheral
-    let pmc = unsafe { crate::pac::Pmc::steal() };
-
+pub fn disable_lvd(pmc: &crate::pac::Pmc) {
     let ctrl = pmc.ctrl().read().bits();
     const LVD_MASK: u32 = 0x0000_0300; // LVDCORERE_MASK | LVDCOREIE_MASK
 
@@ -91,11 +88,9 @@ pub fn disable_lvd() {
 }
 
 /// Restores the Low Voltage Detector (LVD) to its previous state
-pub fn restore_lvd() {
+pub fn restore_lvd(pmc: &crate::pac::Pmc) {
     let flags = LVD_CHANGE_FLAG.load(Ordering::SeqCst);
     if flags != 0 {
-        // SAFETY: unsafe needed to take pointer to PMC peripheral
-        let pmc = unsafe { crate::pac::Pmc::steal() };
         pmc.ctrl().modify(|r, w| unsafe { w.bits(r.bits() | flags) });
         LVD_CHANGE_FLAG.store(0, Ordering::SeqCst);
     }
@@ -108,10 +103,7 @@ pub fn restore_lvd() {
 ///
 /// # Safety
 /// This function should not be called concurrently from multiple contexts
-pub fn apply_pd() {
-    // SAFETY: unsafe needed to take pointer to PMC peripheral
-    let pmc = unsafe { crate::pac::Pmc::steal() };
-
+pub fn apply_pd(pmc: &crate::pac::Pmc) {
     // Cannot set APPLYCFG when ACTIVEFSM is 1
     while pmc.status().read().activefsm().bit_is_set() {}
 
@@ -210,22 +202,17 @@ pub enum LvdFallingTripVoltage {
 ///
 /// # Arguments
 /// * `volt` - Target LVD voltage to set
-pub fn set_lvd_falling_trip_voltage(volt: LvdFallingTripVoltage) {
-    // SAFETY: unsafe needed to take pointer to PMC peripheral
-    let pmc = unsafe { crate::pac::Pmc::steal() };
+pub fn set_lvd_falling_trip_voltage(pmc: &crate::pac::Pmc, volt: LvdFallingTripVoltage) {
     pmc.lvdcorectrl().write(|w| unsafe { w.lvdcorelvl().bits(volt as u8) });
-    apply_pd();
+    apply_pd(pmc);
 }
 
 /// Get current vddcore low voltage detection falling trip voltage
 ///
 /// # Returns
 /// Current LVD voltage setting
-pub fn get_lvd_falling_trip_voltage() -> LvdFallingTripVoltage {
-    // SAFETY: unsafe needed to take pointer to PMC peripheral
-    let pmc = unsafe { crate::pac::Pmc::steal() };
+pub fn get_lvd_falling_trip_voltage(pmc: &crate::pac::Pmc) -> LvdFallingTripVoltage {
     let val = pmc.lvdcorectrl().read().lvdcorelvl().bits();
-
     // SAFETY: The hardware register is 4 bits (0-15) and LvdFallingTripVoltage
     // has all 16 variants (0-15) defined with #[repr(u8)], so transmute is safe
     unsafe { core::mem::transmute(val) }
@@ -360,39 +347,40 @@ pub fn set_ldo_voltage_for_freq(
         };
 
         if volt != POWER_INVALID_VOLT_LEVEL {
+            // SAFETY: This critical section ensures exclusive access to PMC
+            let pmc = unsafe { crate::pac::Pmc::steal() };
             // Manage LVD thresholds to prevent false triggers during voltage change
             match volt {
                 // <0.8V desired - disable LVD entirely
                 v if v < LDOVoltLevel::Ldo0p8v as u32 => {
-                    disable_lvd();
+                    disable_lvd(&pmc);
                 }
                 // [0.8-0.9V) desired - decrease LVD level if higher than 795mV
                 v if v < LDOVoltLevel::Ldo0p9v as u32 => {
-                    let current = get_lvd_falling_trip_voltage();
+                    let current = get_lvd_falling_trip_voltage(&pmc);
                     if (current as u8) > (LvdFallingTripVoltage::Vol795 as u8) {
-                        set_lvd_falling_trip_voltage(LvdFallingTripVoltage::Vol795);
+                        set_lvd_falling_trip_voltage(&pmc, LvdFallingTripVoltage::Vol795);
                     }
                 }
                 // [0.9-1.0V) desired - decrease LVD level if higher than 885mV
                 v if v < LDOVoltLevel::Ldo1p0v as u32 => {
-                    let current = get_lvd_falling_trip_voltage();
+                    let current = get_lvd_falling_trip_voltage(&pmc);
                     if (current as u8) > (LvdFallingTripVoltage::Vol885 as u8) {
-                        set_lvd_falling_trip_voltage(LvdFallingTripVoltage::Vol885);
+                        set_lvd_falling_trip_voltage(&pmc, LvdFallingTripVoltage::Vol885);
                     }
                 }
                 _ => (),
             };
 
             // Set the voltage in PMC RUNCTRL
-            let pmc = unsafe { crate::pac::Pmc::steal() };
             pmc.runctrl().modify(|_, w| unsafe { w.corelvl().bits(volt as u8) });
 
             // Apply power domain configuration
-            apply_pd();
+            apply_pd(&pmc);
 
             // Re-enable LVD if voltage is high enough (>= 0.8V)
             if volt >= LDOVoltLevel::Ldo0p8v as u32 {
-                restore_lvd();
+                restore_lvd(&pmc);
             }
 
             return true;
@@ -410,10 +398,7 @@ pub fn set_ldo_voltage_for_freq(
 /// # Safety
 /// This function directly accesses hardware registers and should only be called during
 /// initialization or when proper synchronization is in place.
-pub fn apply_ldo_voltage(volt: u8) {
-    // SAFETY: unsafe needed to take pointer to PMC peripheral for voltage control
-    let pmc = unsafe { crate::pac::Pmc::steal() };
-
+pub fn apply_ldo_voltage(pmc: &crate::pac::Pmc, volt: u8) {
     // Write the vddcore voltage level to the PMC RUNCTRL register
     // The voltage value maps to specific voltage ranges defined in POWER_LDO_VOLT_LEVEL
     pmc.runctrl().modify(|_, w| unsafe { w.corelvl().bits(volt) });
@@ -423,10 +408,7 @@ pub fn apply_ldo_voltage(volt: u8) {
 ///
 /// # Arguments
 /// * `volt` - The LDO voltage register value to apply (from `calc_volt_level` or `set_ldo_voltage_for_freq`)
-pub fn apply_ldo_voltage_sleep(volt: u8) {
-    // SAFETY: unsafe needed to take pointer to PMC peripheral for voltage control
-    let pmc = unsafe { crate::pac::Pmc::steal() };
-
+pub fn apply_ldo_voltage_sleep(pmc: &crate::pac::Pmc, volt: u8) {
     // Write the vddcore voltage level to the PMC SLEEPCTRL register
     pmc.sleepctrl().modify(|_, w| unsafe { w.corelvl().bits(volt) });
 }
@@ -435,10 +417,7 @@ pub fn apply_ldo_voltage_sleep(volt: u8) {
 ///
 /// # Returns
 /// The current LDO voltage register value
-pub fn read_ldo_voltage() -> u8 {
-    // SAFETY: unsafe needed to take pointer to PMC peripheral
-    let pmc = unsafe { crate::pac::Pmc::steal() };
-
+pub fn read_ldo_voltage(pmc: &crate::pac::Pmc) -> u8 {
     // Read the current vddcore voltage level from the PMC RUNCTRL register
     pmc.runctrl().read().corelvl().bits()
 }
@@ -447,10 +426,7 @@ pub fn read_ldo_voltage() -> u8 {
 ///
 /// # Returns
 /// The current LDO voltage register value for sleep mode
-pub fn read_ldo_voltage_sleep() -> u8 {
-    // SAFETY: unsafe needed to take pointer to PMC peripheral
-    let pmc = unsafe { crate::pac::Pmc::steal() };
-
+pub fn read_ldo_voltage_sleep(pmc: &crate::pac::Pmc) -> u8 {
     // Read the current vddcore voltage level from the PMC SLEEPCTRL register
     pmc.sleepctrl().read().corelvl().bits()
 }
