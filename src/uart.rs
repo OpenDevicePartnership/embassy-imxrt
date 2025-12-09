@@ -569,7 +569,7 @@ impl<'a> UartTx<'a, Async> {
 
             let transfer = Transfer::new_write(
                 // an async UART instance cannot be created without a dma channel
-                self._tx_dma.as_ref().ok_or_else(|| Error::Fail)?,
+                self._tx_dma.as_ref().ok_or(Error::Fail)?,
                 chunk,
                 regs.fifowr().as_ptr() as *mut u8,
                 Default::default(),
@@ -695,7 +695,7 @@ impl<'a> UartRx<'a, Async> {
             regs.fifocfg().modify(|_, w| w.dmarx().enabled());
 
             let transfer = Transfer::new_read(
-                self._rx_dma.as_ref().ok_or_else(|| Error::Fail)?,
+                self._rx_dma.as_ref().ok_or(Error::Fail)?,
                 regs.fiford().as_ptr() as *mut u8,
                 chunk,
                 Default::default(),
