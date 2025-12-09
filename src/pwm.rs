@@ -586,8 +586,8 @@ impl<T: sealed::SCTimer> embedded_hal_02::Pwm for SCTPwm<'_, T> {
         T::configure(self.count_max);
 
         // update duty cycle match registers according to new scale factor
-        for i in 0..CHANNELS.len() {
-            self.set_duty(CHANNELS[i], duty_cycles[i]);
+        for (channel, duty_cycle) in CHANNELS.into_iter().zip(duty_cycles.into_iter()) {
+            self.set_duty(channel, duty_cycle);
         }
     }
 }
