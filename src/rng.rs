@@ -4,7 +4,6 @@ use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
-use embassy_futures::block_on;
 use embassy_sync::waitqueue::AtomicWaker;
 use rand_core::{CryptoRng, RngCore};
 
@@ -32,6 +31,9 @@ pub enum Error {
 
     /// Frequency Count Fail
     FreqCountFail,
+
+    /// Other error
+    Other,
 }
 
 /// RNG interrupt handler.
@@ -131,6 +133,47 @@ impl<'d> Rng<'d> {
         self.info.regs.mctl().write(|w| w.rst_def().set_bit().prgm().set_bit());
     }
 
+    fn fill_chunk_inner(&mut self, chunk: &mut [u8]) -> Result<(), Error> {
+        let mut entropy = [0; 16];
+
+        for (i, item) in entropy.iter_mut().enumerate() {
+            *item = self.info.regs.ent(i).read().bits();
+        }
+
+        if entropy.contains(&0) {
+            return Err(Error::SeedError);
+        }
+
+        sw_entropy_test(&entropy)?;
+
+        // SAFETY: entropy is the same for input and output types in
+        // native endianness.
+        let entropy: [u8; 64] = unsafe { core::mem::transmute(entropy) };
+
+        // write bytes to chunk
+        chunk.copy_from_slice(entropy.get(..chunk.len()).ok_or(Error::Other)?);
+
+        Ok(())
+    }
+
+    /// Fill the given slice with random values.
+    pub fn blocking_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
+        // We have a total of 16 words (512 bits) of entropy at our
+        // disposal. The idea here is to read all bits and copy the
+        // necessary bytes to the slice.
+        for chunk in dest.chunks_mut(64) {
+            self.blocking_fill_chunk(chunk)?;
+        }
+
+        Ok(())
+    }
+
+    fn blocking_fill_chunk(&mut self, chunk: &mut [u8]) -> Result<(), Error> {
+        // wait for valid entropy
+        while self.info.regs.mctl().read().ent_val().bit_is_clear() {}
+        self.fill_chunk_inner(chunk)
+    }
+
     /// Fill the given slice with random values.
     pub async fn async_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
         // We have a total of 16 words (512 bits) of entropy at our
@@ -187,24 +230,7 @@ impl<'d> Rng<'d> {
         let bits = self.info.regs.mctl().read();
 
         if bits.ent_val().bit_is_set() {
-            let mut entropy = [0; 16];
-
-            for (i, item) in entropy.iter_mut().enumerate() {
-                *item = self.info.regs.ent(i).read().bits();
-            }
-
-            if entropy.contains(&0) {
-                return Err(Error::SeedError);
-            }
-
-            sw_entropy_test(&entropy)?;
-
-            // SAFETY: entropy is the same for input and output types in
-            // native endianness.
-            let entropy: [u8; 64] = unsafe { core::mem::transmute(entropy) };
-
-            // write bytes to chunk
-            chunk.copy_from_slice(&entropy[..chunk.len()]);
+            self.fill_chunk_inner(chunk)?;
         }
 
         res
@@ -313,18 +339,27 @@ impl<'d> Rng<'d> {
 impl RngCore for Rng<'_> {
     fn next_u32(&mut self) -> u32 {
         let mut bytes = [0u8; 4];
-        block_on(self.async_fill_bytes(&mut bytes)).unwrap();
-        u32::from_ne_bytes(bytes)
+        match self.blocking_fill_bytes(&mut bytes) {
+            Ok(()) => u32::from_ne_bytes(bytes),
+            Err(_) => 0,
+        }
     }
 
     fn next_u64(&mut self) -> u64 {
         let mut bytes = [0u8; 8];
-        block_on(self.async_fill_bytes(&mut bytes)).unwrap();
-        u64::from_ne_bytes(bytes)
+        match self.blocking_fill_bytes(&mut bytes) {
+            Ok(()) => u64::from_ne_bytes(bytes),
+            Err(_) => 0,
+        }
     }
 
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        block_on(self.async_fill_bytes(dest)).unwrap();
+        match self.blocking_fill_bytes(dest) {
+            Ok(()) => {}
+            Err(_) => {
+                dest.fill(0);
+            }
+        }
     }
 
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
