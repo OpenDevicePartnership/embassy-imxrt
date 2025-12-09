@@ -889,7 +889,7 @@ impl MainPllClkConfig {
 
         // kCLOCK_SetSysPll<Mult>
         // Use the mult defined in main pll config
-        // if invalid, use 22 as default instead of panicking
+        // if invalid, use 22 as default instead of panicking as it's more desirable in production code
         match self.mult.load(Ordering::Relaxed) {
             16 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_16()),
             17 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_17()),
@@ -898,7 +898,7 @@ impl MainPllClkConfig {
             27 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_27()),
             33 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_33()),
             _ => {
-                error!("Invalid SYSPLL multiplier, defaulting to 22");
+                warn!("Invalid SYSPLL multiplier, defaulting to 22");
                 clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22())
             }
         };
@@ -1556,23 +1556,6 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
 
     config.main_pll_clk.enable_and_reset()?;
 
-    // From Table 23 of the data sheet, the low range (.8-1.0V) only applies if expected VDDCORE is <=1.0V
-    // 240MHz is the last entry at 1V, the next entry, 270MHz, says 1.1V
-    let volt_range = if config.main_clk.freq.load(Ordering::Relaxed) > 240_000_000 {
-        fsl_power::VoltOpRange::Full
-    } else {
-        fsl_power::VoltOpRange::Low
-    };
-
-    if !fsl_power::set_ldo_voltage_for_freq(
-        fsl_power::TempRange::TempN20CtoP85C,
-        volt_range,
-        config.main_clk.freq.load(Ordering::Relaxed),
-        0,
-    ) {
-        return Err(ClockError::VoltageSettingFailed);
-    }
-
     // Move FLEXSPI clock source from main clock to FFRO to avoid instruction/data fetch issue in XIP when
     // updating PLL and main clock.
     // SAFETY: unsafe needed to take pointers to Clkctl0
@@ -1589,6 +1572,23 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
     init_syscpuahb_clk(256);
 
     config.main_clk.enable_and_reset()?;
+
+    // From Table 23 of the data sheet, the low range (.8-1.0V) only applies if expected VDDCORE is <=1.0V
+    // 240MHz is the last entry at 1V, the next entry, 270MHz, says 1.1V
+    let volt_range = if config.main_clk.freq.load(Ordering::Relaxed) > 240_000_000 {
+        fsl_power::VoltOpRange::Full
+    } else {
+        fsl_power::VoltOpRange::Low
+    };
+
+    if !fsl_power::set_ldo_voltage_for_freq(
+        fsl_power::TempRange::TempN20CtoP85C,
+        volt_range,
+        config.main_clk.freq.load(Ordering::Relaxed),
+        0,
+    ) {
+        return Err(ClockError::VoltageSettingFailed);
+    }
 
     // Set divisor to final value.
     init_syscpuahb_clk(config.main_clk.div_int.load(Ordering::Relaxed) as u16);
