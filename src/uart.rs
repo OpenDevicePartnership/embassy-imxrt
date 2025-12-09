@@ -568,9 +568,8 @@ impl<'a> UartTx<'a, Async> {
             regs.fifocfg().modify(|_, w| w.dmatx().enabled());
 
             let transfer = Transfer::new_write(
-                #[allow(clippy::unwrap_used)]
                 // an async UART instance cannot be created without a dma channel
-                self._tx_dma.as_ref().unwrap(),
+                self._tx_dma.as_ref().ok_or_else(|| Error::Fail)?,
                 chunk,
                 regs.fifowr().as_ptr() as *mut u8,
                 Default::default(),
@@ -696,9 +695,7 @@ impl<'a> UartRx<'a, Async> {
             regs.fifocfg().modify(|_, w| w.dmarx().enabled());
 
             let transfer = Transfer::new_read(
-                #[allow(clippy::unwrap_used)]
-                // an async UART instance cannot be created without a dma channel
-                self._rx_dma.as_ref().unwrap(),
+                self._rx_dma.as_ref().ok_or_else(|| Error::Fail)?,
                 regs.fiford().as_ptr() as *mut u8,
                 chunk,
                 Default::default(),
