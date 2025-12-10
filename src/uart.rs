@@ -53,6 +53,7 @@ pub struct UartTx<'a, M: Mode> {
 pub struct UartRx<'a, M: Mode> {
     info: Info,
     _flexcomm: FlexcommRef,
+    _buffer_config: Option<BufferConfig>,
     _rx_dma: Option<Channel<'a>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
@@ -219,11 +220,27 @@ impl<'a> UartTx<'a, Blocking> {
     }
 }
 
+struct BufferConfig {
+    #[cfg(feature = "time")]
+    buffer: &'static mut [u8],
+    #[cfg(feature = "time")]
+    write_index: usize,
+    #[cfg(feature = "time")]
+    read_index: usize,
+    #[cfg(feature = "time")]
+    polling_rate: u64,
+}
+
 impl<'a, M: Mode> UartRx<'a, M> {
-    fn new_inner<T: Instance>(_flexcomm: FlexcommRef, _rx_dma: Option<Channel<'a>>) -> Self {
+    fn new_inner<T: Instance>(
+        _flexcomm: FlexcommRef,
+        _rx_dma: Option<Channel<'a>>,
+        _buffer_config: Option<BufferConfig>,
+    ) -> Self {
         Self {
             info: T::info(),
             _flexcomm,
+            _buffer_config,
             _rx_dma,
             _phantom: PhantomData,
         }
@@ -237,7 +254,7 @@ impl<'a> UartRx<'a, Blocking> {
 
         let flexcomm = Uart::<Blocking>::init::<T>(None, Some(rx.into().reborrow()), None, None, config)?;
 
-        Ok(Self::new_inner::<T>(flexcomm, None))
+        Ok(Self::new_inner::<T>(flexcomm, None, None))
     }
 }
 
@@ -499,7 +516,7 @@ impl<'a> Uart<'a, Blocking> {
         Ok(Self {
             info: T::info(),
             tx: UartTx::new_inner::<T>(flexcomm.clone(), None),
-            rx: UartRx::new_inner::<T>(flexcomm, None),
+            rx: UartRx::new_inner::<T>(flexcomm, None, None),
         })
     }
 
@@ -683,11 +700,81 @@ impl<'a> UartRx<'a, Async> {
 
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
-        Ok(Self::new_inner::<T>(flexcomm, rx_dma))
+        Ok(Self::new_inner::<T>(flexcomm, rx_dma, None))
+    }
+
+    /// create a new DMA enabled UART which can only receive data, but uses a buffer to avoid FIFO overflow
+    /// Note: requires time-driver due to hardware constraint requiring a polled interface (no UART Idle bus indicator)
+    ///       alternative approaches are possible, this was done as it maintains most similarity between Buffered and
+    ///       Unbuffered read interfaces
+    #[cfg(feature = "time")]
+    pub fn new_async_with_buffer<T: Instance>(
+        _inner: Peri<'a, T>,
+        rx: Peri<'a, impl RxPin<T>>,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'a,
+        rx_dma: Peri<'a, impl RxDma<T>>,
+        config: Config,
+        buffer: &'static mut [u8],
+        polling_rate_us: u64,
+    ) -> Result<Self> {
+        assert!(buffer.len() <= 1024);
+
+        rx.as_rx();
+
+        let mut _rx = rx.into();
+        let flexcomm = Uart::<Async>::init::<T>(None, Some(_rx.reborrow()), None, None, config)?;
+
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
+
+        let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
+        T::info().regs.fifocfg().modify(|_, w| w.dmarx().enabled());
+        // immediately configure and enable channel for circular buffered reception
+        rx_dma.configure_channel(
+            dma::transfer::Direction::PeripheralToMemory,
+            T::info().regs.fiford().as_ptr() as *const u8 as *const u32,
+            buffer as *mut [u8] as *mut u32,
+            buffer.len(),
+            dma::transfer::TransferOptions {
+                width: dma::transfer::Width::Bit8,
+                priority: dma::transfer::Priority::Priority0,
+                is_continuous: true,
+                is_sw_trig: true,
+            },
+        );
+        rx_dma.enable_channel();
+        rx_dma.trigger_channel();
+
+        Ok(Self::new_inner::<T>(
+            flexcomm,
+            Some(rx_dma),
+            Some(BufferConfig {
+                buffer,
+                write_index: 0,
+                read_index: 0,
+                polling_rate: polling_rate_us,
+            }),
+        ))
     }
 
     /// Read from UART RX asynchronously.
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<()> {
+        #[cfg(feature = "time")]
+        {
+            if self._buffer_config.is_some() {
+                self.read_buffered(buf).await
+            } else {
+                self.read_unbuffered(buf).await
+            }
+        }
+
+        #[cfg(not(feature = "time"))]
+        {
+            self.read_unbuffered(buf).await
+        }
+    }
+
+    async fn read_unbuffered(&mut self, buf: &mut [u8]) -> Result<()> {
         let regs = self.info.regs;
 
         for chunk in buf.chunks_mut(1024) {
@@ -757,6 +844,163 @@ impl<'a> UartRx<'a, Async> {
 
         Ok(())
     }
+
+    #[cfg(feature = "time")]
+    async fn read_buffered(&mut self, buf: &mut [u8]) -> Result<()> {
+        // unwrap safe here as only entry path to API requires rx_dma instance
+        let rx_dma = self._rx_dma.as_ref().unwrap();
+        let buffer_config = self._buffer_config.as_mut().unwrap();
+
+        // do not need to break into dma lengthed chunks as we already have a reserved circular buffer
+        let mut bytes_read = 0;
+
+        // As the Rx Idle interrupt is not present for this processor, we must poll to see if new data is available
+        while bytes_read < buf.len() {
+            if rx_dma.is_active() {
+                let mut remaining_bytes = rx_dma.get_xfer_count() as usize;
+                remaining_bytes = remaining_bytes + 1;
+
+                if remaining_bytes > buffer_config.buffer.len() {
+                    return Err(Error::InvalidArgument);
+                }
+
+                // determine current write index where transfer will continue to
+                buffer_config.write_index = (buffer_config.buffer.len() - remaining_bytes) % buffer_config.buffer.len();
+            }
+
+            // if we have fully formed new data in the buffer:
+            if buffer_config.write_index != buffer_config.read_index {
+                if buffer_config.write_index > buffer_config.read_index {
+                    // calculate the read_len
+                    let in_len = buffer_config.write_index - buffer_config.read_index;
+                    let remaining_read_len = buf.len() - bytes_read;
+                    let read_len = remaining_read_len.min(in_len);
+
+                    // mark start and stop pointers based on read_len
+                    let in_start = buffer_config.read_index;
+                    let in_stop = buffer_config.read_index + read_len;
+                    let out_start = bytes_read;
+                    let out_stop = bytes_read + read_len;
+
+                    // copy slices
+                    let incoming_slice = &buffer_config.buffer[in_start..in_stop];
+                    let outgoing_slice = &mut buf[out_start..out_stop];
+                    outgoing_slice.copy_from_slice(incoming_slice);
+
+                    // save off last actual read index in case of longer transfer than expected
+                    buffer_config.read_index = (buffer_config.read_index + read_len) % buffer_config.buffer.len();
+
+                    // finally increment total bytes read
+                    bytes_read += read_len;
+                } else {
+                    // handle roll over
+                    // do the first part (dangling portion of buffer)
+                    // calculate the read_len
+                    let in_len = buffer_config.buffer.len() - buffer_config.read_index;
+                    let remaining_read_len = buf.len() - bytes_read;
+                    let read_len = remaining_read_len.min(in_len);
+
+                    // mark start and stop pointers based on read_len
+                    let in_start = buffer_config.read_index;
+                    let in_stop = buffer_config.read_index + read_len;
+                    let out_start = bytes_read;
+                    let out_stop = bytes_read + read_len;
+
+                    // copy slices
+                    let incoming_slice = &buffer_config.buffer[in_start..in_stop];
+                    let outgoing_slice = &mut buf[out_start..out_stop];
+                    outgoing_slice.copy_from_slice(incoming_slice);
+
+                    // save off last actual read index in case of longer transfer than expected
+                    buffer_config.read_index = (buffer_config.read_index + read_len) % buffer_config.buffer.len();
+
+                    // finally increment total bytes read
+                    bytes_read += read_len;
+                    // if we have more bytes to read, do the second part
+                    // only need to copy second part if there's data remaining at the begining of the buffer and we
+                    // still have more bytes requested from read() awaiter
+                    if bytes_read < buf.len() && buffer_config.write_index > 0 {
+                        // do the second part (begining of buffer up to write index)
+                        // buffer_config.read_index should be 0 now
+                        // calculate the read_len
+                        let in_len = buffer_config.write_index - buffer_config.read_index;
+                        let remaining_read_len = buf.len() - bytes_read;
+                        let read_len = remaining_read_len.min(in_len);
+
+                        // mark start and stop pointers based on read_len
+                        let in_start = buffer_config.read_index;
+                        let in_stop = buffer_config.read_index + read_len;
+                        let out_start = bytes_read;
+                        let out_stop = bytes_read + read_len;
+
+                        // copy slices
+                        let incoming_slice = &buffer_config.buffer[in_start..in_stop];
+                        let outgoing_slice = &mut buf[out_start..out_stop];
+                        outgoing_slice.copy_from_slice(incoming_slice);
+
+                        // save off last actual read index in case of longer transfer than expected
+                        buffer_config.read_index = (buffer_config.read_index + read_len) % buffer_config.buffer.len();
+
+                        // finally increment total bytes read
+                        bytes_read += read_len;
+                    }
+                }
+            } else {
+                // sleep until next polling epoch, or if we detect a UART transfer error event
+                let res = select(
+                    // use embassy_time to enable polling the bus for more data
+                    embassy_time::Timer::after_micros(buffer_config.polling_rate),
+                    // detect bus errors
+                    poll_fn(|cx| {
+                        UART_WAKERS[self.info.index].register(cx.waker());
+
+                        self.info.regs.intenset().write(|w| {
+                            w.framerren()
+                                .set_bit()
+                                .parityerren()
+                                .set_bit()
+                                .rxnoiseen()
+                                .set_bit()
+                                .aberren()
+                                .set_bit()
+                        });
+
+                        let stat = self.info.regs.stat().read();
+
+                        self.info.regs.stat().write(|w| {
+                            w.framerrint()
+                                .clear_bit_by_one()
+                                .parityerrint()
+                                .clear_bit_by_one()
+                                .rxnoiseint()
+                                .clear_bit_by_one()
+                                .aberr()
+                                .clear_bit_by_one()
+                        });
+
+                        if stat.framerrint().bit_is_set() {
+                            Poll::Ready(Err(Error::Framing))
+                        } else if stat.parityerrint().bit_is_set() {
+                            Poll::Ready(Err(Error::Parity))
+                        } else if stat.rxnoiseint().bit_is_set() {
+                            Poll::Ready(Err(Error::Noise))
+                        } else if stat.aberr().bit_is_set() {
+                            Poll::Ready(Err(Error::Fail))
+                        } else {
+                            Poll::Pending
+                        }
+                    }),
+                )
+                .await;
+
+                match res {
+                    Either::First(()) | Either::Second(Ok(())) => (),
+                    Either::Second(e) => return e,
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<'a> Uart<'a, Async> {
@@ -787,7 +1031,66 @@ impl<'a> Uart<'a, Async> {
         Ok(Self {
             info: T::info(),
             tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
-            rx: UartRx::new_inner::<T>(flexcomm, rx_dma),
+            rx: UartRx::new_inner::<T>(flexcomm, rx_dma, None),
+        })
+    }
+    /// Create a new DMA enabled UART with Rx buffering enabled
+    #[cfg(feature = "time")]
+    pub fn new_async_with_buffer<T: Instance>(
+        _inner: Peri<'a, T>,
+        tx: Peri<'a, impl TxPin<T>>,
+        rx: Peri<'a, impl RxPin<T>>,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'a,
+        tx_dma: Peri<'a, impl TxDma<T>>,
+        rx_dma: Peri<'a, impl RxDma<T>>,
+        config: Config,
+        buffer: &'static mut [u8],
+        polling_rate_us: u64,
+    ) -> Result<Self> {
+        use mimxrt633s_pac::flexspi::iprxfcr::Rxdmaen;
+
+        assert!(buffer.len() <= 1024);
+
+        tx.as_tx();
+        rx.as_rx();
+
+        let mut tx = tx.into();
+        let mut rx = rx.into();
+
+        let tx_dma = dma::Dma::reserve_channel(tx_dma);
+        let rx_dma: Channel<'_> = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
+
+        let flexcomm = Self::init::<T>(Some(tx.into()), Some(rx.into()), None, None, config)?;
+        T::info().regs.fifocfg().modify(|_, w| w.dmarx().enabled());
+        // immediately configure and enable channel for circular buffered reception
+        rx_dma.configure_channel(
+            dma::transfer::Direction::PeripheralToMemory,
+            T::info().regs.fiford().as_ptr() as *const u8 as *const u32,
+            buffer as *mut [u8] as *mut u32,
+            buffer.len(),
+            dma::transfer::TransferOptions {
+                width: dma::transfer::Width::Bit8,
+                priority: dma::transfer::Priority::Priority0,
+                is_continuous: true,
+                is_sw_trig: true,
+            },
+        );
+        rx_dma.enable_channel();
+        rx_dma.trigger_channel();
+
+        Ok(Self {
+            info: T::info(),
+            tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
+            rx: UartRx::new_inner::<T>(
+                flexcomm,
+                Some(rx_dma),
+                Some(BufferConfig {
+                    buffer,
+                    write_index: 0,
+                    read_index: 0,
+                    polling_rate: polling_rate_us,
+                }),
+            ),
         })
     }
 
@@ -827,7 +1130,7 @@ impl<'a> Uart<'a, Async> {
         Ok(Self {
             info: T::info(),
             tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
-            rx: UartRx::new_inner::<T>(flexcomm, rx_dma),
+            rx: UartRx::new_inner::<T>(flexcomm, rx_dma, None),
         })
     }
 
@@ -1136,9 +1439,16 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                     .aberrclr()
                     .set_bit()
             });
-        }
 
-        waker.wake();
+            waker.wake();
+        }
+        let fifostat = regs.fifointstat().read();
+        if fifostat.txlvl().bit_is_set() || fifostat.txerr().bit_is_set() {
+            regs.fifointenclr().write(|w| w.txlvl().set_bit().txerr().set_bit());
+        }
+        if fifostat.rxlvl().bit_is_set() || fifostat.rxerr().bit_is_set() {
+            regs.fifointenclr().write(|w| w.rxlvl().set_bit().rxerr().set_bit());
+        }
     }
 }
 

@@ -16,6 +16,12 @@ pub struct TransferOptions {
 
     /// Transfer priority level
     pub priority: Priority,
+
+    /// Transfer is intended to be done continuously, such as for a circular buffer
+    pub is_continuous: bool,
+
+    /// Transfer is software triggerred
+    pub is_sw_trig: bool,
 }
 
 impl Default for TransferOptions {
@@ -23,6 +29,8 @@ impl Default for TransferOptions {
         Self {
             width: Width::Bit8,
             priority: Priority::Priority0,
+            is_continuous: false,
+            is_sw_trig: false,
         }
     }
 }
