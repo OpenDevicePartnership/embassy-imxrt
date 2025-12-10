@@ -1167,7 +1167,7 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I
         let address = address.into();
         let guard = self.start(address, false, None).await?;
         self.write_no_start_no_stop(write).await?;
-        let guard = self.start(address, false, Some(guard)).await?;
+        let guard = self.start(address, true, Some(guard)).await?;
         self.read_no_start_no_stop(read).await?;
         self.stop()?.await?;
         guard.defuse();
