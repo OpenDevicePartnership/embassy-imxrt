@@ -182,7 +182,13 @@ impl<'d> Rng<'d> {
     fn blocking_fill_chunk(&mut self, chunk: &mut [u8]) -> Result<(), Error> {
         // wait for valid entropy
         while self.info.regs.mctl().read().ent_val().bit_is_clear() {}
-        self.fill_chunk_inner(chunk)
+
+        self.fill_chunk_inner(chunk)?;
+
+        // we just read ENT(15) but ENT_VAL takes a little while to
+        // clear. Wait here until it's cleared before moving on.
+        while self.info.regs.mctl().read().ent_val().bit_is_set() {}
+        Ok(())
     }
 
     /// Fill the given slice with random values.
