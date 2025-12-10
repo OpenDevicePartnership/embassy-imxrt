@@ -9,9 +9,8 @@ use embassy_hal_internal::drop::OnDrop;
 use itertools::Itertools;
 
 use super::{
-    Async, Blocking, Error, I2C_REMEDIATION, I2C_WAKERS, Info, Instance, InterruptHandler, MasterDma, Mode,
-    REMEDIATON_MASTER_STOP, Result, SclPin, SdaPin, TEN_BIT_PREFIX, TransferError, force_clear_remediation,
-    wait_remediation_complete,
+    Async, Blocking, Error, Info, Instance, InterruptHandler, MasterDma, Mode, REMEDIATON_MASTER_STOP, Result, SclPin,
+    SdaPin, TEN_BIT_PREFIX, TransferError, force_clear_remediation, wait_remediation_complete,
 };
 use crate::flexcomm::FlexcommRef;
 use crate::interrupt::typelevel::Interrupt;
@@ -51,40 +50,40 @@ fn get_freq_hz(hi_clocks: u8, lo_clocks: u8, clock_div_multiplier: u16, clock_sp
 // use that instead.
 //
 trait ToClocksEnum<DestT> {
-    fn to_clocks_enum(&self) -> DestT;
+    fn to_clocks_enum(&self) -> Option<DestT>;
 }
 
 const MIN_CLOCKS: u8 = 2;
 const MAX_CLOCKS: u8 = 9;
 
 impl ToClocksEnum<Mstscllow> for u8 {
-    fn to_clocks_enum(&self) -> Mstscllow {
+    fn to_clocks_enum(&self) -> Option<Mstscllow> {
         match *self {
-            2 => Mstscllow::Clocks2,
-            3 => Mstscllow::Clocks3,
-            4 => Mstscllow::Clocks4,
-            5 => Mstscllow::Clocks5,
-            6 => Mstscllow::Clocks6,
-            7 => Mstscllow::Clocks7,
-            8 => Mstscllow::Clocks8,
-            9 => Mstscllow::Clocks9,
-            _ => unreachable!("Invalid value for Mstscllow"),
+            2 => Some(Mstscllow::Clocks2),
+            3 => Some(Mstscllow::Clocks3),
+            4 => Some(Mstscllow::Clocks4),
+            5 => Some(Mstscllow::Clocks5),
+            6 => Some(Mstscllow::Clocks6),
+            7 => Some(Mstscllow::Clocks7),
+            8 => Some(Mstscllow::Clocks8),
+            9 => Some(Mstscllow::Clocks9),
+            _ => None,
         }
     }
 }
 
 impl ToClocksEnum<Mstsclhigh> for u8 {
-    fn to_clocks_enum(&self) -> Mstsclhigh {
+    fn to_clocks_enum(&self) -> Option<Mstsclhigh> {
         match *self {
-            2 => Mstsclhigh::Clocks2,
-            3 => Mstsclhigh::Clocks3,
-            4 => Mstsclhigh::Clocks4,
-            5 => Mstsclhigh::Clocks5,
-            6 => Mstsclhigh::Clocks6,
-            7 => Mstsclhigh::Clocks7,
-            8 => Mstsclhigh::Clocks8,
-            9 => Mstsclhigh::Clocks9,
-            _ => unreachable!("Invalid value for Mstsclhigh"),
+            2 => Some(Mstsclhigh::Clocks2),
+            3 => Some(Mstsclhigh::Clocks3),
+            4 => Some(Mstsclhigh::Clocks4),
+            5 => Some(Mstsclhigh::Clocks5),
+            6 => Some(Mstsclhigh::Clocks6),
+            7 => Some(Mstsclhigh::Clocks7),
+            8 => Some(Mstsclhigh::Clocks8),
+            9 => Some(Mstsclhigh::Clocks9),
+            _ => None,
         }
     }
 }
@@ -143,8 +142,12 @@ impl SpeedRegisterSettings {
         //
         const CLOCK_DIV_MULTIPLIER_OFFSET: u16 = 1;
         Ok(Self {
-            scl_high_clocks: result_clocks_hi.to_clocks_enum(),
-            scl_low_clocks: result_clocks_lo.to_clocks_enum(),
+            scl_high_clocks: result_clocks_hi
+                .to_clocks_enum()
+                .ok_or(Error::UnsupportedConfiguration)?,
+            scl_low_clocks: result_clocks_lo
+                .to_clocks_enum()
+                .ok_or(Error::UnsupportedConfiguration)?,
             clock_div_multiplier: result_div_multiplier - CLOCK_DIV_MULTIPLIER_OFFSET,
             _actual_freq_hz: CLOCK_SPEED_HZ
                 / (u32::from(result_clocks_hi + result_clocks_lo) * u32::from(result_div_multiplier)),
@@ -202,6 +205,9 @@ impl DutyCycle {
 
 impl Default for DutyCycle {
     fn default() -> Self {
+        #[allow(clippy::unwrap_used)]
+        // Safety: this will always succeed, as 40% is within the valid range.
+        //         and if this changes to invalid value, we will know during initial testing.
         DutyCycle::new(40).unwrap()
     }
 }
@@ -683,7 +689,7 @@ impl<'a> I2cMaster<'a, Async> {
         if self.dma_ch.is_some() {
             if !dma_read.is_empty() {
                 let transfer = dma::transfer::Transfer::new_read(
-                    self.dma_ch.as_mut().unwrap(),
+                    self.dma_ch.as_mut().ok_or(Error::UnsupportedConfiguration)?,
                     i2cregs.mstdat().as_ptr() as *mut u8,
                     dma_read,
                     Default::default(),
@@ -706,7 +712,7 @@ impl<'a> I2cMaster<'a, Async> {
                 let res = select(
                     transfer,
                     poll_fn(|cx| {
-                        I2C_WAKERS[self.info.index].register(cx.waker());
+                        self.info.waker.register(cx.waker());
 
                         i2cregs.intenset().write(|w| {
                             w.mstpendingen()
@@ -824,7 +830,7 @@ impl<'a> I2cMaster<'a, Async> {
 
         if self.dma_ch.is_some() {
             let transfer = dma::transfer::Transfer::new_write(
-                self.dma_ch.as_mut().unwrap(),
+                self.dma_ch.as_mut().ok_or(Error::UnsupportedConfiguration)?,
                 write,
                 i2cregs.mstdat().as_ptr() as *mut u8,
                 Default::default(),
@@ -847,7 +853,7 @@ impl<'a> I2cMaster<'a, Async> {
             let res = select(
                 transfer,
                 poll_fn(|cx| {
-                    I2C_WAKERS[self.info.index].register(cx.waker());
+                    self.info.waker.register(cx.waker());
 
                     i2cregs.intenset().write(|w| {
                         w.mstpendingen()
@@ -1003,7 +1009,7 @@ impl<'a> I2cMaster<'a, Async> {
         poll_fn(move |cx| {
             // Register waker before checking condition, to ensure that wakes/interrupts
             // aren't lost between f() and g()
-            I2C_WAKERS[self.info.index].register(cx.waker());
+            self.info.waker.register(cx.waker());
             let r = f(self);
 
             if r.is_pending() {
@@ -1091,6 +1097,8 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A
         let address = address.into();
         self.start(
             address,
+            #[allow(clippy::indexing_slicing)]
+            // SAFETY: checked for empty above
             match operations[0] {
                 embedded_hal_1::i2c::Operation::Read(_) => true,
                 embedded_hal_1::i2c::Operation::Write(_) => false,
@@ -1135,6 +1143,8 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I
         let mut guard = Some(
             self.start(
                 address,
+                #[allow(clippy::indexing_slicing)]
+                // SAFETY: checked for empty above
                 match operations[0] {
                     embedded_hal_1::i2c::Operation::Read(_) => true,
                     embedded_hal_1::i2c::Operation::Write(_) => false,
@@ -1213,7 +1223,7 @@ impl Drop for StartStopGuard {
             } else {
                 // We are NOT pending, we need to ask the interrupt to send a stop the next
                 // time the engine is pending. We ensured that the interrupt is active above
-                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATON_MASTER_STOP, Ordering::AcqRel);
+                self.info.remediation.fetch_or(REMEDIATON_MASTER_STOP, Ordering::AcqRel);
             }
         })
     }
