@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 
 use embassy_sync::waitqueue::AtomicWaker;
 
-use super::{DESCRIPTORS, DMA_WAKERS};
+use super::DESCRIPTORS;
 use crate::dma::DmaInfo;
 use crate::dma::transfer::{Direction, Transfer, TransferOptions};
 
@@ -44,7 +44,7 @@ impl<'d> Channel<'d> {
 
     /// Return a reference to the channel's waker
     pub fn get_waker(&self) -> &'d AtomicWaker {
-        &DMA_WAKERS[self.info.ch_num]
+        self.info.waker
     }
 
     /// Check whether DMA is active
@@ -77,6 +77,10 @@ impl<'d> Channel<'d> {
     }
 
     /// Prepare the DMA channel for the transfer
+    ///
+    /// # Note
+    ///
+    /// `mem_len` should be a multiple of the transfer width, otherwise transfer count will be rounded down
     pub fn configure_channel(
         &self,
         dir: Direction,
@@ -85,35 +89,31 @@ impl<'d> Channel<'d> {
         mem_len: usize,
         options: TransferOptions,
     ) {
-        if !mem_len.is_multiple_of(options.width.byte_width()) {
-            panic!(
-                "Memory length({}) must be a multiple of the transfer width({})",
-                mem_len,
-                options.width.byte_width()
-            );
-        }
+        debug_assert!(mem_len.is_multiple_of(options.width.byte_width()));
 
         let xferwidth: usize = options.width.byte_width();
         let xfercount = (mem_len / xferwidth) - 1;
         let channel = self.info.ch_num;
 
+        // Panic safety: `info()` would have returned None if our channel number was out of bounds and thus would never get here
+        // SAFETY: unsafe due to use of a mutable static (DESCRIPTORS.list)
+        #[allow(clippy::indexing_slicing)]
+        let descriptor = unsafe { &mut DESCRIPTORS.list[channel] };
+
         // Configure the channel descriptor
         // NOTE: the DMA controller expects the memory buffer end address but peripheral address is actual
-        // SAFETY: unsafe due to use of a mutable static (DESCRIPTORS.list)
-        unsafe {
-            DESCRIPTORS.list[channel].reserved = 0;
-            if dir == Direction::MemoryToPeripheral {
-                DESCRIPTORS.list[channel].dst_data_end_addr = dstbase as u32;
-            } else {
-                DESCRIPTORS.list[channel].dst_data_end_addr = dstbase as u32 + (xfercount * xferwidth) as u32;
-            }
-            if dir == Direction::PeripheralToMemory {
-                DESCRIPTORS.list[channel].src_data_end_addr = srcbase as u32;
-            } else {
-                DESCRIPTORS.list[channel].src_data_end_addr = srcbase as u32 + (xfercount * xferwidth) as u32;
-            }
-            DESCRIPTORS.list[channel].nxt_desc_link_addr = 0;
+        descriptor.reserved = 0;
+        if dir == Direction::MemoryToPeripheral {
+            descriptor.dst_data_end_addr = dstbase as u32;
+        } else {
+            descriptor.dst_data_end_addr = dstbase as u32 + (xfercount * xferwidth) as u32;
         }
+        if dir == Direction::PeripheralToMemory {
+            descriptor.src_data_end_addr = srcbase as u32;
+        } else {
+            descriptor.src_data_end_addr = srcbase as u32 + (xfercount * xferwidth) as u32;
+        }
+        descriptor.nxt_desc_link_addr = 0;
 
         // Configure for transfer type, no hardware triggering (we'll trigger via software), high priority
         // SAFETY: unsafe due to .bits usage

@@ -83,7 +83,11 @@ fn dma0_irq_handler<const N: usize>(wakers: &[AtomicWaker; N]) {
                 // Clear the pending interrupt for this channel
                 // SAFETY: unsafe due to .bits usage
                 reg.errint0().write(|w| unsafe { w.err().bits(1 << channel) });
-                wakers[channel as usize].wake();
+
+                // Ensure the waker actually exists for this channel before attempting to wake it
+                if let Some(waker) = wakers.get(channel as usize) {
+                    waker.wake();
+                }
             }
         }
     }
@@ -97,7 +101,11 @@ fn dma0_irq_handler<const N: usize>(wakers: &[AtomicWaker; N]) {
                 // Clear the pending interrupt for this channel
                 // SAFETY: unsafe due to .bits usage
                 reg.inta0().write(|w| unsafe { w.ia().bits(1 << channel) });
-                wakers[channel as usize].wake();
+
+                // Ensure the waker actually exists for this channel before attempting to wake it
+                if let Some(waker) = wakers.get(channel as usize) {
+                    waker.wake();
+                }
             }
         }
     }
@@ -141,20 +149,17 @@ pub struct Dma<'d> {
 
 struct DmaInfo {
     regs: crate::pac::Dma0,
+    waker: &'static AtomicWaker,
     ch_num: usize,
 }
 
 impl<'d> Dma<'d> {
     /// Reserves a DMA channel for exclusive use
     pub fn reserve_channel<T: Instance>(_inner: Peri<'d, T>) -> Option<Channel<'d>> {
-        if T::info().is_some() {
-            Some(Channel {
-                info: T::info().unwrap(),
-                _lifetime: PhantomData,
-            })
-        } else {
-            None
-        }
+        T::info().map(|info| Channel {
+            info,
+            _lifetime: PhantomData,
+        })
     }
 }
 
@@ -180,6 +185,8 @@ macro_rules! dma_channel_instance {
                 Some(DmaInfo {
                     // SAFETY: safe from single executor
                     regs: unsafe { crate::pac::$controller::steal() },
+                    // Note: This also confirms our number is valid for DMA descriptors since they are same size
+                    waker: DMA_WAKERS.get($number)?,
                     ch_num: $number,
                 })
             }
