@@ -682,7 +682,7 @@ impl I2cSlave<'_, Async> {
 
     /// Complete DMA and return bytes transfer
     fn abort_dma(&self, xfer_size: usize) -> Result<usize> {
-        // abort DMA if DMA is not compelted
+        // abort DMA if DMA is not completed
         let dma = self.dma_ch.as_ref().ok_or(Error::UnsupportedConfiguration)?;
         let remain_xfer_count = dma.get_xfer_count();
         let mut xfer_count = xfer_size;
