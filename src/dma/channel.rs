@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 
 use embassy_sync::waitqueue::AtomicWaker;
 
-use super::{DESCRIPTORS, DMA_WAKERS};
+use super::DESCRIPTORS;
 use crate::dma::DmaInfo;
 use crate::dma::transfer::{Direction, Transfer, TransferOptions};
 
@@ -44,7 +44,7 @@ impl<'d> Channel<'d> {
 
     /// Return a reference to the channel's waker
     pub fn get_waker(&self) -> &'d AtomicWaker {
-        &DMA_WAKERS[self.info.ch_num]
+        self.info.waker
     }
 
     /// Check whether DMA is active
