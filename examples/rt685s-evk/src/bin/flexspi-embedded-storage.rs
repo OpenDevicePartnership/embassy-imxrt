@@ -126,6 +126,6 @@ async fn blink(led: &mut gpio::Output<'_>, on_ms: u32, off_ms: u32) -> ! {
 async fn blink_until_button(button: &mut gpio::Input<'_>, led: &mut gpio::Output<'_>, on_ms: u32, off_ms: u32) {
     futures::select_biased! {
         _ = blink(led, on_ms, off_ms).fuse() => (),
-        () = button.wait_for_falling_edge().fuse() => (),
+        _ = button.wait_for_falling_edge().fuse() => (),
     }
 }
