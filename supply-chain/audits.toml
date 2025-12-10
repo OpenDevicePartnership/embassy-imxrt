@@ -38,6 +38,11 @@ who = "Felipe Balbi <febalbi@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "0.5.0"
 
+[[audits.rand_core]]
+who = "Felipe Balbi <febalbi@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.6.4 -> 0.9.3"
+
 [[audits.static_cell]]
 who = "jerrysxie <jerryxie@microsoft.com>"
 criteria = "safe-to-run"

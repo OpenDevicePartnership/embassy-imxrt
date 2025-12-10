@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use core::task::Poll;
 
 use embassy_sync::waitqueue::AtomicWaker;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRngCore};
 
 use crate::clocks::{SysconPeripheral, enable_and_reset};
 use crate::interrupt::typelevel::Interrupt;
@@ -34,6 +34,17 @@ pub enum Error {
 
     /// Other error
     Other,
+}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::SeedError => write!(f, "SeedError"),
+            Error::HwError => write!(f, "HwError"),
+            Error::FreqCountFail => write!(f, "FreqCountFail"),
+            Error::Other => write!(f, "Other"),
+        }
+    }
 }
 
 /// RNG interrupt handler.
@@ -336,39 +347,27 @@ impl<'d> Rng<'d> {
     }
 }
 
-impl RngCore for Rng<'_> {
-    fn next_u32(&mut self) -> u32 {
+impl TryRngCore for Rng<'_> {
+    type Error = Error;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0u8; 4];
-        match self.blocking_fill_bytes(&mut bytes) {
-            Ok(()) => u32::from_ne_bytes(bytes),
-            Err(_) => 0,
-        }
+        self.blocking_fill_bytes(&mut bytes)?;
+        Ok(u32::from_ne_bytes(bytes))
     }
 
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         let mut bytes = [0u8; 8];
-        match self.blocking_fill_bytes(&mut bytes) {
-            Ok(()) => u64::from_ne_bytes(bytes),
-            Err(_) => 0,
-        }
+        self.blocking_fill_bytes(&mut bytes)?;
+        Ok(u64::from_ne_bytes(bytes))
     }
 
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        match self.blocking_fill_bytes(dest) {
-            Ok(()) => {}
-            Err(_) => {
-                dest.fill(0);
-            }
-        }
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
-        self.fill_bytes(dest);
-        Ok(())
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+        self.blocking_fill_bytes(dest)
     }
 }
 
-impl CryptoRng for Rng<'_> {}
+impl TryCryptoRng for Rng<'_> {}
 
 struct Info {
     regs: crate::pac::Trng,
