@@ -206,8 +206,8 @@ impl DutyCycle {
 impl Default for DutyCycle {
     fn default() -> Self {
         #[allow(clippy::unwrap_used)]
-        // Safety: this will always succeed, as 40% is within the valid range.
-        //         and if this changes to invalid value, we will know during initial testing.
+        // Panic Safety: this will always succeed, as 40% is within the valid range.
+        //               and if this changes to invalid value, we will know during initial testing.
         DutyCycle::new(40).unwrap()
     }
 }
@@ -686,10 +686,10 @@ impl<'a> I2cMaster<'a, Async> {
             return Err(TransferError::OtherBusError.into());
         };
 
-        if self.dma_ch.is_some() {
+        if let Some(dma_ch) = &self.dma_ch {
             if !dma_read.is_empty() {
                 let transfer = dma::transfer::Transfer::new_read(
-                    self.dma_ch.as_mut().ok_or(Error::UnsupportedConfiguration)?,
+                    dma_ch,
                     i2cregs.mstdat().as_ptr() as *mut u8,
                     dma_read,
                     Default::default(),
@@ -828,9 +828,9 @@ impl<'a> I2cMaster<'a, Async> {
             return Ok(());
         }
 
-        if self.dma_ch.is_some() {
+        if let Some(dma_ch) = &self.dma_ch {
             let transfer = dma::transfer::Transfer::new_write(
-                self.dma_ch.as_mut().ok_or(Error::UnsupportedConfiguration)?,
+                dma_ch,
                 write,
                 i2cregs.mstdat().as_ptr() as *mut u8,
                 Default::default(),
@@ -1098,7 +1098,7 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A
         self.start(
             address,
             #[allow(clippy::indexing_slicing)]
-            // SAFETY: checked for empty above
+            // Panic Safety: checked for empty above
             match operations[0] {
                 embedded_hal_1::i2c::Operation::Read(_) => true,
                 embedded_hal_1::i2c::Operation::Write(_) => false,
@@ -1144,7 +1144,7 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I
             self.start(
                 address,
                 #[allow(clippy::indexing_slicing)]
-                // SAFETY: checked for empty above
+                // Panic Safety: checked for empty above
                 match operations[0] {
                     embedded_hal_1::i2c::Operation::Read(_) => true,
                     embedded_hal_1::i2c::Operation::Write(_) => false,
