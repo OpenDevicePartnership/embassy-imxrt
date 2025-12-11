@@ -178,7 +178,7 @@ impl Future for Transfer<'_> {
 
         // Re-register the waker on each call to poll() because any calls to
         // wake will deregister the waker.
-        super::DMA_WAKERS[channel].register(cx.waker());
+        self._inner.get_waker().register(cx.waker());
 
         if self._inner.info.regs.active0().read().act().bits() & (1 << channel) == 0 {
             Poll::Ready(())
