@@ -1134,6 +1134,75 @@ impl<'a> Uart<'a, Async> {
         })
     }
 
+    /// Create a new DMA enabled UART with hardware flow control (RTS/CTS)
+    pub fn new_with_rtscts_buffer<T: Instance>(
+        _inner: Peri<'a, T>,
+        tx: Peri<'a, impl TxPin<T>>,
+        rx: Peri<'a, impl RxPin<T>>,
+        rts: Peri<'a, impl RtsPin<T>>,
+        cts: Peri<'a, impl CtsPin<T>>,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'a,
+        tx_dma: Peri<'a, impl TxDma<T>>,
+        rx_dma: Peri<'a, impl RxDma<T>>,
+        config: Config,
+        buffer: &'static mut [u8],
+        polling_rate_us: u64,
+    ) -> Result<Self> {
+        assert!(buffer.len() <= 1024);
+
+        tx.as_tx();
+        rx.as_rx();
+        rts.as_rts();
+        cts.as_cts();
+
+        let tx = tx.into();
+        let rx = rx.into();
+        let rts = rts.into();
+        let cts = cts.into();
+
+        let tx_dma = dma::Dma::reserve_channel(tx_dma);
+        let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
+
+        let flexcomm = Self::init::<T>(
+            Some(tx.into()),
+            Some(rx.into()),
+            Some(rts.into()),
+            Some(cts.into()),
+            config,
+        )?;
+        T::info().regs.fifocfg().modify(|_, w| w.dmarx().enabled());
+        // immediately configure and enable channel for circular buffered reception
+        rx_dma.configure_channel(
+            dma::transfer::Direction::PeripheralToMemory,
+            T::info().regs.fiford().as_ptr() as *const u8 as *const u32,
+            buffer as *mut [u8] as *mut u32,
+            buffer.len(),
+            dma::transfer::TransferOptions {
+                width: dma::transfer::Width::Bit8,
+                priority: dma::transfer::Priority::Priority0,
+                is_continuous: true,
+                is_sw_trig: true,
+            },
+        );
+        rx_dma.enable_channel();
+        rx_dma.trigger_channel();
+
+        Ok(Self {
+            info: T::info(),
+            tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
+            rx: UartRx::new_inner::<T>(
+                flexcomm,
+                Some(rx_dma),
+                Some(BufferConfig {
+                    buffer,
+                    write_index: 0,
+                    read_index: 0,
+                    polling_rate: polling_rate_us,
+                }),
+            ),
+        })
+    }
+
     /// Read from UART RX.
     pub fn read<'buf>(&mut self, buf: &'buf mut [u8]) -> impl Future<Output = Result<()>> + use<'_, 'a, 'buf> {
         self.rx.read(buf)
