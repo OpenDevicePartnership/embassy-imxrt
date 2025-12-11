@@ -18,11 +18,14 @@ async fn main(_spawner: Spawner) {
         let res = select(user1.wait_for_falling_edge(), user2.wait_for_falling_edge()).await;
 
         match res {
-            Either::First(()) => {
+            Either::First(Ok(())) => {
                 info!("Button `USER1' pressed");
             }
-            Either::Second(()) => {
+            Either::Second(Ok(())) => {
                 info!("Button `USER2' pressed");
+            }
+            _ => {
+                info!("GPIO error occurred");
             }
         }
     }
