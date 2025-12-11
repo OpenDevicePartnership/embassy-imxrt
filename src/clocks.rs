@@ -5,7 +5,7 @@ use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use defmt;
 use paste::paste;
 
-use crate::pac;
+use crate::{fsl_power, pac};
 
 /// Clock configuration;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,11 +39,11 @@ pub enum Clocks {
 pub struct ClockConfig {
     /// low-power oscillator config
     pub lposc: LposcConfig,
-    /// 16Mhz internal oscillator config
+    /// 16MHz internal oscillator config
     pub sfro: SfroConfig,
     /// Real Time Clock config
     pub rtc: RtcClkConfig,
-    /// 48/60 Mhz internal oscillator config
+    /// 48/60 MHz internal oscillator config
     pub ffro: FfroConfig,
     // pub pll: Option<PllPfdConfig>, //potentially covered in main pll clk
     /// External Clock-In config
@@ -68,6 +68,7 @@ impl ClockConfig {
         const CORE_CPU_FREQ: u32 = 500_000_000;
         const PLL_CLK_FREQ: u32 = 528_000_000;
         const SYS_CLK_FREQ: u32 = CORE_CPU_FREQ / 2;
+
         Self {
             lposc: LposcConfig {
                 state: State::Enabled,
@@ -117,6 +118,12 @@ impl ClockConfig {
             sys_osc: SysOscConfig { state: State::Enabled },
             //adc: Some(AdcConfig {}), // TODO: add config
         }
+    }
+}
+
+impl Default for ClockConfig {
+    fn default() -> Self {
+        Self::crystal()
     }
 }
 
@@ -240,7 +247,7 @@ pub struct RtcClkConfig {
 
 /// Valid FFRO Frequencies
 pub enum FfroFreq {
-    /// 48 Mhz Internal Oscillator
+    /// 48 MHz Internal Oscillator
     Ffro48m,
     /// 60 `MHz` Internal Oscillator
     Ffro60m,
@@ -440,6 +447,8 @@ pub enum ClockError {
     InvalidDiv,
     /// Error due to attempting to modify a clock output with an invalid multiplier
     InvalidMult,
+    /// Error due to attempting to set VDDCORE for an invalid frequency
+    VoltageSettingFailed,
 }
 
 /// Trait to configure one of the clocks
@@ -688,7 +697,7 @@ impl MultiSourceClock for MainPllClkConfig {
 
 impl ConfigurableClock for MainPllClkConfig {
     fn enable_and_reset(&self) -> Result<(), ClockError> {
-        MainPllClkConfig::init_syspll();
+        self.init_syspll();
 
         MainPllClkConfig::init_syspll_pfd0(self.pfd0);
 
@@ -851,7 +860,7 @@ impl MainPllClkConfig {
         }
     }
 
-    pub(self) fn init_syspll() {
+    pub(self) fn init_syspll(&self) {
         // SAFETY: unsafe needed to take pointers to Sysctl0 and Clkctl0
         let clkctl0 = unsafe { crate::pac::Clkctl0::steal() };
         let sysctl0 = unsafe { crate::pac::Sysctl0::steal() };
@@ -861,13 +870,38 @@ impl MainPllClkConfig {
             .pdruncfg0_set()
             .write(|w| w.syspllldo_pd().set_pdruncfg0().syspllana_pd().set_pdruncfg0());
 
-        clkctl0.syspll0clksel().write(|w| w.sel().ffro_div_2());
+        match self.src {
+            MainPllClkSrc::ClkIn => {
+                clkctl0.syspll0clksel().write(|w| w.sel().sysxtal_clk());
+            }
+            MainPllClkSrc::FFRO => {
+                // FFRO Clock is divided by 2
+                clkctl0.syspll0clksel().write(|w| w.sel().ffro_div_2());
+            }
+            MainPllClkSrc::SFRO => {
+                clkctl0.syspll0clksel().write(|w| w.sel().sfro_clk());
+            }
+        }
+
         // SAFETY: unsafe needed to write the bits for both num and denom
         clkctl0.syspll0num().write(|w| unsafe { w.num().bits(0x0) });
         clkctl0.syspll0denom().write(|w| unsafe { w.denom().bits(0x1) });
 
-        // kCLOCK_SysPllMult22
-        clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22());
+        // kCLOCK_SetSysPll<Mult>
+        // Use the mult defined in main pll config
+        // if invalid, use 22 as default instead of panicking as it's more desirable in production code
+        match self.mult.load(Ordering::Relaxed) {
+            16 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_16()),
+            17 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_17()),
+            20 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_20()),
+            22 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22()),
+            27 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_27()),
+            33 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_33()),
+            _ => {
+                warn!("Invalid SYSPLL multiplier, defaulting to 22");
+                clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22())
+            }
+        };
 
         // Clear System PLL reset
         clkctl0.syspll0ctl0().modify(|_, w| w.reset().normal());
@@ -890,7 +924,7 @@ impl MainPllClkConfig {
     /// enables default settings for pfd2 bits
     pub(self) fn init_syspll_pfd2(config_bits: u8) {
         // SAFETY: unsafe needed to take pointer to Clkctl0 and write specific bits
-        // needed to change the output of pfd0
+        // needed to change the output of pfd2
         let clkctl0 = unsafe { crate::pac::Clkctl0::steal() };
 
         // Disable the clock output first.
@@ -1538,6 +1572,23 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
     init_syscpuahb_clk(256);
 
     config.main_clk.enable_and_reset()?;
+
+    // From Table 23 of the data sheet, the low range (.8-1.0V) only applies if expected VDDCORE is <=1.0V
+    // 240MHz is the last entry at 1V, the next entry, 270MHz, says 1.1V
+    let volt_range = if config.main_clk.freq.load(Ordering::Relaxed) > 240_000_000 {
+        fsl_power::VoltOpRange::Full
+    } else {
+        fsl_power::VoltOpRange::Low
+    };
+
+    if !fsl_power::set_ldo_voltage_for_freq(
+        fsl_power::TempRange::TempN20CtoP85C,
+        volt_range,
+        config.main_clk.freq.load(Ordering::Relaxed),
+        0,
+    ) {
+        return Err(ClockError::VoltageSettingFailed);
+    }
 
     // Set divisor to final value.
     init_syscpuahb_clk(config.main_clk.div_int.load(Ordering::Relaxed) as u16);
