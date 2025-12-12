@@ -1036,6 +1036,7 @@ impl<'a> Uart<'a, Async> {
             rx: UartRx::new_inner::<T>(flexcomm, rx_dma, None),
         })
     }
+
     /// Create a new DMA enabled UART with Rx buffering enabled
     #[cfg(feature = "time")]
     pub fn new_async_with_buffer<T: Instance>(
@@ -1136,7 +1137,8 @@ impl<'a> Uart<'a, Async> {
         })
     }
 
-    /// Create a new DMA enabled UART with hardware flow control (RTS/CTS)
+    /// Create a new DMA enabled UART with hardware flow control (RTS/CTS) and Rx buffering enabled
+    #[cfg(feature = "time")]
     pub fn new_with_rtscts_buffer<T: Instance>(
         _inner: Peri<'a, T>,
         tx: Peri<'a, impl TxPin<T>>,
