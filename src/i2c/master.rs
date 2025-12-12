@@ -1082,28 +1082,6 @@ impl<M: Mode> embedded_hal_1::i2c::ErrorType for I2cMaster<'_, M> {
 
 // implement generic i2c interface for peripheral master type
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A> for I2cMaster<'_, Blocking> {
-    fn read(&mut self, address: A, read: &mut [u8]) -> Result<()> {
-        self.start(address.into(), true)?;
-        self.read_no_start_no_stop(read)?;
-        self.stop()
-    }
-
-    fn write(&mut self, address: A, write: &[u8]) -> Result<()> {
-        self.start(address.into(), false)?;
-        self.write_no_start_no_stop(write)?;
-        self.stop()
-    }
-
-    fn write_read(&mut self, address: A, write: &[u8], read: &mut [u8]) -> Result<()> {
-        let address = address.into();
-        self.start(address, false)?;
-        self.write_no_start_no_stop(write)?;
-        // Send repeated start
-        self.start(address, true)?;
-        self.read_no_start_no_stop(read)?;
-        self.stop()
-    }
-
     fn transaction(&mut self, address: A, operations: &mut [embedded_hal_1::i2c::Operation<'_>]) -> Result<()> {
         if operations.is_empty() {
             return Ok(());
@@ -1147,33 +1125,6 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A
 }
 
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I2c<A> for I2cMaster<'_, Async> {
-    async fn read(&mut self, address: A, read: &mut [u8]) -> Result<()> {
-        let guard = self.start(address.into(), true, None).await?;
-        self.read_no_start_no_stop(read).await?;
-        self.stop()?.await?;
-        guard.defuse();
-        Ok(())
-    }
-
-    async fn write(&mut self, address: A, write: &[u8]) -> Result<()> {
-        let guard = self.start(address.into(), false, None).await?;
-        self.write_no_start_no_stop(write).await?;
-        self.stop()?.await?;
-        guard.defuse();
-        Ok(())
-    }
-
-    async fn write_read(&mut self, address: A, write: &[u8], read: &mut [u8]) -> Result<()> {
-        let address = address.into();
-        let guard = self.start(address, false, None).await?;
-        self.write_no_start_no_stop(write).await?;
-        let guard = self.start(address, false, Some(guard)).await?;
-        self.read_no_start_no_stop(read).await?;
-        self.stop()?.await?;
-        guard.defuse();
-        Ok(())
-    }
-
     async fn transaction(&mut self, address: A, operations: &mut [embedded_hal_1::i2c::Operation<'_>]) -> Result<()> {
         if operations.is_empty() {
             return Ok(());

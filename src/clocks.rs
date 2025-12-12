@@ -1139,15 +1139,19 @@ impl ConfigurableClock for ClkInConfig {
         Err(ClockError::ClockNotSupported)
     }
     fn get_clock_rate(&self) -> Result<u32, ClockError> {
-        if self.freq.is_some() {
-            Ok(self.freq.as_ref().unwrap().load(Ordering::Relaxed))
+        if let Some(cur_freq) = &self.freq {
+            Ok(cur_freq.load(Ordering::Relaxed))
         } else {
             Err(ClockError::ClockNotEnabled)
         }
     }
     fn set_clock_rate(&mut self, _div: u8, _mult: u8, freq: u32) -> Result<(), ClockError> {
-        self.freq.as_ref().unwrap().store(freq, Ordering::Relaxed);
-        Ok(())
+        if let Some(cur_freq) = &self.freq {
+            cur_freq.store(freq, Ordering::Relaxed);
+            Ok(())
+        } else {
+            Err(ClockError::ClockNotEnabled)
+        }
     }
     fn is_enabled(&self) -> bool {
         self.state == State::Enabled
