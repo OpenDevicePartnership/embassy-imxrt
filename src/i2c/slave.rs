@@ -255,8 +255,8 @@ impl<'a> I2cSlave<'a, Async> {
     ) -> Result<Self> {
         let ch = dma::Dma::reserve_channel(dma_ch);
 
-        if ch.is_some() {
-            let this = Self::new_inner::<T>(_bus, scl, sda, address, Some(ch.unwrap()))?;
+        if let Some(ch) = ch {
+            let this = Self::new_inner::<T>(_bus, scl, sda, address, Some(ch))?;
 
             T::Interrupt::unpend();
             unsafe { T::Interrupt::enable() };
