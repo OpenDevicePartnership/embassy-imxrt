@@ -717,7 +717,9 @@ impl<'a> UartRx<'a, Async> {
         buffer: &'static mut [u8],
         polling_rate_us: u64,
     ) -> Result<Self> {
-        assert!(buffer.len() <= 1024);
+        if buffer.len() > 1024 {
+            return Err(Error::InvalidArgument);
+        }
 
         rx.as_rx();
 
@@ -727,7 +729,7 @@ impl<'a> UartRx<'a, Async> {
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
 
-        let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
+        let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::InvalidArgument)?;
         T::info().regs.fifocfg().modify(|_, w| w.dmarx().enabled());
         // immediately configure and enable channel for circular buffered reception
         rx_dma.configure_channel(
@@ -1047,18 +1049,18 @@ impl<'a> Uart<'a, Async> {
         buffer: &'static mut [u8],
         polling_rate_us: u64,
     ) -> Result<Self> {
-        use mimxrt633s_pac::flexspi::iprxfcr::Rxdmaen;
-
-        assert!(buffer.len() <= 1024);
+        if buffer.len() > 1024 {
+            return Err(Error::InvalidArgument);
+        }
 
         tx.as_tx();
         rx.as_rx();
 
-        let mut tx = tx.into();
-        let mut rx = rx.into();
+        let tx = tx.into();
+        let rx = rx.into();
 
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
-        let rx_dma: Channel<'_> = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
+        let rx_dma: Channel<'_> = dma::Dma::reserve_channel(rx_dma).ok_or(Error::InvalidArgument)?;
 
         let flexcomm = Self::init::<T>(Some(tx.into()), Some(rx.into()), None, None, config)?;
         T::info().regs.fifocfg().modify(|_, w| w.dmarx().enabled());
@@ -1148,7 +1150,9 @@ impl<'a> Uart<'a, Async> {
         buffer: &'static mut [u8],
         polling_rate_us: u64,
     ) -> Result<Self> {
-        assert!(buffer.len() <= 1024);
+        if buffer.len() > 1024 {
+            return Err(Error::InvalidArgument);
+        }
 
         tx.as_tx();
         rx.as_rx();
@@ -1161,7 +1165,7 @@ impl<'a> Uart<'a, Async> {
         let cts = cts.into();
 
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
-        let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
+        let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::InvalidArgument)?;
 
         let flexcomm = Self::init::<T>(
             Some(tx.into()),
