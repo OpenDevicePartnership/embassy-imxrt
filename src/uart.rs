@@ -861,7 +861,7 @@ impl<'a> UartRx<'a, Async> {
         while bytes_read < buf.len() {
             if rx_dma.is_active() {
                 let mut remaining_bytes = rx_dma.get_xfer_count() as usize;
-                remaining_bytes = remaining_bytes + 1;
+                remaining_bytes += 1;
 
                 if remaining_bytes > buffer_config.buffer.len() {
                     return Err(Error::InvalidArgument);
@@ -1140,6 +1140,7 @@ impl<'a> Uart<'a, Async> {
 
     /// Create a new DMA enabled UART with hardware flow control (RTS/CTS) and Rx buffering enabled
     #[cfg(feature = "time")]
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_rtscts_buffer<T: Instance>(
         _inner: Peri<'a, T>,
         tx: Peri<'a, impl TxPin<T>>,
