@@ -1,11 +1,11 @@
 #![no_std]
 #![no_main]
 
-use defmt::{info, unwrap};
+use defmt::info;
 use embassy_executor::Spawner;
 use embassy_imxrt::rng::Rng;
 use embassy_imxrt::{bind_interrupts, peripherals, rng};
-use rand::RngCore;
+use rand::TryRngCore;
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
@@ -20,19 +20,45 @@ async fn main(_spawner: Spawner) {
     let mut rng = Rng::new(p.RNG, Irqs);
     let mut buf = [0u8; 65];
 
+    let mut count = 0;
+
     // Async interface
-    unwrap!(rng.async_fill_bytes(&mut buf).await);
-    info!("random bytes: {:02x}", buf);
+    while rng.async_fill_bytes(&mut buf).await.is_err() {
+        count += 1;
+    }
+    info!("random bytes: {:02x} (succeeded after {} retries)", buf, count);
 
     // RngCore interface
     let mut random_bytes = [0; 16];
 
-    let random_u32 = rng.next_u32();
-    let random_u64 = rng.next_u64();
+    count = 0;
+    let random_u32 = loop {
+        match rng.try_next_u32() {
+            Ok(r) => break r,
+            Err(_) => {
+                count += 1;
+            }
+        }
+    };
 
-    rng.fill_bytes(&mut random_bytes);
+    info!("random_u32 {} (succeeded after {} retries)", random_u32, count);
 
-    info!("random_u32 {}", random_u32);
-    info!("random_u64 {}", random_u64);
-    info!("random_bytes {}", random_bytes);
+    count = 0;
+    let random_u64 = loop {
+        match rng.try_next_u64() {
+            Ok(r) => break r,
+            Err(_) => {
+                count += 1;
+            }
+        }
+    };
+
+    info!("random_u64 {} (succeeded after {} retries)", random_u64, count);
+
+    count = 0;
+    while rng.try_fill_bytes(&mut random_bytes).is_err() {
+        count += 1;
+    }
+
+    info!("random_bytes {} (succeeded after {} retries)", random_u64, count);
 }

@@ -56,6 +56,6 @@ embedded-mcu-hal = { git = "https://github.com/OpenDevicePartnership/embedded-mc
 ] }
 
 chrono = { version = "^0.4", default-features = false}
-rand = { version = "0.8.5", default-features = false }
+rand = { version = "0.9", default-features = false }
 keyberon = { git = "https://github.com/TeXitoi/keyberon" }
 static_cell = { version = "2" }
