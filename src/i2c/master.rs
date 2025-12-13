@@ -49,41 +49,44 @@ fn get_freq_hz(hi_clocks: u8, lo_clocks: u8, clock_div_multiplier: u16, clock_sp
 // neither the type nor the trait are defined in our crate.  Therefore, we define this Into-like trait and
 // use that instead.
 //
-trait ToClocksEnum<DestT> {
-    fn to_clocks_enum(&self) -> Option<DestT>;
+trait ToClocksEnum<DestT>: Sized {
+    type Error;
+    fn to_clocks_enum(self) -> Result<DestT>;
 }
 
 const MIN_CLOCKS: u8 = 2;
 const MAX_CLOCKS: u8 = 9;
 
 impl ToClocksEnum<Mstscllow> for u8 {
-    fn to_clocks_enum(&self) -> Option<Mstscllow> {
-        match *self {
-            2 => Some(Mstscllow::Clocks2),
-            3 => Some(Mstscllow::Clocks3),
-            4 => Some(Mstscllow::Clocks4),
-            5 => Some(Mstscllow::Clocks5),
-            6 => Some(Mstscllow::Clocks6),
-            7 => Some(Mstscllow::Clocks7),
-            8 => Some(Mstscllow::Clocks8),
-            9 => Some(Mstscllow::Clocks9),
-            _ => None,
+    type Error = Error;
+    fn to_clocks_enum(self) -> Result<Mstscllow> {
+        match self {
+            2 => Ok(Mstscllow::Clocks2),
+            3 => Ok(Mstscllow::Clocks3),
+            4 => Ok(Mstscllow::Clocks4),
+            5 => Ok(Mstscllow::Clocks5),
+            6 => Ok(Mstscllow::Clocks6),
+            7 => Ok(Mstscllow::Clocks7),
+            8 => Ok(Mstscllow::Clocks8),
+            9 => Ok(Mstscllow::Clocks9),
+            _ => Err(Error::UnsupportedConfiguration),
         }
     }
 }
 
 impl ToClocksEnum<Mstsclhigh> for u8 {
-    fn to_clocks_enum(&self) -> Option<Mstsclhigh> {
-        match *self {
-            2 => Some(Mstsclhigh::Clocks2),
-            3 => Some(Mstsclhigh::Clocks3),
-            4 => Some(Mstsclhigh::Clocks4),
-            5 => Some(Mstsclhigh::Clocks5),
-            6 => Some(Mstsclhigh::Clocks6),
-            7 => Some(Mstsclhigh::Clocks7),
-            8 => Some(Mstsclhigh::Clocks8),
-            9 => Some(Mstsclhigh::Clocks9),
-            _ => None,
+    type Error = Error;
+    fn to_clocks_enum(self) -> Result<Mstsclhigh> {
+        match self {
+            2 => Ok(Mstsclhigh::Clocks2),
+            3 => Ok(Mstsclhigh::Clocks3),
+            4 => Ok(Mstsclhigh::Clocks4),
+            5 => Ok(Mstsclhigh::Clocks5),
+            6 => Ok(Mstsclhigh::Clocks6),
+            7 => Ok(Mstsclhigh::Clocks7),
+            8 => Ok(Mstsclhigh::Clocks8),
+            9 => Ok(Mstsclhigh::Clocks9),
+            _ => Err(Error::UnsupportedConfiguration),
         }
     }
 }
@@ -142,12 +145,8 @@ impl SpeedRegisterSettings {
         //
         const CLOCK_DIV_MULTIPLIER_OFFSET: u16 = 1;
         Ok(Self {
-            scl_high_clocks: result_clocks_hi
-                .to_clocks_enum()
-                .ok_or(Error::UnsupportedConfiguration)?,
-            scl_low_clocks: result_clocks_lo
-                .to_clocks_enum()
-                .ok_or(Error::UnsupportedConfiguration)?,
+            scl_high_clocks: result_clocks_hi.to_clocks_enum()?,
+            scl_low_clocks: result_clocks_lo.to_clocks_enum()?,
             clock_div_multiplier: result_div_multiplier - CLOCK_DIV_MULTIPLIER_OFFSET,
             _actual_freq_hz: CLOCK_SPEED_HZ
                 / (u32::from(result_clocks_hi + result_clocks_lo) * u32::from(result_div_multiplier)),
@@ -1089,17 +1088,15 @@ impl<M: Mode> embedded_hal_1::i2c::ErrorType for I2cMaster<'_, M> {
 // implement generic i2c interface for peripheral master type
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A> for I2cMaster<'_, Blocking> {
     fn transaction(&mut self, address: A, operations: &mut [embedded_hal_1::i2c::Operation<'_>]) -> Result<()> {
-        if operations.is_empty() {
+        let Some(first_operation) = operations.first() else {
             return Ok(());
-        }
+        };
 
         // Send beginning start
         let address = address.into();
         self.start(
             address,
-            #[allow(clippy::indexing_slicing)]
-            // Panic Safety: checked for empty above
-            match operations[0] {
+            match first_operation {
                 embedded_hal_1::i2c::Operation::Read(_) => true,
                 embedded_hal_1::i2c::Operation::Write(_) => false,
             },
@@ -1134,18 +1131,16 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A
 
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I2c<A> for I2cMaster<'_, Async> {
     async fn transaction(&mut self, address: A, operations: &mut [embedded_hal_1::i2c::Operation<'_>]) -> Result<()> {
-        if operations.is_empty() {
+        let Some(first_operation) = operations.first() else {
             return Ok(());
-        }
+        };
 
         // Send beginning start
         let address = address.into();
         let mut guard = Some(
             self.start(
                 address,
-                #[allow(clippy::indexing_slicing)]
-                // Panic Safety: checked for empty above
-                match operations[0] {
+                match first_operation {
                     embedded_hal_1::i2c::Operation::Read(_) => true,
                     embedded_hal_1::i2c::Operation::Write(_) => false,
                 },
