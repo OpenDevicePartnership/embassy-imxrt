@@ -1571,8 +1571,6 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
     // Increase divisor to safe value.
     init_syscpuahb_clk(256);
 
-    config.main_clk.enable_and_reset()?;
-
     // From Table 23 of the data sheet, the low range (.8-1.0V) only applies if expected VDDCORE is <=1.0V
     // 240MHz is the last entry at 1V, the next entry, 270MHz, says 1.1V
     let volt_range = if config.main_clk.freq.load(Ordering::Relaxed) > 240_000_000 {
@@ -1581,6 +1579,7 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
         fsl_power::VoltOpRange::Low
     };
 
+    // Set the core voltage based on the desired main clock frequency BEFORE enabling the main clock
     if !fsl_power::set_ldo_voltage_for_freq(
         fsl_power::TempRange::TempN20CtoP85C,
         volt_range,
@@ -1589,6 +1588,9 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
     ) {
         return Err(ClockError::VoltageSettingFailed);
     }
+
+    // Now that voltage is set, we can enable the main clock
+    config.main_clk.enable_and_reset()?;
 
     // Set divisor to final value.
     init_syscpuahb_clk(config.main_clk.div_int.load(Ordering::Relaxed) as u16);
