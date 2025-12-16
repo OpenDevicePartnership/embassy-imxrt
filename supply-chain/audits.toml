@@ -38,10 +38,25 @@ who = "Felipe Balbi <febalbi@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "0.5.0"
 
+[[audits.num_enum]]
+who = "Billy Price <williamp@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "0.7.5"
+
+[[audits.num_enum_derive]]
+who = "Billy Price <williamp@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "0.7.5"
+
 [[audits.rand_core]]
 who = "Felipe Balbi <febalbi@microsoft.com>"
 criteria = "safe-to-deploy"
 delta = "0.6.4 -> 0.9.3"
+
+[[audits.rustversion]]
+who = "Billy Price <williamp@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.20 -> 1.0.22"
 
 [[audits.static_cell]]
 who = "jerrysxie <jerryxie@microsoft.com>"

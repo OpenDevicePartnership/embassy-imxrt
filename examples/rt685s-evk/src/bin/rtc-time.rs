@@ -5,7 +5,7 @@ use defmt::info;
 use embassy_executor::Spawner;
 use embassy_imxrt::rtc::Rtc;
 use embassy_time::Timer;
-use embedded_mcu_hal::time::{Datetime, DatetimeClock, UncheckedDatetime};
+use embedded_mcu_hal::time::{Datetime, DatetimeClock, Month, UncheckedDatetime};
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 #[embassy_executor::main]
@@ -20,7 +20,7 @@ async fn main(_spawner: Spawner) {
     {
         let datetime = Datetime::new(UncheckedDatetime {
             year: 2024,
-            month: 10,
+            month: Month::December,
             day: 4,
             hour: 16,
             ..Default::default()
