@@ -1,6 +1,12 @@
 //! This module provides voltage scaling and frequency management for iMX RT600 series MCUs.
 //! It includes lookup tables for supported CPU and DSP frequencies at different voltage levels,
 //! and functions to calculate appropriate LDO voltage settings based on target frequencies.
+//!
+//! Portions
+//! * Copyright 2018-2021, 2023 NXP
+//! * All rights reserved.
+//! *
+//! * SPDX-License-Identifier: BSD-3-Clause
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -133,12 +139,79 @@ pub fn get_body_bias_mode() -> BodyBiasMode {
 /// Enter Forward Body Bias (FBB) mode
 ///
 /// FBB increases performance at the cost of higher leakage power.
-/// Typically used in high-performance operating modes.
+/// This function performs sets the chip to sleep to safely switch body bias modes then wakes again.
+///
+/// # Safety
+/// This function uses WFI (Wait For Interrupt) and manipulates power domain configurations.
+/// It must be called from a context where interrupts can be safely managed.
 pub fn enter_fbb(pmc: &crate::pac::Pmc) {
-    // Set FBB enable bit in RUNCTRL register (bit 14)
-    // Clear RBB bit (bit 13) if set
-    pmc.runctrl()
-        .modify(|r, w| unsafe { w.bits((r.bits() & !(1 << 13)) | (1 << 14)) });
+    use cortex_m::peripheral::SCB;
+
+    critical_section::with(|_cs| {
+        // # Safety: We're in a critical section
+        let sysctl0 = unsafe { crate::pac::Sysctl0::steal() };
+        let scb = unsafe { &*SCB::PTR };
+
+        // Save current PMC CTRL state
+        let pmc_ctrl = pmc.ctrl().read().bits();
+
+        // Enable deep sleep mode (set SLEEPDEEP bit in SCR)
+        const SCB_SCR_SLEEPDEEP: u32 = 1 << 2;
+        // # Safety: Unsafe required to modify SCR register to set SLEEPDEEP bit
+        unsafe { scb.scr.modify(|v| v | SCB_SCR_SLEEPDEEP) };
+
+        // Configure power domains for sleep: MAINCLK_SHUTOFF=1, FBB_PD=0 (keep FBB powered)
+        let pdsleepcfg0 = (sysctl0.pdruncfg0().read().bits()
+            | (1 << 20)) // MAINCLK_SHUTOFF_MASK
+            & !(1 << 17); // ~FBB_PD_MASK - keep FBB powered during sleep
+
+        sysctl0.pdsleepcfg0().write(|w| unsafe { w.bits(pdsleepcfg0) });
+        sysctl0
+            .pdsleepcfg1()
+            .write(|w| unsafe { w.bits(sysctl0.pdruncfg1().read().bits()) });
+        sysctl0
+            .pdsleepcfg2()
+            .write(|w| unsafe { w.bits(sysctl0.pdruncfg2().read().bits()) });
+        sysctl0
+            .pdsleepcfg3()
+            .write(|w| unsafe { w.bits(sysctl0.pdruncfg3().read().bits()) });
+
+        // PDWAKECFG: Keep FBB state after wake (FBBKEEPST_MASK = bit 17)
+        sysctl0.pdwakecfg().write(|w| unsafe { w.bits(1 << 17) });
+
+        // Set auto-wakeup timer (0x800 counts at 16MHz = ~128µs)
+        pmc.autowkup().write(|w| unsafe { w.bits(0x800) });
+
+        // Configure PMC: enable auto-wakeup, disable LVD during transition
+        pmc.ctrl().write(|w| unsafe {
+            w.bits(
+                (pmc_ctrl | (1 << 15)) // AUTOWKEN_MASK
+                & !(0x0000_0300),
+            ) // ~(LVDCORERE_MASK | LVDCOREIE_MASK)
+        });
+
+        // Enable PMC interrupt for auto-wake (IRQ 49, bit 49-32=17 in STARTEN1)
+        sysctl0.starten1_set().write(|w| unsafe { w.bits(1 << 17) });
+
+        // Execute WFI - will wake automatically via PMC timer
+        cortex_m::asm::wfi();
+
+        // Restore PMC CTRL
+        pmc.ctrl().write(|w| unsafe { w.bits(pmc_ctrl) });
+
+        // Clear auto-wake flag
+        pmc.flags().write(|w| w.autowkf().set_bit());
+
+        // Disable PMC start event
+        sysctl0.starten1_clr().write(|w| unsafe { w.bits(1 << 17) });
+
+        // Clear PDWAKECFG
+        sysctl0.pdwakecfg().write(|w| unsafe { w.bits(0) });
+
+        // Disable deep sleep (clear SLEEPDEEP bit in SCR)
+        // # Safety: Unsafe required to modify SCR register to clear SLEEPDEEP bit
+        unsafe { scb.scr.modify(|v| v & !SCB_SCR_SLEEPDEEP) };
+    });
 }
 
 /// LVD falling trip voltage values
@@ -253,8 +326,11 @@ pub fn set_ldo_voltage_for_freq(
     critical_section::with(|_cs| {
         // SAFETY: This critical section ensures exclusive access to PMC
         let pmc = unsafe { crate::pac::Pmc::steal() };
-        // Enter FBB mode for optimal performance
-        enter_fbb(&pmc);
+
+        // Enter FBB mode if not already in FBB
+        if get_body_bias_mode() != BodyBiasMode::Fbb {
+            enter_fbb(&pmc);
+        }
 
         let idx = temp_range as usize;
         if idx >= 2 {
