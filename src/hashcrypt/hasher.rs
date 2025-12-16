@@ -5,6 +5,7 @@ use core::task::Poll;
 
 use embassy_futures::select::select;
 
+use super::Error;
 use super::{Async, Blocking, Hashcrypt, Mode};
 use crate::dma;
 use crate::dma::transfer::{Transfer, Width};
@@ -34,18 +35,26 @@ impl<'d, 'a, M: Mode> Hasher<'d, 'a, M> {
         }
     }
 
-    fn init_final_data(&self, data: &[u8], buffer: &mut [u8; BLOCK_LEN]) {
-        buffer[..data.len()].copy_from_slice(data);
-        buffer[data.len()] = END_BYTE;
+    fn init_final_data(&self, data: &[u8], buffer: &mut [u8; BLOCK_LEN]) -> Result<(), Error> {
+        buffer
+            .get_mut(..data.len())
+            .ok_or(Error::UnsupportedConfiguration)?
+            .copy_from_slice(data);
+        *buffer.get_mut(data.len()).ok_or(Error::UnsupportedConfiguration)? = END_BYTE;
+        Ok(())
     }
 
-    fn init_final_block(&self, data: &[u8], buffer: &mut [u8; BLOCK_LEN]) {
-        self.init_final_data(data, buffer);
-        self.init_final_len(buffer);
+    fn init_final_block(&self, data: &[u8], buffer: &mut [u8; BLOCK_LEN]) -> Result<(), Error> {
+        self.init_final_data(data, buffer)?;
+        self.init_final_len(buffer)
     }
 
-    fn init_final_len(&self, buffer: &mut [u8; BLOCK_LEN]) {
-        buffer[BLOCK_LEN - 8..BLOCK_LEN].copy_from_slice(&(8 * self.written as u64).to_be_bytes());
+    fn init_final_len(&self, buffer: &mut [u8; BLOCK_LEN]) -> Result<(), Error> {
+        buffer
+            .get_mut(BLOCK_LEN - 8..BLOCK_LEN)
+            .ok_or(Error::UnsupportedConfiguration)?
+            .copy_from_slice(&(8 * self.written as u64).to_be_bytes());
+        Ok(())
     }
 
     fn wait_for_digest(&self) {
@@ -68,56 +77,64 @@ impl<'d, 'a> Hasher<'d, 'a, Blocking> {
 
     fn transfer_block(&mut self, data: &[u8; BLOCK_LEN]) {
         for word in data.chunks(4) {
-            self.hashcrypt
-                .hashcrypt
-                .indata()
-                .write(|w| unsafe { w.data().bits(u32::from_le_bytes([word[0], word[1], word[2], word[3]])) });
+            self.hashcrypt.hashcrypt.indata().write(|w| unsafe {
+                #[allow(clippy::indexing_slicing)]
+                // panic safety: word is always 4 bytes and BLOCK_LEN is multiple of 4
+                w.data().bits(u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+            });
         }
         self.wait_for_digest();
     }
 
     /// Submit one or more blocks of data to the hasher, data must be a multiple of the block length
-    pub fn submit_blocks(&mut self, data: &[u8]) {
+    pub fn submit_blocks(&mut self, data: &[u8]) -> Result<(), Error> {
         if data.is_empty() || !data.len().is_multiple_of(BLOCK_LEN) {
-            panic!("Invalid data length");
+            return Err(Error::UnsupportedConfiguration);
         }
 
         for block in data.chunks(BLOCK_LEN) {
+            #[allow(clippy::unwrap_used)] // panic safety: block is always BLOCK_LEN bytes with check above
             self.transfer_block(block.try_into().unwrap());
         }
         self.written += data.len();
+        Ok(())
     }
 
     /// Submits the final data for hashing
-    pub fn finalize(mut self, data: &[u8], hash: &mut [u8; HASH_LEN]) {
+    pub fn finalize(mut self, data: &[u8], hash: &mut [u8; HASH_LEN]) -> Result<(), Error> {
         let mut buffer = [0u8; BLOCK_LEN];
 
         self.written += data.len();
         if data.len() <= LAST_BLOCK_MAX_DATA {
             // Only have one final block
-            self.init_final_block(data, &mut buffer);
+            self.init_final_block(data, &mut buffer)?;
             self.transfer_block(&buffer);
         } else {
             //End byte and padding won't fit in this block, submit this block and an extra one
-            self.init_final_data(data, &mut buffer);
+            self.init_final_data(data, &mut buffer)?;
             self.transfer_block(&buffer);
 
             buffer.fill(0);
-            self.init_final_len(&mut buffer);
+            self.init_final_len(&mut buffer)?;
             self.transfer_block(&buffer);
         }
 
         self.read_hash(hash);
+
+        Ok(())
     }
 
     /// Computes the hash of the given data
-    pub fn hash(mut self, data: &[u8], hash: &mut [u8; HASH_LEN]) {
-        let full_blocks = data.len() / BLOCK_LEN;
+    pub fn hash(mut self, data: &[u8], hash: &mut [u8; HASH_LEN]) -> Result<(), Error> {
+        let mut iter = data.chunks_exact(BLOCK_LEN);
 
-        if full_blocks > 0 {
-            self.submit_blocks(&data[0..full_blocks * BLOCK_LEN]);
+        for block in &mut iter {
+            self.submit_blocks(block)?;
         }
-        self.finalize(&data[full_blocks * BLOCK_LEN..], hash);
+
+        self.finalize(iter.remainder(), hash)?;
+
+        Ok(())
     }
 }
 
@@ -127,7 +144,7 @@ impl<'d, 'a> Hasher<'d, 'a, Async> {
         Self::new_inner(hashcrypt)
     }
 
-    async fn transfer(&mut self, data: &[u8]) {
+    async fn transfer(&mut self, data: &[u8]) -> Result<(), Error> {
         if data.is_empty() || !data.len().is_multiple_of(BLOCK_LEN) {
             panic!("Invalid data length");
         }
@@ -138,7 +155,7 @@ impl<'d, 'a> Hasher<'d, 'a, Async> {
         };
 
         let transfer = Transfer::new_write(
-            self.hashcrypt.dma_ch.as_ref().unwrap(),
+            self.hashcrypt.dma_ch.as_ref().ok_or(Error::UnsupportedConfiguration)?,
             data,
             self.hashcrypt.hashcrypt.indata().as_ptr() as *mut u8,
             options,
@@ -170,43 +187,47 @@ impl<'d, 'a> Hasher<'d, 'a, Async> {
             Poll::Pending
         })
         .await;
+
+        Ok(())
     }
 
     /// Submit one or more blocks of data to the hasher, data must be a multiple of the block length
-    pub async fn submit_blocks(&mut self, data: &[u8]) {
-        self.transfer(data).await;
+    pub async fn submit_blocks(&mut self, data: &[u8]) -> Result<(), Error> {
+        self.transfer(data).await?;
         self.written += data.len();
+        Ok(())
     }
 
     /// Submits the final data for hashing
-    pub async fn finalize(mut self, data: &[u8], hash: &mut [u8; HASH_LEN]) {
+    pub async fn finalize(mut self, data: &[u8], hash: &mut [u8; HASH_LEN]) -> Result<(), Error> {
         let mut buffer = [0u8; BLOCK_LEN];
 
         self.written += data.len();
         if data.len() <= LAST_BLOCK_MAX_DATA {
             // Only have one final block
-            self.init_final_block(data, &mut buffer);
-            self.transfer(&buffer).await;
+            self.init_final_block(data, &mut buffer)?;
+            self.transfer(&buffer).await?;
         } else {
             //End byte and padding won't fit in this block, submit this block and an extra one
-            self.init_final_data(data, &mut buffer);
-            self.transfer(&buffer).await;
-
+            self.init_final_data(data, &mut buffer)?;
+            self.transfer(&buffer).await?;
             buffer.fill(0);
-            self.init_final_len(&mut buffer);
-            self.transfer(&buffer).await;
+            self.init_final_len(&mut buffer)?;
+            self.transfer(&buffer).await?;
         }
 
         self.read_hash(hash);
+        Ok(())
     }
 
     /// Computes the hash of the given data
-    pub async fn hash(mut self, data: &[u8], hash: &mut [u8; HASH_LEN]) {
-        let full_blocks = data.len() / BLOCK_LEN;
+    pub async fn hash(mut self, data: &[u8], hash: &mut [u8; HASH_LEN]) -> Result<(), Error> {
+        let mut iter = data.chunks_exact(BLOCK_LEN);
 
-        if full_blocks > 0 {
-            self.submit_blocks(&data[0..full_blocks * BLOCK_LEN]).await;
+        for block in &mut iter {
+            self.submit_blocks(block).await?;
         }
-        self.finalize(&data[full_blocks * BLOCK_LEN..], hash).await;
+
+        self.finalize(iter.remainder(), hash).await
     }
 }
