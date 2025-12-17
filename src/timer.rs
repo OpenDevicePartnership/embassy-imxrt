@@ -18,7 +18,7 @@ const CHANNEL_PER_MODULE: usize = 4;
 const PWM_PRECISION_CLK_TICKS_PER_PERIOD: u32 = 500;
 
 /// Enum representing timer channels
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum TimerChannelNum {
     /// Timer channel 0
     Channel0,
@@ -28,6 +28,17 @@ pub enum TimerChannelNum {
     Channel2,
     /// Timer channel 3
     Channel3,
+}
+
+impl From<TimerChannelNum> for usize {
+    fn from(channel: TimerChannelNum) -> Self {
+        match channel {
+            TimerChannelNum::Channel0 => 0,
+            TimerChannelNum::Channel1 => 1,
+            TimerChannelNum::Channel2 => 2,
+            TimerChannelNum::Channel3 => 3,
+        }
+    }
 }
 
 // Enum representing timer type
@@ -105,13 +116,6 @@ pub enum TriggerInput {
     TrigIn24,
 }
 
-const TIMER_CHANNELS_ARR: [TimerChannelNum; CHANNEL_PER_MODULE] = [
-    TimerChannelNum::Channel0,
-    TimerChannelNum::Channel1,
-    TimerChannelNum::Channel2,
-    TimerChannelNum::Channel3,
-];
-
 #[derive(PartialEq, Clone, Copy)]
 /// Enum representing the edge type for capture channels.
 pub enum CaptureChEdge {
@@ -163,7 +167,7 @@ struct Info {
     waker: &'static AtomicWaker,
     timer_type: TimerType,
     module: usize,
-    channel: usize,
+    channel: TimerChannelNum,
 }
 
 // SAFETY: safety for Send here is the same as the other accessors to unsafe blocks: it must be done from a single executor context.
@@ -189,7 +193,7 @@ pub struct InterruptHandler<T: Instance> {
 
 impl Info {
     // Called from ISR to potentially wake us if given the proper timer type and channel
-    fn wake(&self, timer_type: TimerType, channel: usize) {
+    fn wake(&self, timer_type: TimerType, channel: TimerChannelNum) {
         if self.timer_type == timer_type && self.channel == channel {
             self.waker.wake();
         }
@@ -197,8 +201,7 @@ impl Info {
 
     fn cap_timer_interrupt_enable(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0i().set_bit());
             }
@@ -215,8 +218,7 @@ impl Info {
     }
     fn input_event_captured(&self) -> bool {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => reg.ccr().read().cap0i().bit_is_clear(),
             TimerChannelNum::Channel1 => reg.ccr().read().cap1i().bit_is_clear(),
             TimerChannelNum::Channel2 => reg.ccr().read().cap2i().bit_is_clear(),
@@ -226,8 +228,7 @@ impl Info {
 
     fn cap_timer_interrupt_disable(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0i().clear_bit());
             }
@@ -244,8 +245,7 @@ impl Info {
     }
     fn cap_timer_enable_rising_edge_event(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0re().set_bit());
             }
@@ -262,8 +262,7 @@ impl Info {
     }
     fn cap_timer_enable_falling_edge_event(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0fe().set_bit());
             }
@@ -280,8 +279,7 @@ impl Info {
     }
     fn cap_timer_disable_rising_edge_event(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0re().clear_bit());
             }
@@ -298,8 +296,7 @@ impl Info {
     }
     fn cap_timer_disable_falling_edge_event(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0fe().clear_bit());
             }
@@ -316,8 +313,7 @@ impl Info {
     }
     fn count_timer_enable_interrupt(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.mcr().modify(|_, w| w.mr0i().set_bit());
             }
@@ -334,8 +330,7 @@ impl Info {
     }
     fn count_timer_disable_interrupt(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.mcr().modify(|_, w| w.mr0i().clear_bit());
             }
@@ -353,9 +348,8 @@ impl Info {
 
     fn has_count_timer_expired(&self) -> bool {
         let reg = self.regs;
-        let channel = self.channel;
 
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => reg.mcr().read().mr0i().bit_is_clear(),
             TimerChannelNum::Channel1 => reg.mcr().read().mr1i().bit_is_clear(),
             TimerChannelNum::Channel2 => reg.mcr().read().mr2i().bit_is_clear(),
@@ -367,7 +361,7 @@ impl Info {
         // SAFETY: This has no safety impact as we are getting a singleton register instance here and its dropped it the end of the function
         let reg = unsafe { Clkctl1::steal() };
 
-        let clksel = reg.ct32bitfclksel(self.channel).read().sel().variant();
+        let clksel = reg.ct32bitfclksel(self.channel.into()).read().sel().variant();
         let mut freq: u32 = 0;
 
         if let Some(clk) = clksel {
@@ -398,12 +392,12 @@ impl Info {
         let len_channel = self.channel;
 
         // Use length channel to set PWM cycle length
-        reg.mr(len_channel).write(|w|
+        reg.mr(len_channel.into()).write(|w|
             //SAFETY: No safety impact as we are writing match register here
             unsafe { w.match_().bits(period) });
 
         // Set MRnR bit to enable timer reset for register setting PWM length
-        match TIMER_CHANNELS_ARR[len_channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.mcr().modify(|_, w| w.mr0r().set_bit());
             }
@@ -434,7 +428,7 @@ macro_rules! impl_instance {
                         waker: &WAKER,
                         timer_type: TimerType::Count,
                         module: $n,
-                        channel: $channel,
+                        channel: TimerChannelNum::[<Channel $channel>],
                     }
                 }
             }
@@ -449,7 +443,7 @@ macro_rules! impl_instance {
                         waker: &WAKER,
                         timer_type: TimerType::Capture,
                         module: $n,
-                        channel: $channel,
+                        channel: TimerChannelNum::[<Channel $channel>],
                     }
                 }
             }
@@ -548,7 +542,7 @@ impl<M: Mode, P: CaptureEvent> CaptureTimer<'_, M, P> {
 
         inputmux
             .ct32bit_cap(module)
-            .ct32bit_cap_sel(channel)
+            .ct32bit_cap_sel(channel.into())
             .modify(|_, w| w.capn_sel().variant(self.event_pin.get_trigger_input().into()));
 
         self.reset_and_enable();
@@ -602,7 +596,7 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
             self.info.waker.register(cx.waker());
 
             if self.info.input_event_captured() {
-                let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                let curr_event_clock_count = reg.cr(self.info.channel.into()).read().bits();
                 let prev_event_clock_count = self.event_clock_counts;
                 if curr_event_clock_count < prev_event_clock_count {
                     self.event_clock_counts = (u32::MAX - prev_event_clock_count) + curr_event_clock_count + 1_u32;
@@ -631,13 +625,13 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
             if self.info.input_event_captured() {
                 // First time capture, store data into timer hist and reenable interrupt
                 if !first_captured {
-                    timer_hist = reg.cr(self.info.channel).read().bits();
+                    timer_hist = reg.cr(self.info.channel.into()).read().bits();
                     first_captured = true;
                     self.info.cap_timer_interrupt_enable();
                     Poll::Pending
                 } else {
                     // Second time capture, and minus timer hist to calculate event_clock_counts
-                    let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                    let curr_event_clock_count = reg.cr(self.info.channel.into()).read().bits();
                     if curr_event_clock_count < timer_hist {
                         self.event_clock_counts = (u32::MAX - timer_hist) + curr_event_clock_count + 1_u32;
                     } else {
@@ -677,7 +671,7 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Blocking, P> {
 
         loop {
             if self.info.input_event_captured() {
-                let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                let curr_event_clock_count = reg.cr(self.info.channel.into()).read().bits();
                 let prev_event_clock_count = self.event_clock_counts;
                 if curr_event_clock_count < prev_event_clock_count {
                     self.event_clock_counts = (u32::MAX - prev_event_clock_count) + curr_event_clock_count + 1_u32;
@@ -699,12 +693,12 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Blocking, P> {
             if self.info.input_event_captured() {
                 // First time capture, store data into timer hist and reenable interrupt
                 if !first_captured {
-                    timer_hist = reg.cr(self.info.channel).read().bits();
+                    timer_hist = reg.cr(self.info.channel.into()).read().bits();
                     first_captured = true;
                     self.info.cap_timer_interrupt_enable();
                 } else {
                     // Second time capture, and minus timer hist to calculate event_clock_counts
-                    let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                    let curr_event_clock_count = reg.cr(self.info.channel.into()).read().bits();
                     if curr_event_clock_count < timer_hist {
                         self.event_clock_counts = (u32::MAX - timer_hist) + curr_event_clock_count + 1_u32;
                     } else {
@@ -746,12 +740,12 @@ impl<'p, M: Mode> CountingTimer<'p, M> {
             let cycles = leftover as u32;
             unsafe {
                 // SAFETY: It has no safety impact as we are writing new value to match register here
-                reg.mr(channel).write(|w| w.match_().bits(cycles));
+                reg.mr(channel.into()).write(|w| w.match_().bits(cycles));
             }
         } else {
             unsafe {
                 //SAFETY: It has no safety impact as we are writing new value to match register here
-                reg.mr(channel).write(|w| w.match_().bits(curr_time + cycles));
+                reg.mr(channel.into()).write(|w| w.match_().bits(curr_time + cycles));
             }
         }
 
@@ -825,7 +819,7 @@ impl<'p> CountingTimer<'p, Blocking> {
 impl<'p, M: Mode> Drop for CountingTimer<'p, M> {
     fn drop(&mut self) {
         self.info.count_timer_disable_interrupt();
-        self.info.regs.mr(self.info.channel).write(|w| unsafe {
+        self.info.regs.mr(self.info.channel.into()).write(|w| unsafe {
             // SAFETY: It has no safety impact as we are clearing match register here
             w.match_().bits(0)
         });
@@ -867,7 +861,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
         // Clear PWM enable bit in PWM control register
 
         let reg = self.info.regs;
-        match TIMER_CHANNELS_ARR[self.info.channel] {
+        match self.info.channel {
             TimerChannelNum::Channel0 => {
                 reg.pwmc().modify(|_, w| w.pwmen0().match_());
             }
@@ -897,7 +891,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
         // 5. Clear interrupt flag
         // 6. Set PWM enable bit in PWM control register
 
-        match TIMER_CHANNELS_ARR[self.info.channel] {
+        match self.info.channel {
             TimerChannelNum::Channel0 => {
                 reg.mcr().modify(|_, w| w.mr0r().clear_bit());
                 reg.mcr().modify(|_, w| w.mr0s().clear_bit());
@@ -963,7 +957,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
 
     fn get_duty(&self, _: ()) -> Self::Duty {
         let reg = self.info.regs;
-        let scaled = reg.mr(self.info.channel).read().bits();
+        let scaled = reg.mr(self.info.channel.into()).read().bits();
 
         CentiPercent::from_scaled(self.count_max - scaled, self.count_max)
     }
@@ -979,7 +973,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
         // PWM output is low at the beginning of PWM cycle
         // PWM output is set to high when timer count reaches match register value
         // For active high PWM, set match register such that output is high for PWM cycle length*dutycycle
-        reg.mr(self.info.channel).write(|w|
+        reg.mr(self.info.channel.into()).write(|w|
             // SAFETY: No safety impact as we are writing match register here
             // FieldWriter::bits will clear field first, than write new value, cause PWM stay low for a period,
             // match_ is bits[0..31], so we can use REG::bits to workaround the problem. 
@@ -1009,7 +1003,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
         periodchannel.pwm_configure(self.count_max);
 
         let reg = self.info.regs;
-        (0..TIMER_CHANNELS_ARR.len()).for_each(|i| {
+        (0..CHANNEL_PER_MODULE).for_each(|i| {
             // record current duty cycles
             let mut scaled = reg.mr(i).read().bits();
 
@@ -1128,7 +1122,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
             });
-            T::info().wake(TimerType::Count, 0);
+            T::info().wake(TimerType::Count, TimerChannelNum::Channel0);
         }
         if ir.mr1int().bit_is_set() {
             reg.mcr().modify(|_, w| w.mr1i().clear_bit());
@@ -1137,7 +1131,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
             });
-            T::info().wake(TimerType::Count, 1);
+            T::info().wake(TimerType::Count, TimerChannelNum::Channel1);
         }
         if ir.mr2int().bit_is_set() {
             reg.mcr().modify(|_, w| w.mr2i().clear_bit());
@@ -1146,7 +1140,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
             });
-            T::info().wake(TimerType::Count, 2);
+            T::info().wake(TimerType::Count, TimerChannelNum::Channel2);
         }
         if ir.mr3int().bit_is_set() {
             reg.mcr().modify(|_, w| w.mr3i().clear_bit());
@@ -1155,27 +1149,27 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
             });
-            T::info().wake(TimerType::Count, 3);
+            T::info().wake(TimerType::Count, TimerChannelNum::Channel3);
         }
         if ir.cr0int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap0i().clear_bit());
             reg.ir().modify(|_, w| w.cr0int().clear_bit_by_one());
-            T::info().wake(TimerType::Capture, 0);
+            T::info().wake(TimerType::Capture, TimerChannelNum::Channel0);
         }
         if ir.cr1int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap1i().clear_bit());
             reg.ir().modify(|_, w| w.cr1int().clear_bit_by_one());
-            T::info().wake(TimerType::Capture, 1);
+            T::info().wake(TimerType::Capture, TimerChannelNum::Channel1);
         }
         if ir.cr2int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap2i().clear_bit());
             reg.ir().modify(|_, w| w.cr2int().clear_bit_by_one());
-            T::info().wake(TimerType::Capture, 2);
+            T::info().wake(TimerType::Capture, TimerChannelNum::Channel2);
         }
         if ir.cr3int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap3i().clear_bit());
             reg.ir().modify(|_, w| w.cr3int().clear_bit_by_one());
-            T::info().wake(TimerType::Capture, 3);
+            T::info().wake(TimerType::Capture, TimerChannelNum::Channel3);
         }
     }
 }
