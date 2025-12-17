@@ -75,7 +75,7 @@ impl<'d, 'a> Hasher<'d, 'a, Blocking> {
     }
 
     fn transfer_block(&mut self, data: &[u8; BLOCK_LEN]) {
-        const _: () = core::assert!(BLOCK_LEN % 4 == 0, "BLOCK_LEN must be divisible by 4");
+        const _: () = core::assert!(BLOCK_LEN.is_multiple_of(4), "BLOCK_LEN must be divisible by 4");
 
         for word in data.chunks(4) {
             self.hashcrypt.hashcrypt.indata().write(|w| unsafe {
