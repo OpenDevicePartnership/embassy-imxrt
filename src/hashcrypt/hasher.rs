@@ -5,8 +5,7 @@ use core::task::Poll;
 
 use embassy_futures::select::select;
 
-use super::Error;
-use super::{Async, Blocking, Hashcrypt, Mode};
+use super::{Async, Blocking, Error, Hashcrypt, Mode};
 use crate::dma;
 use crate::dma::transfer::{Transfer, Width};
 
@@ -146,7 +145,7 @@ impl<'d, 'a> Hasher<'d, 'a, Async> {
 
     async fn transfer(&mut self, data: &[u8]) -> Result<(), Error> {
         if data.is_empty() || !data.len().is_multiple_of(BLOCK_LEN) {
-            panic!("Invalid data length");
+            return Err(Error::UnsupportedConfiguration);
         }
 
         let options = dma::transfer::TransferOptions {
