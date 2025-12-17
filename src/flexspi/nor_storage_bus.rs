@@ -608,7 +608,12 @@ impl BlockingNorStorageBusDriver for FlexspiNorStorageBus<'_, Blocking> {
         read_buf: Option<&mut [u8]>,
         write_buf: Option<&[u8]>,
     ) -> Result<(), NorStorageBusError> {
-        if cmd.data_bytes.is_some() && cmd.data_bytes.unwrap() > MAX_TRANSFER_SIZE_PER_COMMAND as u32 {
+        // `program_lut` expects data_bytes to be available so we bail out early if that's not the case
+        let Some(data_bytes) = cmd.data_bytes else {
+            return Err(NorStorageBusError::StorageBusInternalError);
+        };
+
+        if data_bytes > MAX_TRANSFER_SIZE_PER_COMMAND as u32 {
             return Err(NorStorageBusError::StorageBusInternalError);
         }
 
@@ -616,7 +621,7 @@ impl BlockingNorStorageBusDriver for FlexspiNorStorageBus<'_, Blocking> {
         self.setup_ip_transfer(self.command_sequence_number, cmd.addr, cmd.data_bytes);
 
         // Program the LUT instructions for the command
-        self.program_lut(&cmd, self.command_sequence_number);
+        self.program_lut(&cmd, data_bytes, self.command_sequence_number);
 
         // Start the transfer
         self.execute_ip_cmd();
@@ -843,13 +848,13 @@ impl<M: Mode> FlexspiNorStorageBus<'_, M> {
 
         cookie.next_instruction();
 
-        if cmd.cmd_ub.is_some() {
-            self.write_instr(cookie, cmd_mode, cmd.cmd_ub.unwrap(), bus_width);
+        if let Some(cmd_ub) = cmd.cmd_ub {
+            self.write_instr(cookie, cmd_mode, cmd_ub, bus_width);
             cookie.next_instruction();
         }
     }
 
-    fn program_addr_instruction(&self, cmd: &NorStorageCmd, cookie: &mut LutInstrCookie) {
+    fn program_addr_instruction(&self, cmd: &NorStorageCmd, addr_width: u8, cookie: &mut LutInstrCookie) {
         let cmd_mode = match cmd.mode {
             NorStorageCmdMode::SDR => FlexSpiLutOpcode::RADDR_SDR,
             NorStorageCmdMode::DDR => FlexSpiLutOpcode::RADDR_DDR,
@@ -860,7 +865,7 @@ impl<M: Mode> FlexspiNorStorageBus<'_, M> {
             NorStorageBusWidth::Quad => 2,
             NorStorageBusWidth::Octal => 3,
         };
-        self.write_instr(cookie, cmd_mode, cmd.addr_width.unwrap(), bus_width);
+        self.write_instr(cookie, cmd_mode, addr_width, bus_width);
 
         cookie.next_instruction();
     }
@@ -927,7 +932,7 @@ impl<M: Mode> FlexspiNorStorageBus<'_, M> {
         cookie.next_instruction();
     }
 
-    fn program_lut(&self, cmd: &NorStorageCmd, seq_id: u8) {
+    fn program_lut(&self, cmd: &NorStorageCmd, data_bytes: u32, seq_id: u8) {
         let mut cookie = LutInstrCookie {
             seq_num: seq_id * 4,
             instr_num: LutInstrNum::First,
@@ -961,8 +966,8 @@ impl<M: Mode> FlexspiNorStorageBus<'_, M> {
 
         self.program_cmd_instruction(cmd, &mut cookie);
 
-        if cmd.addr_width.is_some() {
-            self.program_addr_instruction(cmd, &mut cookie);
+        if let Some(addr_width) = cmd.addr_width {
+            self.program_addr_instruction(cmd, addr_width, &mut cookie);
         }
 
         self.program_dummy_instruction_if_non_zero(cmd, &mut cookie);
@@ -970,10 +975,10 @@ impl<M: Mode> FlexspiNorStorageBus<'_, M> {
         if let Some(transfertype) = cmd.cmdtype {
             match transfertype {
                 NorStorageCmdType::Read => {
-                    self.program_read_data_instruction(cmd, &mut cookie, cmd.data_bytes.unwrap() as u8);
+                    self.program_read_data_instruction(cmd, &mut cookie, data_bytes as u8);
                 }
                 NorStorageCmdType::Write => {
-                    self.program_write_data_instruction(cmd, &mut cookie, cmd.data_bytes.unwrap() as u8);
+                    self.program_write_data_instruction(cmd, &mut cookie, data_bytes as u8);
                 }
             }
         }
@@ -1086,7 +1091,11 @@ impl FlexspiNorStorageBus<'_, Blocking> {
                 .zip(0..num_rx_watermark_slot)
             {
                 let data = self.info.regs.rfdr(slot as usize).read().bits();
-                chunk.copy_from_slice(&data.to_le_bytes()[..chunk.len()]);
+                chunk.copy_from_slice(
+                    data.to_le_bytes()
+                        .get(..chunk.len())
+                        .ok_or(NorStorageBusError::StorageBusInternalError)?,
+                );
                 size -= chunk.len() as u32;
             }
             self.info.regs.intr().write(|w| w.iprxwa().clear_bit_by_one());
@@ -1130,8 +1139,8 @@ impl FlexspiNorStorageBus<'_, Blocking> {
                 let mut temp = 0_u32;
                 if chunk.len() < FIFO_SLOT_SIZE as usize {
                     // We cannot do copy from slice as it will cause a panic
-                    for i in 0..chunk.len() as u32 {
-                        temp |= (chunk[i as usize] as u32) << (i * 8);
+                    for (i, byte) in chunk.iter().enumerate() {
+                        temp |= (*byte as u32) << (i * 8);
                     }
                 } else {
                     temp = u32::from_ne_bytes(
@@ -1468,6 +1477,29 @@ impl FlexSpiConfigurationPort {
 }
 
 impl<'d> FlexspiNorStorageBus<'d, Blocking> {
+    fn new_inner<T: Instance>(_inst: Peri<'d, T>, config: FlexspiConfigPortData) -> Result<Self, NorStorageBusError> {
+        let valid_rx = config.rx_watermark != 0 && config.rx_watermark.is_multiple_of(8);
+        let valid_tx = config.tx_watermark != 0 && config.tx_watermark.is_multiple_of(8);
+
+        if valid_rx && valid_tx {
+            Ok(Self {
+                info: T::info(),
+                _mode: core::marker::PhantomData,
+                configport: FlexSpiConfigurationPort {
+                    info: T::info(),
+                    device_instance: config.dev_instance,
+                    flash_port: config.port,
+                },
+                rx_watermark: config.rx_watermark,
+                tx_watermark: config.tx_watermark,
+                command_sequence_number: DEFAULT_COMMAND_SEQUENCE_NUMBER,
+                phantom: core::marker::PhantomData,
+            })
+        } else {
+            Err(NorStorageBusError::StorageBusInternalError)
+        }
+    }
+
     /// Create a new FlexSPI instance in blocking mode with single configuration
     pub fn new_blocking_single_config<T: Instance>(
         _inst: Peri<'d, T>,
@@ -1476,26 +1508,14 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         clk: Peri<'d, impl FlexSpiPin>,
         cs: Peri<'d, impl FlexSpiPin>,
         config: FlexspiConfigPortData,
-    ) -> Self {
+    ) -> Result<Self, NorStorageBusError> {
+        let flex_spi = Self::new_inner(_inst, config)?;
         // Configure the pins
         data0.config_pin();
         data1.config_pin();
         clk.config_pin();
         cs.config_pin();
-
-        Self {
-            info: T::info(),
-            _mode: core::marker::PhantomData,
-            configport: FlexSpiConfigurationPort {
-                info: T::info(),
-                device_instance: config.dev_instance,
-                flash_port: config.port,
-            },
-            rx_watermark: config.rx_watermark,
-            tx_watermark: config.tx_watermark,
-            command_sequence_number: DEFAULT_COMMAND_SEQUENCE_NUMBER,
-            phantom: core::marker::PhantomData,
-        }
+        Ok(flex_spi)
     }
 
     /// Create a new FlexSPI instance in blocking mode with Dual configuration
@@ -1506,25 +1526,14 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         clk: Peri<'d, impl FlexSpiPin>,
         cs: Peri<'d, impl FlexSpiPin>,
         config: FlexspiConfigPortData,
-    ) -> Self {
+    ) -> Result<Self, NorStorageBusError> {
+        let flex_spi = Self::new_inner(_inst, config)?;
         // Configure the pins
         data0.config_pin();
         data1.config_pin();
         clk.config_pin();
         cs.config_pin();
-        Self {
-            info: T::info(),
-            _mode: core::marker::PhantomData,
-            configport: FlexSpiConfigurationPort {
-                info: T::info(),
-                device_instance: config.dev_instance,
-                flash_port: config.port,
-            },
-            rx_watermark: config.rx_watermark,
-            tx_watermark: config.tx_watermark,
-            command_sequence_number: DEFAULT_COMMAND_SEQUENCE_NUMBER,
-            phantom: core::marker::PhantomData,
-        }
+        Ok(flex_spi)
     }
 
     /// Create a new FlexSPI instance in blocking mode with Quad configuration
@@ -1537,7 +1546,8 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         clk: Peri<'d, impl FlexSpiPin>,
         cs: Peri<'d, impl FlexSpiPin>,
         config: FlexspiConfigPortData,
-    ) -> Self {
+    ) -> Result<Self, NorStorageBusError> {
+        let flex_spi = Self::new_inner(_inst, config)?;
         // Configure the pins
         data0.config_pin();
         data1.config_pin();
@@ -1545,19 +1555,7 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         data3.config_pin();
         clk.config_pin();
         cs.config_pin();
-        Self {
-            info: T::info(),
-            _mode: core::marker::PhantomData,
-            configport: FlexSpiConfigurationPort {
-                info: T::info(),
-                device_instance: config.dev_instance,
-                flash_port: config.port,
-            },
-            rx_watermark: config.rx_watermark,
-            tx_watermark: config.tx_watermark,
-            command_sequence_number: DEFAULT_COMMAND_SEQUENCE_NUMBER,
-            phantom: core::marker::PhantomData,
-        }
+        Ok(flex_spi)
     }
 
     /// Create a new FlexSPI instance in blocking mode with octal configuration
@@ -1575,7 +1573,8 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         clk: Peri<'d, impl FlexSpiPin>,
         cs: Peri<'d, impl FlexSpiPin>,
         config: FlexspiConfigPortData,
-    ) -> Self {
+    ) -> Result<Self, NorStorageBusError> {
+        let flex_spi = Self::new_inner(_inst, config)?;
         // Configure the pins
         data0.config_pin();
         data1.config_pin();
@@ -1587,36 +1586,15 @@ impl<'d> FlexspiNorStorageBus<'d, Blocking> {
         data7.config_pin();
         clk.config_pin();
         cs.config_pin();
-        Self {
-            info: T::info(),
-            _mode: core::marker::PhantomData,
-            configport: FlexSpiConfigurationPort {
-                info: T::info(),
-                device_instance: config.dev_instance,
-                flash_port: config.port,
-            },
-            rx_watermark: config.rx_watermark,
-            tx_watermark: config.tx_watermark,
-            command_sequence_number: DEFAULT_COMMAND_SEQUENCE_NUMBER,
-            phantom: core::marker::PhantomData,
-        }
+        Ok(flex_spi)
     }
 
     /// Create a new FlexSPI instance in blocking mode without pin configuration
-    pub fn new_blocking_no_pin_config<T: Instance>(_inst: Peri<'d, T>, config: FlexspiConfigPortData) -> Self {
-        Self {
-            info: T::info(),
-            _mode: core::marker::PhantomData,
-            configport: FlexSpiConfigurationPort {
-                info: T::info(),
-                device_instance: config.dev_instance,
-                flash_port: config.port,
-            },
-            rx_watermark: config.rx_watermark,
-            tx_watermark: config.tx_watermark,
-            command_sequence_number: DEFAULT_COMMAND_SEQUENCE_NUMBER,
-            phantom: core::marker::PhantomData,
-        }
+    pub fn new_blocking_no_pin_config<T: Instance>(
+        _inst: Peri<'d, T>,
+        config: FlexspiConfigPortData,
+    ) -> Result<Self, NorStorageBusError> {
+        Self::new_inner(_inst, config)
     }
 }
 

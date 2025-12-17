@@ -419,7 +419,8 @@ async fn main(_spawner: Spawner) {
             rx_watermark: 0x8,
             tx_watermark: 0x8,
         },
-    );
+    )
+    .unwrap_or_else(|_| panic!("Invalid config"));
 
     // Configure the Flexspi controller
     let _ = flexspi_storage.configport.configure_flexspi(&flexspi_config); // Configure the Flexspi controller
