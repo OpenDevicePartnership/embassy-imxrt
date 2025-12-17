@@ -31,10 +31,10 @@ async fn main(spawner: Spawner) {
     spawner.spawn(monitor_task()).unwrap();
 
     let sfro = ClockConfig::crystal().sfro;
-    let mut tmr1 = CountingTimer::new_blocking(p.CTIMER0_COUNT_CHANNEL0, sfro);
+    let mut tmr1 = CountingTimer::new_blocking(p.CTIMER0_COUNT_CHANNEL0, sfro).expect("Invalid clock config");
 
     let sfro = ClockConfig::crystal().sfro;
-    let mut tmr2 = CountingTimer::new_async(p.CTIMER1_COUNT_CHANNEL0, sfro, Irqs);
+    let mut tmr2 = CountingTimer::new_async(p.CTIMER1_COUNT_CHANNEL0, sfro, Irqs).expect("Invalid clock config");
 
     tmr1.wait_us(3000000); // 3 seoconds wait
     info!("First Counting timer expired");
@@ -45,7 +45,8 @@ async fn main(spawner: Spawner) {
     {
         let sfro = ClockConfig::crystal().sfro;
         let mut cap_async_tmr =
-            CaptureTimer::new_async(p.CTIMER4_CAPTURE_CHANNEL0.reborrow(), p.PIO0_5.reborrow(), sfro, Irqs);
+            CaptureTimer::new_async(p.CTIMER4_CAPTURE_CHANNEL0.reborrow(), p.PIO0_5.reborrow(), sfro, Irqs)
+                .expect("Invalid clock config");
         let event_time_us = cap_async_tmr.capture_cycle_time_us(CaptureChEdge::Rising).await;
         info!("Capture timer expired, time between two capture = {} us", event_time_us);
 
@@ -53,7 +54,8 @@ async fn main(spawner: Spawner) {
 
         let sfro = ClockConfig::crystal().sfro;
         let mut cap_async_tmr =
-            CaptureTimer::new_async(p.CTIMER4_CAPTURE_CHANNEL0.reborrow(), p.PIO0_5.reborrow(), sfro, Irqs);
+            CaptureTimer::new_async(p.CTIMER4_CAPTURE_CHANNEL0.reborrow(), p.PIO0_5.reborrow(), sfro, Irqs)
+                .expect("Invalid clock config");
         let event_time_us = cap_async_tmr.capture_cycle_time_us(CaptureChEdge::Rising).await;
         info!("Capture timer expired, time between two capture = {} us", event_time_us);
     }

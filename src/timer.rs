@@ -6,7 +6,7 @@ use core::task::Poll;
 use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 
-use crate::clocks::{ClockConfig, ConfigurableClock, enable_and_reset};
+use crate::clocks::{ClockConfig, ClockError, ConfigurableClock, enable_and_reset};
 use crate::interrupt::typelevel::Interrupt;
 use crate::iopctl::{DriveMode, DriveStrength, Inverter, IopctlPin as Pin, Pull, SlewRate};
 use crate::pac::Clkctl1;
@@ -52,6 +52,9 @@ enum TimerType {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
+    /// Clock error
+    Clock(ClockError),
+
     /// PWM cannot be enabled with provided period
     InvalidPwmPeriod,
 
@@ -357,34 +360,26 @@ impl Info {
         }
     }
 
-    fn pwm_get_clock_freq(&self) -> u32 {
+    fn pwm_get_clock_freq(&self) -> Result<u32> {
         // SAFETY: This has no safety impact as we are getting a singleton register instance here and its dropped it the end of the function
         let reg = unsafe { Clkctl1::steal() };
 
         let clksel = reg.ct32bitfclksel(self.channel.into()).read().sel().variant();
-        let mut freq: u32 = 0;
 
         if let Some(clk) = clksel {
             match clk {
-                Sel::MainClk => {
-                    freq = ClockConfig::crystal().main_clk.get_clock_rate().unwrap();
-                }
-                Sel::SfroClk => {
-                    freq = ClockConfig::crystal().sfro.get_clock_rate().unwrap();
-                }
-                Sel::FfroClk => {
-                    freq = ClockConfig::crystal().ffro.get_clock_rate().unwrap();
-                }
-                Sel::Lposc => {
-                    freq = ClockConfig::crystal().lposc.get_clock_rate().unwrap();
-                }
+                Sel::MainClk => ClockConfig::crystal().main_clk.get_clock_rate(),
+                Sel::SfroClk => ClockConfig::crystal().sfro.get_clock_rate(),
+                Sel::FfroClk => ClockConfig::crystal().ffro.get_clock_rate(),
+                Sel::Lposc => ClockConfig::crystal().lposc.get_clock_rate(),
                 //TODO: Add get clock frequency for clock sources audio pll, mclk_in
-                _ => {
-                    freq = 0;
-                }
+                _ => Err(ClockError::ClockNotSupported),
             }
+        } else {
+            // Note: Should be unreachable in reality since clksel is 3 bits
+            Err(ClockError::ClockNotSupported)
         }
-        freq
+        .map_err(Error::Clock)
     }
 
     fn pwm_configure(&self, period: u32) {
@@ -562,24 +557,26 @@ impl<M: Mode, P: CaptureEvent> CaptureTimer<'_, M, P> {
 
 impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
     /// Creates a new `CaptureTimer` in asynchronous mode.
+    ///
+    /// Returns [`Error::Clock`] if an invalid clock configuration is used.
     pub fn new_async<T: Instance>(
         _inst: Peri<'p, T>,
         pin: Peri<'p, P>,
         clk: impl ConfigurableClock,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'p,
-    ) -> Self {
+    ) -> Result<Self> {
         let info = T::info();
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
 
-        Self {
+        Ok(Self {
             event_clock_counts: 0,
-            clk_freq: clk.get_clock_rate().unwrap(),
+            clk_freq: clk.get_clock_rate().map_err(Error::Clock)?,
             _phantom: core::marker::PhantomData,
             info,
             event_pin: pin,
-        }
+        })
     }
 
     /// Waits asynchronously for the capture timer to record an event timestamp.
@@ -649,16 +646,22 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
 
 impl<'p, P: CaptureEvent> CaptureTimer<'p, Blocking, P> {
     /// Creates a new `CaptureTimer` in blocking mode.
-    pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>, pin: Peri<'p, P>, clk: impl ConfigurableClock) -> Self {
+    ///
+    /// Returns [`Error::Clock`] if an invalid clock configuration is used.
+    pub fn new_blocking<T: Instance>(
+        _inst: Peri<'p, T>,
+        pin: Peri<'p, P>,
+        clk: impl ConfigurableClock,
+    ) -> Result<Self> {
         let info = T::info();
 
-        Self {
+        Ok(Self {
             event_clock_counts: 0,
-            clk_freq: clk.get_clock_rate().unwrap(),
+            clk_freq: clk.get_clock_rate().map_err(Error::Clock)?,
             _phantom: core::marker::PhantomData,
             info,
             event_pin: pin,
-        }
+        })
     }
     /// Waits synchronously for the capture timer
     /// This API can capture time till the counter has not crossed the original position after rollover
@@ -757,22 +760,24 @@ impl<'p, M: Mode> CountingTimer<'p, M> {
 
 impl<'p> CountingTimer<'p, Async> {
     /// Creates a new `CountingTimer` in asynchronous mode.
+    ///
+    /// Returns [`Error::Clock`] if an invalid clock configuration is used.
     pub fn new_async<T: Instance>(
         _inst: Peri<'p, T>,
         clk: impl ConfigurableClock,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'p,
-    ) -> Self {
+    ) -> Result<Self> {
         let info = T::info();
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
 
-        Self {
-            clk_freq: clk.get_clock_rate().unwrap(),
+        Ok(Self {
+            clk_freq: clk.get_clock_rate().map_err(Error::Clock)?,
             timeout: 0,
             _phantom: core::marker::PhantomData,
             info,
-        }
+        })
     }
     /// Waits asynchronously for the countdown timer to complete.
     pub fn wait_us(&mut self, count_us: u32) -> impl Future<Output = ()> + use<'_, 'p> {
@@ -793,15 +798,17 @@ impl<'p> CountingTimer<'p, Async> {
 
 impl<'p> CountingTimer<'p, Blocking> {
     /// Creates a new `CountingTimer` in blocking mode.
-    pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>, clk: impl ConfigurableClock) -> Self {
+    ///
+    /// Returns [`Error::Clock`] if an invalid clock configuration is used.
+    pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>, clk: impl ConfigurableClock) -> Result<Self> {
         let info = T::info();
 
-        Self {
-            clk_freq: clk.get_clock_rate().unwrap(),
+        Ok(Self {
+            clk_freq: clk.get_clock_rate().map_err(Error::Clock)?,
             timeout: 0,
             _phantom: core::marker::PhantomData,
             info,
-        }
+        })
     }
 
     /// Waits synchronously for the countdown timer to complete.
@@ -839,6 +846,7 @@ pub struct CTimerPwm<'p> {
     _lifetime: PhantomData<&'p ()>,
     _periodchannel: &'p CTimerPwmPeriodChannel<'p>,
     period: MicroSeconds,
+    clk_freq: Hertz,
     count_max: u32,
     info: Info,
 }
@@ -847,6 +855,7 @@ pub struct CTimerPwm<'p> {
 pub struct CTimerPwmPeriodChannel<'p> {
     _lifetime: PhantomData<&'p ()>,
     period: MicroSeconds,
+    clk_freq: Hertz,
     count_max: u32,
     info: Info,
 }
@@ -987,7 +996,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
         // Updating period for one channel will impact all channels configured for PWM on the same timer
         // Period update also updates duty cycle which can cause an out of spec pulse in PWM output(output could stay low for a PWM period
         // before new duty cycle is updated)
-        let clock_rate = Hertz(self.info.pwm_get_clock_freq());
+        let clock_rate = self.clk_freq;
 
         let requested_pwm_rate: Hertz = period.into().into();
 
@@ -1043,6 +1052,7 @@ impl<'p> CTimerPwm<'p> {
             _lifetime: PhantomData,
             _periodchannel: period_channel,
             period: period_channel.period,
+            clk_freq: period_channel.clk_freq,
             count_max: period_channel.count_max,
             info: channel_info,
         })
@@ -1054,7 +1064,7 @@ impl<'p> CTimerPwmPeriodChannel<'p> {
     pub fn new<T: Instance>(_length_channel: Peri<'p, T>, period: MicroSeconds) -> Result<Self> {
         let channel_info = T::info();
 
-        let clock_rate = Hertz(channel_info.pwm_get_clock_freq());
+        let clock_rate = Hertz(channel_info.pwm_get_clock_freq()?);
 
         let requested_pwm_rate: Hertz = period.into();
 
@@ -1076,6 +1086,7 @@ impl<'p> CTimerPwmPeriodChannel<'p> {
         Ok(Self {
             _lifetime: PhantomData,
             period,
+            clk_freq: clock_rate,
             count_max: period_clock_ticks,
             info: channel_info,
         })
