@@ -75,11 +75,13 @@ impl<'d, 'a> Hasher<'d, 'a, Blocking> {
     }
 
     fn transfer_block(&mut self, data: &[u8; BLOCK_LEN]) {
+        const _: () = core::assert!(BLOCK_LEN % 4 == 0, "BLOCK_LEN must be divisible by 4");
+
         for word in data.chunks(4) {
             self.hashcrypt.hashcrypt.indata().write(|w| unsafe {
-                #[allow(clippy::indexing_slicing)]
+                #[allow(clippy::unwrap_used)]
                 // panic safety: word is always 4 bytes and BLOCK_LEN is multiple of 4
-                w.data().bits(u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+                w.data().bits(u32::from_le_bytes(word.try_into().unwrap()))
             });
         }
         self.wait_for_digest();
