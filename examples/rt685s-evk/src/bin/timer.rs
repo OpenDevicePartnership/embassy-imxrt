@@ -58,7 +58,7 @@ async fn main(spawner: Spawner) {
 
     loop {
         // This code is showing how to use the timer in a periodic fashion
-        tmr2.wait_us(5000000).await;
+        countdown_timer.wait_us(5000000).await;
         info!("Primary task running");
     }
 }
