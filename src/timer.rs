@@ -796,33 +796,6 @@ impl<'p> CountingTimer<'p, Async> {
     }
 }
 
-impl<'p> CountingTimer<'p, Blocking> {
-    /// Creates a new `CountingTimer` in blocking mode.
-    ///
-    /// Returns [`Error::Clock`] if an invalid clock configuration is used.
-    pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>, clk: impl ConfigurableClock) -> Result<Self> {
-        let info = T::info();
-
-        Ok(Self {
-            clk_freq: clk.get_clock_rate().map_err(Error::Clock)?,
-            timeout: 0,
-            _phantom: core::marker::PhantomData,
-            info,
-        })
-    }
-
-    /// Waits synchronously for the countdown timer to complete.
-    pub fn wait_us(&mut self, count_us: u32) {
-        self.start(count_us);
-
-        loop {
-            if self.info.has_count_timer_expired() {
-                break;
-            }
-        }
-    }
-}
-
 impl<'p, M: Mode> Drop for CountingTimer<'p, M> {
     fn drop(&mut self) {
         self.info.count_timer_disable_interrupt();
