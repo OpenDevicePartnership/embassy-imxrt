@@ -31,16 +31,12 @@ async fn main(spawner: Spawner) {
     spawner.spawn(monitor_task()).unwrap();
 
     let sfro = ClockConfig::crystal().sfro;
-    let mut tmr1 = CountingTimer::new_blocking(p.CTIMER0_COUNT_CHANNEL0, sfro).expect("Invalid clock config");
+    let mut countdown_timer =
+        CountingTimer::new_async(p.CTIMER1_COUNT_CHANNEL0, sfro, Irqs).expect("Invalid clock config");
 
-    let sfro = ClockConfig::crystal().sfro;
-    let mut tmr2 = CountingTimer::new_async(p.CTIMER1_COUNT_CHANNEL0, sfro, Irqs).expect("Invalid clock config");
-
-    tmr1.wait_us(3000000); // 3 seoconds wait
-    info!("First Counting timer expired");
-
-    tmr2.wait_us(5000000).await; //  5 seconds wait
-    info!("Second Counting timer expired");
+    info!("Counting timer started");
+    countdown_timer.wait_us(5000000).await; //  5 seconds wait
+    info!("Counting timer expired");
 
     {
         let sfro = ClockConfig::crystal().sfro;
