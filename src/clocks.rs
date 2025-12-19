@@ -1,5 +1,5 @@
 //! Clock configuration for the `RT6xx`
-use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(feature = "defmt")]
 use defmt;
@@ -58,6 +58,8 @@ pub struct ClockConfig {
     pub sys_clk: SysClkConfig,
     /// System Oscillator Config
     pub sys_osc: SysOscConfig,
+    /// Flag to adjust VDDCORE on init based on main clock frequency, can save power
+    pub vddcore_adjust: bool,
     // todo: move ADC here
 }
 
@@ -102,9 +104,9 @@ impl ClockConfig {
             },
             main_pll_clk: MainPllClkConfig {
                 state: State::Enabled,
-                src: MainPllClkSrc::SFRO,
+                src: MainPllClkSrc::FFRO,
                 freq: AtomicU32::new(PLL_CLK_FREQ),
-                mult: AtomicU8::new(16),
+                mult: MainPllClkMult::Mult22,
                 pfd0: 19, //
                 pfd1: 0,  // future field
                 pfd2: 19, // 0x13
@@ -116,6 +118,7 @@ impl ClockConfig {
                 sysclkfreq: AtomicU32::new(SYS_CLK_FREQ),
             },
             sys_osc: SysOscConfig { state: State::Enabled },
+            vddcore_adjust: false,
             //adc: Some(AdcConfig {}), // TODO: add config
         }
     }
@@ -316,6 +319,25 @@ impl TryFrom<Clocks> for MainPllClkSrc {
     }
 }
 
+#[repr(u8)]
+/// Main PLL Clock multiplication factors
+/// These are the only valid multipliers for the main PLL on RT6xx
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MainPllClkMult {
+    /// Multiply by 16
+    Mult16 = 16,
+    /// Multiply by 17
+    Mult17 = 17,
+    /// Multiply by 20
+    Mult20 = 20,
+    /// Multiply by 22
+    Mult22 = 22,
+    /// Multiply by 27
+    Mult27 = 27,
+    /// Multiply by 33
+    Mult33 = 33,
+}
+
 /// PLL configuration.
 pub struct MainPllClkConfig {
     /// Clock active state
@@ -326,7 +348,7 @@ pub struct MainPllClkConfig {
     pub freq: AtomicU32,
     //TODO: numerator and denominator not used but present in register
     /// Multiplication factor.
-    pub mult: AtomicU8,
+    pub mult: MainPllClkMult,
     // the following are actually 6-bits not 8
     /// Fractional divider 0, main pll clock
     pub pfd0: u8,
@@ -775,27 +797,39 @@ impl ConfigurableClock for MainPllClkConfig {
                     clkctl0.syspll0num().write(|w| unsafe { w.num().bits(0b0) });
                     clkctl0.syspll0denom().write(|w| unsafe { w.denom().bits(0b1) });
                     delay_loop_clocks(30, desired_freq);
-                    self.mult.store(mult, Ordering::Relaxed);
+
                     match mult {
                         16 => {
                             clkctl0.syspll0ctl0().modify(|_r, w| w.mult().div_16());
+                            self.mult = MainPllClkMult::Mult16;
                         }
                         17 => {
                             clkctl0.syspll0ctl0().modify(|_r, w| w.mult().div_17());
+                            self.mult = MainPllClkMult::Mult17;
                         }
                         20 => {
                             clkctl0.syspll0ctl0().modify(|_r, w| w.mult().div_20());
+                            self.mult = MainPllClkMult::Mult20;
                         }
                         22 => {
                             clkctl0.syspll0ctl0().modify(|_r, w| w.mult().div_22());
+                            self.mult = MainPllClkMult::Mult22;
                         }
                         27 => {
                             clkctl0.syspll0ctl0().modify(|_r, w| w.mult().div_27());
+                            self.mult = MainPllClkMult::Mult27;
                         }
                         33 => {
                             clkctl0.syspll0ctl0().modify(|_r, w| w.mult().div_33());
+                            self.mult = MainPllClkMult::Mult33;
                         }
-                        _ => return Err(ClockError::InvalidMult),
+                        _ => {
+                            warn!(
+                                "Setting clock rate of {}Hz failed due to Invalid mult value for Main PLL: {}. A valid combo of parameters must be used.",
+                                freq, mult
+                            );
+                            return Err(ClockError::InvalidMult);
+                        }
                     }
                     // Clear System PLL reset
                     clkctl0.syspll0ctl0().modify(|_r, w| w.reset().normal());
@@ -889,18 +923,13 @@ impl MainPllClkConfig {
 
         // kCLOCK_SetSysPll<Mult>
         // Use the mult defined in main pll config
-        // if invalid, use 22 as default instead of panicking as it's more desirable in production code
-        match self.mult.load(Ordering::Relaxed) {
-            16 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_16()),
-            17 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_17()),
-            20 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_20()),
-            22 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22()),
-            27 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_27()),
-            33 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_33()),
-            _ => {
-                warn!("Invalid SYSPLL multiplier, defaulting to 22");
-                clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22())
-            }
+        match self.mult {
+            MainPllClkMult::Mult16 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_16()),
+            MainPllClkMult::Mult17 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_17()),
+            MainPllClkMult::Mult20 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_20()),
+            MainPllClkMult::Mult22 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_22()),
+            MainPllClkMult::Mult27 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_27()),
+            MainPllClkMult::Mult33 => clkctl0.syspll0ctl0().modify(|_, w| w.mult().div_33()),
         };
 
         // Clear System PLL reset
@@ -1571,25 +1600,45 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
     // Increase divisor to safe value.
     init_syscpuahb_clk(256);
 
-    // From Table 23 of the data sheet, the low range (.8-1.0V) only applies if expected VDDCORE is <=1.0V
-    // 240MHz is the last entry at 1V, the next entry, 270MHz, says 1.1V
-    let volt_range = if config.main_clk.freq.load(Ordering::Relaxed) > 240_000_000 {
-        fsl_power::VoltOpRange::Full
-    } else {
-        fsl_power::VoltOpRange::Low
-    };
-
-    // Set the core voltage based on the desired main clock frequency BEFORE enabling the main clock
-    if !fsl_power::set_ldo_voltage_for_freq(
-        fsl_power::TempRange::TempN20CtoP85C,
-        volt_range,
-        config.main_clk.freq.load(Ordering::Relaxed),
-        0,
-    ) {
-        return Err(ClockError::VoltageSettingFailed);
+    const SYSPLL_MULTIPLIER_FOR_PFDS: u32 = 18;
+    let true_main_clk_freq =
+        config.main_pll_clk.freq.load(Ordering::Relaxed) * SYSPLL_MULTIPLIER_FOR_PFDS / config.main_pll_clk.pfd0 as u32;
+    let config_main_clk_freq = config.main_clk.freq.load(Ordering::Relaxed);
+    // Check if the calculated main clock frequency based on PLL and PFD0 matches the desired main clock frequency
+    // Round both frequencies to nearest MHz for comparison using integer arithmetic
+    let rounded_config_mhz = (config_main_clk_freq + 500_000) / 1_000_000;
+    let rounded_calc_mhz = (true_main_clk_freq + 500_000) / 1_000_000;
+    let freq_mismatch = rounded_config_mhz != rounded_calc_mhz;
+    if freq_mismatch {
+        warn!(
+            "The desired main clock frequency of {}Hz (~{} MHz) does not match calculated frequency of {}Hz (~{} MHz) based on the PLL and PFD0 settings.",
+            config_main_clk_freq, rounded_config_mhz, true_main_clk_freq, rounded_calc_mhz
+        );
     }
 
-    // Now that voltage is set, we can enable the main clock
+    // Set the core voltage, if desired, based on the main clock frequency BEFORE enabling the main clock
+    if config.vddcore_adjust {
+        // From Table 23 of the data sheet, the low range (.8-1.0V) only applies if expected VDDCORE is <=1.0V
+        // 240MHz is the last entry at 1V, the next entry, 270MHz, says 1.1V
+        if freq_mismatch {
+            warn!(
+                "VDDCORE voltage setting will be based on true main clock frequency of {}Hz instead of {}Hz.",
+                true_main_clk_freq, config_main_clk_freq
+            );
+        }
+        const SYSCLK_MAX_FREQ_FOR_LOW_RANGE: u32 = 240_000_000;
+        let volt_range = if true_main_clk_freq > SYSCLK_MAX_FREQ_FOR_LOW_RANGE {
+            fsl_power::VoltOpRange::Full
+        } else {
+            fsl_power::VoltOpRange::Low
+        };
+
+        if !fsl_power::set_ldo_voltage_for_freq(fsl_power::TempRange::TempN20CtoP85C, volt_range, true_main_clk_freq, 0)
+        {
+            return Err(ClockError::VoltageSettingFailed);
+        }
+    }
+
     config.main_clk.enable_and_reset()?;
 
     // Set divisor to final value.

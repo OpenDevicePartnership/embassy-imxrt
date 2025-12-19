@@ -122,10 +122,7 @@ pub enum BodyBiasMode {
 }
 
 /// Returns the current body bias mode.
-pub fn get_body_bias_mode() -> BodyBiasMode {
-    // SAFETY: unsafe needed to take pointer to PMC peripheral
-    let pmc = unsafe { crate::pac::Pmc::steal() };
-
+pub fn get_body_bias_mode(pmc: &crate::pac::Pmc) -> BodyBiasMode {
     let runctrl = pmc.runctrl().read().bits();
     let bias_bits = (runctrl >> 13) & 0b11; // Extract bits 13-14
 
@@ -139,11 +136,10 @@ pub fn get_body_bias_mode() -> BodyBiasMode {
 /// Enter Forward Body Bias (FBB) mode
 ///
 /// FBB increases performance at the cost of higher leakage power.
-/// This function performs sets the chip to sleep to safely switch body bias modes then wakes again.
+/// This function sets the chip to sleep to safely switch body bias modes then wakes again.
 ///
-/// # Safety
+/// # Important
 /// This function uses WFI (Wait For Interrupt) and manipulates power domain configurations.
-/// It must be called from a context where interrupts can be safely managed.
 pub fn enter_fbb(pmc: &crate::pac::Pmc) {
     use cortex_m::peripheral::SCB;
 
@@ -328,7 +324,9 @@ pub fn set_ldo_voltage_for_freq(
         let pmc = unsafe { crate::pac::Pmc::steal() };
 
         // Enter FBB mode if not already in FBB
-        if get_body_bias_mode() != BodyBiasMode::Fbb {
+        if get_body_bias_mode(&pmc) != BodyBiasMode::Fbb {
+            #[cfg(feature = "defmt")]
+            defmt::info!("Entering FBB mode for voltage scaling");
             enter_fbb(&pmc);
         }
 
@@ -353,9 +351,9 @@ pub fn set_ldo_voltage_for_freq(
             // Both cores active and valid - use higher voltage
             (c, d, _, _) if c != POWER_INVALID_VOLT_LEVEL && d != POWER_INVALID_VOLT_LEVEL => core::cmp::max(c, d),
             // Only CM33 active with valid frequency
-            (c, _, freq, _) if c != POWER_INVALID_VOLT_LEVEL && freq != 0 => c,
+            (c, _, c_freq, _) if c != POWER_INVALID_VOLT_LEVEL && c_freq != 0 => c,
             // Only DSP active with valid frequency
-            (_, d, _, freq) if d != POWER_INVALID_VOLT_LEVEL && freq != 0 => d,
+            (_, d, _, d_freq) if d != POWER_INVALID_VOLT_LEVEL && d_freq != 0 => d,
             // Invalid configuration
             _ => POWER_INVALID_VOLT_LEVEL,
         };
@@ -403,8 +401,6 @@ pub fn set_ldo_voltage_for_freq(
 }
 
 /// Applies the LDO voltage for run mode.
-/// # Safety
-/// Direct hardware access needed to set the level. This function should be called within a critical section.
 pub fn apply_ldo_voltage(pmc: &crate::pac::Pmc, volt: u8) {
     // Write the vddcore voltage level to the PMC RUNCTRL register
     // The voltage value maps to specific voltage ranges defined in POWER_LDO_VOLT_LEVEL
