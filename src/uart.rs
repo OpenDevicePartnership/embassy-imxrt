@@ -11,7 +11,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 
 use crate::dma::channel::Channel;
-use crate::dma::transfer::{self, Transfer};
+use crate::dma::transfer::Transfer;
 use crate::flexcomm::{Clock, FlexcommRef};
 use crate::gpio::{AnyPin, GpioPin as Pin};
 use crate::interrupt::typelevel::Interrupt;
@@ -221,9 +221,13 @@ impl<'a> UartTx<'a, Blocking> {
 }
 
 struct BufferConfig {
+    #[cfg(feature = "time")]
     buffer: &'static mut [u8],
+    #[cfg(feature = "time")]
     write_index: usize,
+    #[cfg(feature = "time")]
     read_index: usize,
+    #[cfg(feature = "time")]
     polling_rate: u64,
 }
 
@@ -704,6 +708,7 @@ impl<'a> UartRx<'a, Async> {
     /// This prevents data loss that would otherwise occur if DMA were toggled on every `read()` call, and also helps avoid FIFO overflow.
     /// Note: requires time-driver due to hardware constraint requiring a polled interface (no UART Idle bus indicator).
     ///       Alternative approaches are possible; this was done to maintain similarity between buffered and unbuffered read interfaces.
+    #[cfg(feature = "time")]
     pub fn new_async_with_buffer<T: Instance>(
         _inner: Peri<'a, T>,
         rx: Peri<'a, impl RxPin<T>>,
@@ -757,9 +762,17 @@ impl<'a> UartRx<'a, Async> {
 
     /// Read from UART RX asynchronously.
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        if self._buffer_config.is_some() {
-            self.read_buffered(buf).await
-        } else {
+        #[cfg(feature = "time")]
+        {
+            if self._buffer_config.is_some() {
+                self.read_buffered(buf).await
+            } else {
+                self.read_unbuffered(buf).await
+            }
+        }
+
+        #[cfg(not(feature = "time"))]
+        {
             self.read_unbuffered(buf).await
         }
     }
@@ -835,6 +848,7 @@ impl<'a> UartRx<'a, Async> {
         Ok(buf.len())
     }
 
+    #[cfg(feature = "time")]
     async fn read_buffered(&mut self, buf: &mut [u8]) -> Result<usize> {
         // unwrap safe here as only entry path to API requires rx_dma instance
         let rx_dma = self._rx_dma.as_ref().unwrap();
@@ -1024,6 +1038,7 @@ impl<'a> Uart<'a, Async> {
     }
 
     /// Create a new DMA enabled UART with Rx buffering enabled
+    #[cfg(feature = "time")]
     pub fn new_async_with_buffer<T: Instance>(
         _inner: Peri<'a, T>,
         tx: Peri<'a, impl TxPin<T>>,
@@ -1083,6 +1098,7 @@ impl<'a> Uart<'a, Async> {
     }
 
     /// Create a new DMA enabled UART with hardware flow control (RTS/CTS)
+    #[cfg(feature = "time")]
     pub fn new_with_rtscts<T: Instance>(
         _inner: Peri<'a, T>,
         tx: Peri<'a, impl TxPin<T>>,
@@ -1124,6 +1140,7 @@ impl<'a> Uart<'a, Async> {
 
     /// Create a new DMA enabled UART with hardware flow control (RTS/CTS) and Rx buffering enabled
     #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "time")]
     pub fn new_with_rtscts_buffer<T: Instance>(
         _inner: Peri<'a, T>,
         tx: Peri<'a, impl TxPin<T>>,
