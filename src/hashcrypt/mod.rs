@@ -12,6 +12,14 @@ use crate::{Peri, dma, interrupt, pac};
 /// Hasher module
 pub mod hasher;
 
+/// Error information type
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Error {
+    /// configuration requested is not supported
+    UnsupportedConfiguration,
+}
+
 trait Sealed {}
 
 /// Asynchronous or blocking mode

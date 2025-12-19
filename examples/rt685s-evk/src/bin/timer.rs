@@ -31,21 +31,18 @@ async fn main(spawner: Spawner) {
     spawner.spawn(monitor_task()).unwrap();
 
     let sfro = ClockConfig::crystal().sfro;
-    let mut tmr1 = CountingTimer::new_blocking(p.CTIMER0_COUNT_CHANNEL0, sfro);
+    let mut countdown_timer =
+        CountingTimer::new_async(p.CTIMER1_COUNT_CHANNEL0, sfro, Irqs).expect("Invalid clock config");
 
-    let sfro = ClockConfig::crystal().sfro;
-    let mut tmr2 = CountingTimer::new_async(p.CTIMER1_COUNT_CHANNEL0, sfro, Irqs);
-
-    tmr1.wait_us(3000000); // 3 seoconds wait
-    info!("First Counting timer expired");
-
-    tmr2.wait_us(5000000).await; //  5 seconds wait
-    info!("Second Counting timer expired");
+    info!("Counting timer started");
+    countdown_timer.wait_us(5000000).await; //  5 seconds wait
+    info!("Counting timer expired");
 
     {
         let sfro = ClockConfig::crystal().sfro;
         let mut cap_async_tmr =
-            CaptureTimer::new_async(p.CTIMER4_CAPTURE_CHANNEL0.reborrow(), p.PIO0_5.reborrow(), sfro, Irqs);
+            CaptureTimer::new_async(p.CTIMER4_CAPTURE_CHANNEL0.reborrow(), p.PIO0_5.reborrow(), sfro, Irqs)
+                .expect("Invalid clock config");
         let event_time_us = cap_async_tmr.capture_cycle_time_us(CaptureChEdge::Rising).await;
         info!("Capture timer expired, time between two capture = {} us", event_time_us);
 
@@ -53,14 +50,15 @@ async fn main(spawner: Spawner) {
 
         let sfro = ClockConfig::crystal().sfro;
         let mut cap_async_tmr =
-            CaptureTimer::new_async(p.CTIMER4_CAPTURE_CHANNEL0.reborrow(), p.PIO0_5.reborrow(), sfro, Irqs);
+            CaptureTimer::new_async(p.CTIMER4_CAPTURE_CHANNEL0.reborrow(), p.PIO0_5.reborrow(), sfro, Irqs)
+                .expect("Invalid clock config");
         let event_time_us = cap_async_tmr.capture_cycle_time_us(CaptureChEdge::Rising).await;
         info!("Capture timer expired, time between two capture = {} us", event_time_us);
     }
 
     loop {
         // This code is showing how to use the timer in a periodic fashion
-        tmr2.wait_us(5000000).await;
+        countdown_timer.wait_us(5000000).await;
         info!("Primary task running");
     }
 }

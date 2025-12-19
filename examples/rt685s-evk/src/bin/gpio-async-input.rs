@@ -10,22 +10,22 @@ use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 #[embassy_executor::task]
 async fn monitor_task(mut monitor: gpio::Input<'static>) {
     loop {
-        monitor.wait_for_falling_edge().await;
+        let _ = monitor.wait_for_falling_edge().await;
         debug!("3 Falling edge detected");
 
-        monitor.wait_for_low().await;
+        let _ = monitor.wait_for_low().await;
         debug!("4 Level low detected");
 
-        monitor.wait_for_high().await;
+        let _ = monitor.wait_for_high().await;
         debug!("6 Level high detected");
 
-        monitor.wait_for_rising_edge().await;
+        let _ = monitor.wait_for_rising_edge().await;
         debug!("9 Rising edge detected");
 
-        monitor.wait_for_any_edge().await;
+        let _ = monitor.wait_for_any_edge().await;
         debug!("11 An any (rising) edge detected");
 
-        monitor.wait_for_any_edge().await;
+        let _ = monitor.wait_for_any_edge().await;
         debug!("13 An any (falling) edge detected");
     }
 }

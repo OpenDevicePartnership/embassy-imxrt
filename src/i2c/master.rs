@@ -9,9 +9,8 @@ use embassy_hal_internal::drop::OnDrop;
 use itertools::Itertools;
 
 use super::{
-    Async, Blocking, Error, I2C_REMEDIATION, I2C_WAKERS, Info, Instance, InterruptHandler, MasterDma, Mode,
-    REMEDIATON_MASTER_STOP, Result, SclPin, SdaPin, TEN_BIT_PREFIX, TransferError, force_clear_remediation,
-    wait_remediation_complete,
+    Async, Blocking, Error, Info, Instance, InterruptHandler, MasterDma, Mode, REMEDIATON_MASTER_STOP, Result, SclPin,
+    SdaPin, TEN_BIT_PREFIX, TransferError, force_clear_remediation, wait_remediation_complete,
 };
 use crate::flexcomm::FlexcommRef;
 use crate::interrupt::typelevel::Interrupt;
@@ -50,41 +49,44 @@ fn get_freq_hz(hi_clocks: u8, lo_clocks: u8, clock_div_multiplier: u16, clock_sp
 // neither the type nor the trait are defined in our crate.  Therefore, we define this Into-like trait and
 // use that instead.
 //
-trait ToClocksEnum<DestT> {
-    fn to_clocks_enum(&self) -> DestT;
+trait ToClocksEnum<DestT>: Sized {
+    type Error;
+    fn to_clocks_enum(self) -> Result<DestT>;
 }
 
 const MIN_CLOCKS: u8 = 2;
 const MAX_CLOCKS: u8 = 9;
 
 impl ToClocksEnum<Mstscllow> for u8 {
-    fn to_clocks_enum(&self) -> Mstscllow {
-        match *self {
-            2 => Mstscllow::Clocks2,
-            3 => Mstscllow::Clocks3,
-            4 => Mstscllow::Clocks4,
-            5 => Mstscllow::Clocks5,
-            6 => Mstscllow::Clocks6,
-            7 => Mstscllow::Clocks7,
-            8 => Mstscllow::Clocks8,
-            9 => Mstscllow::Clocks9,
-            _ => unreachable!("Invalid value for Mstscllow"),
+    type Error = Error;
+    fn to_clocks_enum(self) -> Result<Mstscllow> {
+        match self {
+            2 => Ok(Mstscllow::Clocks2),
+            3 => Ok(Mstscllow::Clocks3),
+            4 => Ok(Mstscllow::Clocks4),
+            5 => Ok(Mstscllow::Clocks5),
+            6 => Ok(Mstscllow::Clocks6),
+            7 => Ok(Mstscllow::Clocks7),
+            8 => Ok(Mstscllow::Clocks8),
+            9 => Ok(Mstscllow::Clocks9),
+            _ => Err(Error::UnsupportedConfiguration),
         }
     }
 }
 
 impl ToClocksEnum<Mstsclhigh> for u8 {
-    fn to_clocks_enum(&self) -> Mstsclhigh {
-        match *self {
-            2 => Mstsclhigh::Clocks2,
-            3 => Mstsclhigh::Clocks3,
-            4 => Mstsclhigh::Clocks4,
-            5 => Mstsclhigh::Clocks5,
-            6 => Mstsclhigh::Clocks6,
-            7 => Mstsclhigh::Clocks7,
-            8 => Mstsclhigh::Clocks8,
-            9 => Mstsclhigh::Clocks9,
-            _ => unreachable!("Invalid value for Mstsclhigh"),
+    type Error = Error;
+    fn to_clocks_enum(self) -> Result<Mstsclhigh> {
+        match self {
+            2 => Ok(Mstsclhigh::Clocks2),
+            3 => Ok(Mstsclhigh::Clocks3),
+            4 => Ok(Mstsclhigh::Clocks4),
+            5 => Ok(Mstsclhigh::Clocks5),
+            6 => Ok(Mstsclhigh::Clocks6),
+            7 => Ok(Mstsclhigh::Clocks7),
+            8 => Ok(Mstsclhigh::Clocks8),
+            9 => Ok(Mstsclhigh::Clocks9),
+            _ => Err(Error::UnsupportedConfiguration),
         }
     }
 }
@@ -143,8 +145,8 @@ impl SpeedRegisterSettings {
         //
         const CLOCK_DIV_MULTIPLIER_OFFSET: u16 = 1;
         Ok(Self {
-            scl_high_clocks: result_clocks_hi.to_clocks_enum(),
-            scl_low_clocks: result_clocks_lo.to_clocks_enum(),
+            scl_high_clocks: result_clocks_hi.to_clocks_enum()?,
+            scl_low_clocks: result_clocks_lo.to_clocks_enum()?,
             clock_div_multiplier: result_div_multiplier - CLOCK_DIV_MULTIPLIER_OFFSET,
             _actual_freq_hz: CLOCK_SPEED_HZ
                 / (u32::from(result_clocks_hi + result_clocks_lo) * u32::from(result_div_multiplier)),
@@ -202,6 +204,9 @@ impl DutyCycle {
 
 impl Default for DutyCycle {
     fn default() -> Self {
+        #[allow(clippy::unwrap_used)]
+        // Panic Safety: this will always succeed, as 40% is within the valid range.
+        //               and if this changes to invalid value, we will know during initial testing.
         DutyCycle::new(40).unwrap()
     }
 }
@@ -680,10 +685,10 @@ impl<'a> I2cMaster<'a, Async> {
             return Err(TransferError::OtherBusError.into());
         };
 
-        if self.dma_ch.is_some() {
+        if let Some(dma_ch) = &self.dma_ch {
             if !dma_read.is_empty() {
                 let transfer = dma::transfer::Transfer::new_read(
-                    self.dma_ch.as_mut().unwrap(),
+                    dma_ch,
                     i2cregs.mstdat().as_ptr() as *mut u8,
                     dma_read,
                     Default::default(),
@@ -706,7 +711,7 @@ impl<'a> I2cMaster<'a, Async> {
                 let res = select(
                     transfer,
                     poll_fn(|cx| {
-                        I2C_WAKERS[self.info.index].register(cx.waker());
+                        self.info.waker.register(cx.waker());
 
                         i2cregs.intenset().write(|w| {
                             w.mstpendingen()
@@ -822,9 +827,9 @@ impl<'a> I2cMaster<'a, Async> {
             return Ok(());
         }
 
-        if self.dma_ch.is_some() {
+        if let Some(dma_ch) = &self.dma_ch {
             let transfer = dma::transfer::Transfer::new_write(
-                self.dma_ch.as_mut().unwrap(),
+                dma_ch,
                 write,
                 i2cregs.mstdat().as_ptr() as *mut u8,
                 Default::default(),
@@ -847,7 +852,7 @@ impl<'a> I2cMaster<'a, Async> {
             let res = select(
                 transfer,
                 poll_fn(|cx| {
-                    I2C_WAKERS[self.info.index].register(cx.waker());
+                    self.info.waker.register(cx.waker());
 
                     i2cregs.intenset().write(|w| {
                         w.mstpendingen()
@@ -1003,7 +1008,7 @@ impl<'a> I2cMaster<'a, Async> {
         poll_fn(move |cx| {
             // Register waker before checking condition, to ensure that wakes/interrupts
             // aren't lost between f() and g()
-            I2C_WAKERS[self.info.index].register(cx.waker());
+            self.info.waker.register(cx.waker());
             let r = f(self);
 
             if r.is_pending() {
@@ -1083,15 +1088,15 @@ impl<M: Mode> embedded_hal_1::i2c::ErrorType for I2cMaster<'_, M> {
 // implement generic i2c interface for peripheral master type
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A> for I2cMaster<'_, Blocking> {
     fn transaction(&mut self, address: A, operations: &mut [embedded_hal_1::i2c::Operation<'_>]) -> Result<()> {
-        if operations.is_empty() {
+        let Some(first_operation) = operations.first() else {
             return Ok(());
-        }
+        };
 
         // Send beginning start
         let address = address.into();
         self.start(
             address,
-            match operations[0] {
+            match first_operation {
                 embedded_hal_1::i2c::Operation::Read(_) => true,
                 embedded_hal_1::i2c::Operation::Write(_) => false,
             },
@@ -1126,16 +1131,16 @@ impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_1::i2c::I2c<A
 
 impl<A: embedded_hal_1::i2c::AddressMode + Into<u16>> embedded_hal_async::i2c::I2c<A> for I2cMaster<'_, Async> {
     async fn transaction(&mut self, address: A, operations: &mut [embedded_hal_1::i2c::Operation<'_>]) -> Result<()> {
-        if operations.is_empty() {
+        let Some(first_operation) = operations.first() else {
             return Ok(());
-        }
+        };
 
         // Send beginning start
         let address = address.into();
         let mut guard = Some(
             self.start(
                 address,
-                match operations[0] {
+                match first_operation {
                     embedded_hal_1::i2c::Operation::Read(_) => true,
                     embedded_hal_1::i2c::Operation::Write(_) => false,
                 },
@@ -1213,7 +1218,7 @@ impl Drop for StartStopGuard {
             } else {
                 // We are NOT pending, we need to ask the interrupt to send a stop the next
                 // time the engine is pending. We ensured that the interrupt is active above
-                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATON_MASTER_STOP, Ordering::AcqRel);
+                self.info.remediation.fetch_or(REMEDIATON_MASTER_STOP, Ordering::AcqRel);
             }
         })
     }

@@ -6,7 +6,7 @@ use core::task::Poll;
 use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 
-use crate::clocks::{ClockConfig, ConfigurableClock, enable_and_reset};
+use crate::clocks::{ClockConfig, ClockError, ConfigurableClock, enable_and_reset};
 use crate::interrupt::typelevel::Interrupt;
 use crate::iopctl::{DriveMode, DriveStrength, Inverter, IopctlPin as Pin, Pull, SlewRate};
 use crate::pac::Clkctl1;
@@ -14,14 +14,11 @@ use crate::pac::clkctl1::ct32bitfclksel::Sel;
 use crate::pwm::{CentiPercent, Hertz, MicroSeconds};
 use crate::{Peri, PeripheralType, interrupt, peripherals};
 
-const COUNT_CHANNEL: usize = 20;
-const CAPTURE_CHANNEL: usize = 20;
-const TOTAL_CHANNELS: usize = COUNT_CHANNEL + CAPTURE_CHANNEL;
 const CHANNEL_PER_MODULE: usize = 4;
 const PWM_PRECISION_CLK_TICKS_PER_PERIOD: u32 = 500;
 
 /// Enum representing timer channels
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum TimerChannelNum {
     /// Timer channel 0
     Channel0,
@@ -33,10 +30,31 @@ pub enum TimerChannelNum {
     Channel3,
 }
 
+impl From<TimerChannelNum> for usize {
+    fn from(channel: TimerChannelNum) -> Self {
+        match channel {
+            TimerChannelNum::Channel0 => 0,
+            TimerChannelNum::Channel1 => 1,
+            TimerChannelNum::Channel2 => 2,
+            TimerChannelNum::Channel3 => 3,
+        }
+    }
+}
+
+// Enum representing timer type
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum TimerType {
+    Count,
+    Capture,
+}
+
 /// Timer Errors
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
+    /// Clock error
+    Clock(ClockError),
+
     /// PWM cannot be enabled with provided period
     InvalidPwmPeriod,
 
@@ -101,15 +119,6 @@ pub enum TriggerInput {
     TrigIn24,
 }
 
-const TIMER_CHANNELS_ARR: [TimerChannelNum; CHANNEL_PER_MODULE] = [
-    TimerChannelNum::Channel0,
-    TimerChannelNum::Channel1,
-    TimerChannelNum::Channel2,
-    TimerChannelNum::Channel3,
-];
-
-static WAKERS: [AtomicWaker; TOTAL_CHANNELS] = [const { AtomicWaker::new() }; TOTAL_CHANNELS];
-
 #[derive(PartialEq, Clone, Copy)]
 /// Enum representing the edge type for capture channels.
 pub enum CaptureChEdge {
@@ -140,7 +149,6 @@ impl Mode for Async {}
 
 /// A timer that captures events based on a specified edge and calls a user-defined callback.
 pub struct CaptureTimer<'p, M: Mode, P: CaptureEvent> {
-    id: usize,
     event_clock_counts: u32,
     clk_freq: u32,
     _phantom: core::marker::PhantomData<M>,
@@ -150,7 +158,6 @@ pub struct CaptureTimer<'p, M: Mode, P: CaptureEvent> {
 
 /// A timer that counts down to zero and calls a user-defined callback.
 pub struct CountingTimer<'p, M: Mode> {
-    id: usize,
     clk_freq: u32,
     timeout: u32,
     _phantom: core::marker::PhantomData<&'p M>,
@@ -160,8 +167,10 @@ pub struct CountingTimer<'p, M: Mode> {
 struct Info {
     regs: &'static crate::pac::ctimer0::RegisterBlock,
     inputmux: &'static crate::pac::inputmux::RegisterBlock,
+    waker: &'static AtomicWaker,
+    timer_type: TimerType,
     module: usize,
-    channel: usize,
+    channel: TimerChannelNum,
 }
 
 // SAFETY: safety for Send here is the same as the other accessors to unsafe blocks: it must be done from a single executor context.
@@ -186,10 +195,16 @@ pub struct InterruptHandler<T: Instance> {
 }
 
 impl Info {
+    // Called from ISR to potentially wake us if given the proper timer type and channel
+    fn wake(&self, timer_type: TimerType, channel: TimerChannelNum) {
+        if self.timer_type == timer_type && self.channel == channel {
+            self.waker.wake();
+        }
+    }
+
     fn cap_timer_interrupt_enable(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0i().set_bit());
             }
@@ -206,8 +221,7 @@ impl Info {
     }
     fn input_event_captured(&self) -> bool {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => reg.ccr().read().cap0i().bit_is_clear(),
             TimerChannelNum::Channel1 => reg.ccr().read().cap1i().bit_is_clear(),
             TimerChannelNum::Channel2 => reg.ccr().read().cap2i().bit_is_clear(),
@@ -217,8 +231,7 @@ impl Info {
 
     fn cap_timer_interrupt_disable(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0i().clear_bit());
             }
@@ -235,8 +248,7 @@ impl Info {
     }
     fn cap_timer_enable_rising_edge_event(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0re().set_bit());
             }
@@ -253,8 +265,7 @@ impl Info {
     }
     fn cap_timer_enable_falling_edge_event(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0fe().set_bit());
             }
@@ -271,8 +282,7 @@ impl Info {
     }
     fn cap_timer_disable_rising_edge_event(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0re().clear_bit());
             }
@@ -289,8 +299,7 @@ impl Info {
     }
     fn cap_timer_disable_falling_edge_event(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.ccr().modify(|_, w| w.cap0fe().clear_bit());
             }
@@ -307,8 +316,7 @@ impl Info {
     }
     fn count_timer_enable_interrupt(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.mcr().modify(|_, w| w.mr0i().set_bit());
             }
@@ -325,8 +333,7 @@ impl Info {
     }
     fn count_timer_disable_interrupt(&self) {
         let reg = self.regs;
-        let channel = self.channel;
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.mcr().modify(|_, w| w.mr0i().clear_bit());
             }
@@ -344,9 +351,8 @@ impl Info {
 
     fn has_count_timer_expired(&self) -> bool {
         let reg = self.regs;
-        let channel = self.channel;
 
-        match TIMER_CHANNELS_ARR[channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => reg.mcr().read().mr0i().bit_is_clear(),
             TimerChannelNum::Channel1 => reg.mcr().read().mr1i().bit_is_clear(),
             TimerChannelNum::Channel2 => reg.mcr().read().mr2i().bit_is_clear(),
@@ -354,34 +360,26 @@ impl Info {
         }
     }
 
-    fn pwm_get_clock_freq(&self) -> u32 {
+    fn pwm_get_clock_freq(&self) -> Result<u32> {
         // SAFETY: This has no safety impact as we are getting a singleton register instance here and its dropped it the end of the function
         let reg = unsafe { Clkctl1::steal() };
 
-        let clksel = reg.ct32bitfclksel(self.channel).read().sel().variant();
-        let mut freq: u32 = 0;
+        let clksel = reg.ct32bitfclksel(self.channel.into()).read().sel().variant();
 
         if let Some(clk) = clksel {
             match clk {
-                Sel::MainClk => {
-                    freq = ClockConfig::crystal().main_clk.get_clock_rate().unwrap();
-                }
-                Sel::SfroClk => {
-                    freq = ClockConfig::crystal().sfro.get_clock_rate().unwrap();
-                }
-                Sel::FfroClk => {
-                    freq = ClockConfig::crystal().ffro.get_clock_rate().unwrap();
-                }
-                Sel::Lposc => {
-                    freq = ClockConfig::crystal().lposc.get_clock_rate().unwrap();
-                }
+                Sel::MainClk => ClockConfig::crystal().main_clk.get_clock_rate(),
+                Sel::SfroClk => ClockConfig::crystal().sfro.get_clock_rate(),
+                Sel::FfroClk => ClockConfig::crystal().ffro.get_clock_rate(),
+                Sel::Lposc => ClockConfig::crystal().lposc.get_clock_rate(),
                 //TODO: Add get clock frequency for clock sources audio pll, mclk_in
-                _ => {
-                    freq = 0;
-                }
+                _ => Err(ClockError::ClockNotSupported),
             }
+        } else {
+            // Note: Should be unreachable in reality since clksel is 3 bits
+            Err(ClockError::ClockNotSupported)
         }
-        freq
+        .map_err(Error::Clock)
     }
 
     fn pwm_configure(&self, period: u32) {
@@ -389,12 +387,12 @@ impl Info {
         let len_channel = self.channel;
 
         // Use length channel to set PWM cycle length
-        reg.mr(len_channel).write(|w|
+        reg.mr(len_channel.into()).write(|w|
             //SAFETY: No safety impact as we are writing match register here
             unsafe { w.match_().bits(period) });
 
         // Set MRnR bit to enable timer reset for register setting PWM length
-        match TIMER_CHANNELS_ARR[len_channel] {
+        match self.channel {
             TimerChannelNum::Channel0 => {
                 reg.mcr().modify(|_, w| w.mr0r().set_bit());
             }
@@ -416,23 +414,31 @@ macro_rules! impl_instance {
         paste! {
             impl SealedInstance for crate::peripherals::[<CTIMER $n _ COUNT _ CHANNEL $channel>] {
                 fn info() -> Info {
+                    static WAKER: AtomicWaker = AtomicWaker::new();
+
                     //SAFETY - This code is safe as we are getting register block pointer to do configuration
                     Info {
                         regs: unsafe { &*crate::pac::[<Ctimer $n>]::ptr() },
                         inputmux: unsafe { &*crate::pac::Inputmux::ptr() },
+                        waker: &WAKER,
+                        timer_type: TimerType::Count,
                         module: $n,
-                        channel: $channel,
+                        channel: TimerChannelNum::[<Channel $channel>],
                     }
                 }
             }
 
             impl SealedInstance for crate::peripherals::[<CTIMER $n _ CAPTURE _ CHANNEL $channel>] {
                 fn info() -> Info {
+                    static WAKER: AtomicWaker = AtomicWaker::new();
+
                     Info {
                         regs: unsafe { &*crate::pac::[<Ctimer $n>]::ptr() },
                         inputmux: unsafe { &*crate::pac::Inputmux::ptr() },
+                        waker: &WAKER,
+                        timer_type: TimerType::Capture,
                         module: $n,
-                        channel: $channel,
+                        channel: TimerChannelNum::[<Channel $channel>],
                     }
                 }
             }
@@ -531,7 +537,7 @@ impl<M: Mode, P: CaptureEvent> CaptureTimer<'_, M, P> {
 
         inputmux
             .ct32bit_cap(module)
-            .ct32bit_cap_sel(channel)
+            .ct32bit_cap_sel(channel.into())
             .modify(|_, w| w.capn_sel().variant(self.event_pin.get_trigger_input().into()));
 
         self.reset_and_enable();
@@ -551,26 +557,26 @@ impl<M: Mode, P: CaptureEvent> CaptureTimer<'_, M, P> {
 
 impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
     /// Creates a new `CaptureTimer` in asynchronous mode.
+    ///
+    /// Returns [`Error::Clock`] if an invalid clock configuration is used.
     pub fn new_async<T: Instance>(
         _inst: Peri<'p, T>,
         pin: Peri<'p, P>,
         clk: impl ConfigurableClock,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'p,
-    ) -> Self {
+    ) -> Result<Self> {
         let info = T::info();
-        let module = info.module;
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
 
-        Self {
-            id: COUNT_CHANNEL + module * CHANNEL_PER_MODULE + info.channel,
+        Ok(Self {
             event_clock_counts: 0,
-            clk_freq: clk.get_clock_rate().unwrap(),
+            clk_freq: clk.get_clock_rate().map_err(Error::Clock)?,
             _phantom: core::marker::PhantomData,
             info,
             event_pin: pin,
-        }
+        })
     }
 
     /// Waits asynchronously for the capture timer to record an event timestamp.
@@ -584,10 +590,10 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
 
         // Implementation of waiting for the interrupt
         poll_fn(|cx| {
-            WAKERS[self.id].register(cx.waker());
+            self.info.waker.register(cx.waker());
 
             if self.info.input_event_captured() {
-                let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                let curr_event_clock_count = reg.cr(self.info.channel.into()).read().bits();
                 let prev_event_clock_count = self.event_clock_counts;
                 if curr_event_clock_count < prev_event_clock_count {
                     self.event_clock_counts = (u32::MAX - prev_event_clock_count) + curr_event_clock_count + 1_u32;
@@ -611,18 +617,18 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
 
         // Implementation of waiting for the interrupt
         poll_fn(move |cx| {
-            WAKERS[self.id].register(cx.waker());
+            self.info.waker.register(cx.waker());
 
             if self.info.input_event_captured() {
                 // First time capture, store data into timer hist and reenable interrupt
                 if !first_captured {
-                    timer_hist = reg.cr(self.info.channel).read().bits();
+                    timer_hist = reg.cr(self.info.channel.into()).read().bits();
                     first_captured = true;
                     self.info.cap_timer_interrupt_enable();
                     Poll::Pending
                 } else {
                     // Second time capture, and minus timer hist to calculate event_clock_counts
-                    let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                    let curr_event_clock_count = reg.cr(self.info.channel.into()).read().bits();
                     if curr_event_clock_count < timer_hist {
                         self.event_clock_counts = (u32::MAX - timer_hist) + curr_event_clock_count + 1_u32;
                     } else {
@@ -640,18 +646,22 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Async, P> {
 
 impl<'p, P: CaptureEvent> CaptureTimer<'p, Blocking, P> {
     /// Creates a new `CaptureTimer` in blocking mode.
-    pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>, pin: Peri<'p, P>, clk: impl ConfigurableClock) -> Self {
+    ///
+    /// Returns [`Error::Clock`] if an invalid clock configuration is used.
+    pub fn new_blocking<T: Instance>(
+        _inst: Peri<'p, T>,
+        pin: Peri<'p, P>,
+        clk: impl ConfigurableClock,
+    ) -> Result<Self> {
         let info = T::info();
-        let module = info.module;
 
-        Self {
-            id: COUNT_CHANNEL + module * CHANNEL_PER_MODULE + info.channel,
+        Ok(Self {
             event_clock_counts: 0,
-            clk_freq: clk.get_clock_rate().unwrap(),
+            clk_freq: clk.get_clock_rate().map_err(Error::Clock)?,
             _phantom: core::marker::PhantomData,
             info,
             event_pin: pin,
-        }
+        })
     }
     /// Waits synchronously for the capture timer
     /// This API can capture time till the counter has not crossed the original position after rollover
@@ -664,7 +674,7 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Blocking, P> {
 
         loop {
             if self.info.input_event_captured() {
-                let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                let curr_event_clock_count = reg.cr(self.info.channel.into()).read().bits();
                 let prev_event_clock_count = self.event_clock_counts;
                 if curr_event_clock_count < prev_event_clock_count {
                     self.event_clock_counts = (u32::MAX - prev_event_clock_count) + curr_event_clock_count + 1_u32;
@@ -686,12 +696,12 @@ impl<'p, P: CaptureEvent> CaptureTimer<'p, Blocking, P> {
             if self.info.input_event_captured() {
                 // First time capture, store data into timer hist and reenable interrupt
                 if !first_captured {
-                    timer_hist = reg.cr(self.info.channel).read().bits();
+                    timer_hist = reg.cr(self.info.channel.into()).read().bits();
                     first_captured = true;
                     self.info.cap_timer_interrupt_enable();
                 } else {
                     // Second time capture, and minus timer hist to calculate event_clock_counts
-                    let curr_event_clock_count = reg.cr(self.info.channel).read().bits();
+                    let curr_event_clock_count = reg.cr(self.info.channel.into()).read().bits();
                     if curr_event_clock_count < timer_hist {
                         self.event_clock_counts = (u32::MAX - timer_hist) + curr_event_clock_count + 1_u32;
                     } else {
@@ -733,12 +743,12 @@ impl<'p, M: Mode> CountingTimer<'p, M> {
             let cycles = leftover as u32;
             unsafe {
                 // SAFETY: It has no safety impact as we are writing new value to match register here
-                reg.mr(channel).write(|w| w.match_().bits(cycles));
+                reg.mr(channel.into()).write(|w| w.match_().bits(cycles));
             }
         } else {
             unsafe {
                 //SAFETY: It has no safety impact as we are writing new value to match register here
-                reg.mr(channel).write(|w| w.match_().bits(curr_time + cycles));
+                reg.mr(channel.into()).write(|w| w.match_().bits(curr_time + cycles));
             }
         }
 
@@ -750,23 +760,24 @@ impl<'p, M: Mode> CountingTimer<'p, M> {
 
 impl<'p> CountingTimer<'p, Async> {
     /// Creates a new `CountingTimer` in asynchronous mode.
+    ///
+    /// Returns [`Error::Clock`] if an invalid clock configuration is used.
     pub fn new_async<T: Instance>(
         _inst: Peri<'p, T>,
         clk: impl ConfigurableClock,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'p,
-    ) -> Self {
+    ) -> Result<Self> {
         let info = T::info();
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
 
-        Self {
-            id: info.module * CHANNEL_PER_MODULE + info.channel,
-            clk_freq: clk.get_clock_rate().unwrap(),
+        Ok(Self {
+            clk_freq: clk.get_clock_rate().map_err(Error::Clock)?,
             timeout: 0,
             _phantom: core::marker::PhantomData,
             info,
-        }
+        })
     }
     /// Waits asynchronously for the countdown timer to complete.
     pub fn wait_us(&mut self, count_us: u32) -> impl Future<Output = ()> + use<'_, 'p> {
@@ -775,7 +786,7 @@ impl<'p> CountingTimer<'p, Async> {
         // Implementation of waiting for the interrupt
         poll_fn(|cx| {
             // Register the waker
-            WAKERS[self.id].register(cx.waker());
+            self.info.waker.register(cx.waker());
 
             if self.info.has_count_timer_expired() {
                 return Poll::Ready(());
@@ -785,36 +796,10 @@ impl<'p> CountingTimer<'p, Async> {
     }
 }
 
-impl<'p> CountingTimer<'p, Blocking> {
-    /// Creates a new `CountingTimer` in blocking mode.
-    pub fn new_blocking<T: Instance>(_inst: Peri<'p, T>, clk: impl ConfigurableClock) -> Self {
-        let info = T::info();
-
-        Self {
-            id: info.module * CHANNEL_PER_MODULE + info.channel,
-            clk_freq: clk.get_clock_rate().unwrap(),
-            timeout: 0,
-            _phantom: core::marker::PhantomData,
-            info,
-        }
-    }
-
-    /// Waits synchronously for the countdown timer to complete.
-    pub fn wait_us(&mut self, count_us: u32) {
-        self.start(count_us);
-
-        loop {
-            if self.info.has_count_timer_expired() {
-                break;
-            }
-        }
-    }
-}
-
 impl<'p, M: Mode> Drop for CountingTimer<'p, M> {
     fn drop(&mut self) {
         self.info.count_timer_disable_interrupt();
-        self.info.regs.mr(self.info.channel).write(|w| unsafe {
+        self.info.regs.mr(self.info.channel.into()).write(|w| unsafe {
             // SAFETY: It has no safety impact as we are clearing match register here
             w.match_().bits(0)
         });
@@ -834,6 +819,7 @@ pub struct CTimerPwm<'p> {
     _lifetime: PhantomData<&'p ()>,
     _periodchannel: &'p CTimerPwmPeriodChannel<'p>,
     period: MicroSeconds,
+    clk_freq: Hertz,
     count_max: u32,
     info: Info,
 }
@@ -842,6 +828,7 @@ pub struct CTimerPwm<'p> {
 pub struct CTimerPwmPeriodChannel<'p> {
     _lifetime: PhantomData<&'p ()>,
     period: MicroSeconds,
+    clk_freq: Hertz,
     count_max: u32,
     info: Info,
 }
@@ -856,7 +843,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
         // Clear PWM enable bit in PWM control register
 
         let reg = self.info.regs;
-        match TIMER_CHANNELS_ARR[self.info.channel] {
+        match self.info.channel {
             TimerChannelNum::Channel0 => {
                 reg.pwmc().modify(|_, w| w.pwmen0().match_());
             }
@@ -886,7 +873,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
         // 5. Clear interrupt flag
         // 6. Set PWM enable bit in PWM control register
 
-        match TIMER_CHANNELS_ARR[self.info.channel] {
+        match self.info.channel {
             TimerChannelNum::Channel0 => {
                 reg.mcr().modify(|_, w| w.mr0r().clear_bit());
                 reg.mcr().modify(|_, w| w.mr0s().clear_bit());
@@ -952,7 +939,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
 
     fn get_duty(&self, _: ()) -> Self::Duty {
         let reg = self.info.regs;
-        let scaled = reg.mr(self.info.channel).read().bits();
+        let scaled = reg.mr(self.info.channel.into()).read().bits();
 
         CentiPercent::from_scaled(self.count_max - scaled, self.count_max)
     }
@@ -968,7 +955,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
         // PWM output is low at the beginning of PWM cycle
         // PWM output is set to high when timer count reaches match register value
         // For active high PWM, set match register such that output is high for PWM cycle length*dutycycle
-        reg.mr(self.info.channel).write(|w|
+        reg.mr(self.info.channel.into()).write(|w|
             // SAFETY: No safety impact as we are writing match register here
             // FieldWriter::bits will clear field first, than write new value, cause PWM stay low for a period,
             // match_ is bits[0..31], so we can use REG::bits to workaround the problem. 
@@ -982,7 +969,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
         // Updating period for one channel will impact all channels configured for PWM on the same timer
         // Period update also updates duty cycle which can cause an out of spec pulse in PWM output(output could stay low for a PWM period
         // before new duty cycle is updated)
-        let clock_rate = Hertz(self.info.pwm_get_clock_freq());
+        let clock_rate = self.clk_freq;
 
         let requested_pwm_rate: Hertz = period.into().into();
 
@@ -998,7 +985,7 @@ impl embedded_hal_02::Pwm for CTimerPwm<'_> {
         periodchannel.pwm_configure(self.count_max);
 
         let reg = self.info.regs;
-        (0..TIMER_CHANNELS_ARR.len()).for_each(|i| {
+        (0..CHANNEL_PER_MODULE).for_each(|i| {
             // record current duty cycles
             let mut scaled = reg.mr(i).read().bits();
 
@@ -1038,6 +1025,7 @@ impl<'p> CTimerPwm<'p> {
             _lifetime: PhantomData,
             _periodchannel: period_channel,
             period: period_channel.period,
+            clk_freq: period_channel.clk_freq,
             count_max: period_channel.count_max,
             info: channel_info,
         })
@@ -1049,7 +1037,7 @@ impl<'p> CTimerPwmPeriodChannel<'p> {
     pub fn new<T: Instance>(_length_channel: Peri<'p, T>, period: MicroSeconds) -> Result<Self> {
         let channel_info = T::info();
 
-        let clock_rate = Hertz(channel_info.pwm_get_clock_freq());
+        let clock_rate = Hertz(channel_info.pwm_get_clock_freq()?);
 
         let requested_pwm_rate: Hertz = period.into();
 
@@ -1071,6 +1059,7 @@ impl<'p> CTimerPwmPeriodChannel<'p> {
         Ok(Self {
             _lifetime: PhantomData,
             period,
+            clk_freq: clock_rate,
             count_max: period_clock_ticks,
             info: channel_info,
         })
@@ -1106,7 +1095,6 @@ pub fn init() {
 
 impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
     unsafe fn on_interrupt() {
-        let module = T::info().module;
         let reg = T::info().regs;
 
         let ir = reg.ir().read();
@@ -1118,7 +1106,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
             });
-            WAKERS[module * CHANNEL_PER_MODULE].wake();
+            T::info().wake(TimerType::Count, TimerChannelNum::Channel0);
         }
         if ir.mr1int().bit_is_set() {
             reg.mcr().modify(|_, w| w.mr1i().clear_bit());
@@ -1127,7 +1115,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
             });
-            WAKERS[module * CHANNEL_PER_MODULE + 1].wake();
+            T::info().wake(TimerType::Count, TimerChannelNum::Channel1);
         }
         if ir.mr2int().bit_is_set() {
             reg.mcr().modify(|_, w| w.mr2i().clear_bit());
@@ -1136,7 +1124,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
             });
-            WAKERS[module * CHANNEL_PER_MODULE + 2].wake();
+            T::info().wake(TimerType::Count, TimerChannelNum::Channel2);
         }
         if ir.mr3int().bit_is_set() {
             reg.mcr().modify(|_, w| w.mr3i().clear_bit());
@@ -1145,27 +1133,27 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 // SAFETY: It has no safety impact as we are clearing match register here
                 w.match_().bits(0)
             });
-            WAKERS[module * CHANNEL_PER_MODULE + 3].wake();
+            T::info().wake(TimerType::Count, TimerChannelNum::Channel3);
         }
         if ir.cr0int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap0i().clear_bit());
             reg.ir().modify(|_, w| w.cr0int().clear_bit_by_one());
-            WAKERS[module * CHANNEL_PER_MODULE + COUNT_CHANNEL].wake();
+            T::info().wake(TimerType::Capture, TimerChannelNum::Channel0);
         }
         if ir.cr1int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap1i().clear_bit());
             reg.ir().modify(|_, w| w.cr1int().clear_bit_by_one());
-            WAKERS[module * CHANNEL_PER_MODULE + COUNT_CHANNEL + 1].wake();
+            T::info().wake(TimerType::Capture, TimerChannelNum::Channel1);
         }
         if ir.cr2int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap2i().clear_bit());
             reg.ir().modify(|_, w| w.cr2int().clear_bit_by_one());
-            WAKERS[module * CHANNEL_PER_MODULE + COUNT_CHANNEL + 2].wake();
+            T::info().wake(TimerType::Capture, TimerChannelNum::Channel2);
         }
         if ir.cr3int().bit_is_set() {
             reg.ccr().modify(|_, w| w.cap3i().clear_bit());
             reg.ir().modify(|_, w| w.cr3int().clear_bit_by_one());
-            WAKERS[module * CHANNEL_PER_MODULE + COUNT_CHANNEL + 3].wake();
+            T::info().wake(TimerType::Capture, TimerChannelNum::Channel3);
         }
     }
 }

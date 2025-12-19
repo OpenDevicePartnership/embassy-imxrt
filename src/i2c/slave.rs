@@ -9,8 +9,8 @@ use embassy_hal_internal::Peri;
 use embassy_hal_internal::drop::OnDrop;
 
 use super::{
-    Async, Blocking, I2C_REMEDIATION, I2C_WAKERS, Info, Instance, InterruptHandler, Mode, REMEDIATON_SLAVE_NAK, Result,
-    SclPin, SdaPin, SlaveDma, TEN_BIT_PREFIX, TransferError,
+    Async, Blocking, Error, Info, Instance, InterruptHandler, Mode, REMEDIATON_SLAVE_NAK, Result, SclPin, SdaPin,
+    SlaveDma, TEN_BIT_PREFIX, TransferError,
 };
 use crate::flexcomm::FlexcommRef;
 use crate::interrupt::typelevel::Interrupt;
@@ -186,13 +186,15 @@ impl<'a, M: Mode> I2cSlave<'a, M> {
             }
             Address::TenBit(addr) => {
                 // Save the 10 bit address to use later
-                ten_bit_info = Some(TenBitAddressInfo::new(addr));
+                let ten_bit_address = TenBitAddressInfo::new(addr);
 
                 // address 0 match = addr first byte, per UM11147 24.7.4
                 i2c.slvadr(0).modify(|_, w|
                     // note: byte needs to be adjusted for shift performed via w.slvadr()
                     // SAFETY: unsafe only required due to use of unnamed "bits" field
-                    unsafe{w.slvadr().bits(ten_bit_info.unwrap().first_byte >> 1)}.sadisable().enabled());
+                    unsafe{w.slvadr().bits(ten_bit_address.first_byte >> 1)}.sadisable().enabled());
+
+                ten_bit_info = Some(ten_bit_address);
             }
         }
 
@@ -517,6 +519,8 @@ impl I2cSlave<'_, Async> {
             return Err(TransferError::ReadFail.into());
         }
 
+        let dma_channel = self.dma_ch.as_ref().ok_or(Error::UnsupportedConfiguration)?;
+
         // Enable DMA
         i2c.slvctl().write(|w| w.slvdma().enabled());
 
@@ -526,11 +530,7 @@ impl I2cSlave<'_, Async> {
 
         let options = dma::transfer::TransferOptions::default();
         // Keep a reference to Transfer so it does not get dropped and aborted the DMA transfer
-        let _transfer =
-            self.dma_ch
-                .as_ref()
-                .unwrap()
-                .read_from_peripheral(i2c.slvdat().as_ptr() as *mut u8, buf, options);
+        let _transfer = dma_channel.read_from_peripheral(i2c.slvdat().as_ptr() as *mut u8, buf, options);
 
         // Hold guard to make sure that we send a NAK on cancellation
         // Since drop order is reverse, this comes BEFORE the dma guard,
@@ -543,10 +543,9 @@ impl I2cSlave<'_, Async> {
 
         poll_fn(|cx| {
             let i2c = self.info.regs;
-            let dma = self.dma_ch.as_ref().unwrap();
 
-            I2C_WAKERS[self.info.index].register(cx.waker());
-            dma.get_waker().register(cx.waker());
+            self.info.waker.register(cx.waker());
+            dma_channel.get_waker().register(cx.waker());
 
             let stat = i2c.stat().read();
             // Did master send a stop?
@@ -558,7 +557,7 @@ impl I2cSlave<'_, Async> {
                 return Poll::Ready(());
             }
             // Did we complete the DMA transfer and does the master still have more data for us?
-            if !dma.is_active() && stat.slvstate().is_slave_receive() {
+            if !dma_channel.is_active() && stat.slvstate().is_slave_receive() {
                 return Poll::Ready(());
             }
 
@@ -568,7 +567,7 @@ impl I2cSlave<'_, Async> {
 
         // Complete DMA transaction and get transfer count
         nak_guard.defuse();
-        let xfer_count = self.abort_dma(buf_len);
+        let xfer_count = self.abort_dma(buf_len)?;
         let stat = i2c.stat().read();
         // We got a stop from master, either way this transaction is
         // completed
@@ -608,12 +607,10 @@ impl I2cSlave<'_, Async> {
             .write(|w| w.slvpendingen().enabled().slvdeselen().enabled());
 
         let options = dma::transfer::TransferOptions::default();
+        let dma_channel = self.dma_ch.as_ref().ok_or(Error::UnsupportedConfiguration)?;
+
         // Keep a reference to Transfer so it does not get dropped and aborted the DMA transfer
-        let _transfer =
-            self.dma_ch
-                .as_ref()
-                .unwrap()
-                .write_to_peripheral(buf, i2c.slvdat().as_ptr() as *mut u8, options);
+        let _transfer = dma_channel.write_to_peripheral(buf, i2c.slvdat().as_ptr() as *mut u8, options);
 
         // Hold guard to disable on cancellation or completion
         let _dma_guard = OnDrop::new(|| {
@@ -622,10 +619,9 @@ impl I2cSlave<'_, Async> {
 
         poll_fn(|cx| {
             let i2c = self.info.regs;
-            let dma = self.dma_ch.as_ref().unwrap();
 
-            I2C_WAKERS[self.info.index].register(cx.waker());
-            dma.get_waker().register(cx.waker());
+            self.info.waker.register(cx.waker());
+            dma_channel.get_waker().register(cx.waker());
 
             let stat = i2c.stat().read();
             // Master sent a stop or nack
@@ -642,7 +638,7 @@ impl I2cSlave<'_, Async> {
         .await;
 
         // Complete DMA transaction and get transfer count
-        let xfer_count = self.abort_dma(buf.len());
+        let xfer_count = self.abort_dma(buf.len())?;
         let stat = i2c.stat().read();
 
         // we got a nack or a stop from master, either way this transaction is
@@ -670,7 +666,7 @@ impl I2cSlave<'_, Async> {
             .write(|w| w.slvpendingen().enabled().slvdeselen().enabled());
 
         poll_fn(move |cx: &mut core::task::Context<'_>| {
-            I2C_WAKERS[self.info.index].register(cx.waker());
+            self.info.waker.register(cx.waker());
 
             let stat = i2c.stat().read();
             if stat.slvdesel().is_deselected() {
@@ -685,9 +681,9 @@ impl I2cSlave<'_, Async> {
     }
 
     /// Complete DMA and return bytes transfer
-    fn abort_dma(&self, xfer_size: usize) -> usize {
-        // abort DMA if DMA is not compelted
-        let dma = self.dma_ch.as_ref().unwrap();
+    fn abort_dma(&self, xfer_size: usize) -> Result<usize> {
+        // abort DMA if DMA is not completed
+        let dma = self.dma_ch.as_ref().ok_or(Error::UnsupportedConfiguration)?;
         let remain_xfer_count = dma.get_xfer_count();
         let mut xfer_count = xfer_size;
         if dma.is_active() && remain_xfer_count != 0x3FF {
@@ -695,7 +691,7 @@ impl I2cSlave<'_, Async> {
             dma.abort();
         }
 
-        xfer_count
+        Ok(xfer_count)
     }
 }
 
@@ -738,7 +734,7 @@ impl Drop for NakGuard {
             } else {
                 // We are NOT pending, we need to ask the interrupt to send a NAK the next
                 // time the engine is pending. We ensured that the interrupt is active above.
-                I2C_REMEDIATION[self.info.index].fetch_or(REMEDIATON_SLAVE_NAK, Ordering::AcqRel);
+                self.info.remediation.fetch_or(REMEDIATON_SLAVE_NAK, Ordering::AcqRel);
             }
         })
     }

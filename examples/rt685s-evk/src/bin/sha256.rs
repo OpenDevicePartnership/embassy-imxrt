@@ -17,7 +17,7 @@ async fn main(_spawner: Spawner) {
     info!("Starting hashes");
     // Data that fits into a single block
     info!("Single hash block");
-    hashcrypt.new_sha256().hash(b"abc", &mut hash);
+    hashcrypt.new_sha256().hash(b"abc", &mut hash).unwrap();
     defmt::assert_eq!(
         &hash,
         &[
@@ -28,10 +28,13 @@ async fn main(_spawner: Spawner) {
 
     // Data that fits into two blocks
     info!("Two hash blocks");
-    hashcrypt.new_sha256().hash(
-        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@#$%^&*()",
-        &mut hash,
-    );
+    hashcrypt
+        .new_sha256()
+        .hash(
+            b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@#$%^&*()",
+            &mut hash,
+        )
+        .unwrap();
     defmt::assert_eq!(
         &hash,
         &[
@@ -42,10 +45,13 @@ async fn main(_spawner: Spawner) {
 
     // Data that is exactly one block
     info!("One block exactly");
-    hashcrypt.new_sha256().hash(
-        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@",
-        &mut hash,
-    );
+    hashcrypt
+        .new_sha256()
+        .hash(
+            b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@",
+            &mut hash,
+        )
+        .unwrap();
     defmt::assert_eq!(
         &hash,
         &[
@@ -59,7 +65,7 @@ async fn main(_spawner: Spawner) {
     hashcrypt.new_sha256().hash(
         b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ12345678",
         &mut hash,
-    );
+    ).unwrap();
     defmt::assert_eq!(
         &hash,
         &[

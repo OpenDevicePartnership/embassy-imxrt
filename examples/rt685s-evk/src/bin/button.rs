@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use defmt::info;
+use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
 use embassy_imxrt::gpio;
@@ -18,11 +18,14 @@ async fn main(_spawner: Spawner) {
         let res = select(user1.wait_for_falling_edge(), user2.wait_for_falling_edge()).await;
 
         match res {
-            Either::First(()) => {
+            Either::First(Ok(())) => {
                 info!("Button `USER1' pressed");
             }
-            Either::Second(()) => {
+            Either::Second(Ok(())) => {
                 info!("Button `USER2' pressed");
+            }
+            _ => {
+                error!("GPIO error occurred (only possible if bug in GPIO HAL exists)");
             }
         }
     }
