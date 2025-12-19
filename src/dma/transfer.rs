@@ -6,6 +6,26 @@ use core::task::{Context, Poll};
 
 use crate::dma::channel::Channel;
 
+/// DMA transfer mode
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Mode {
+    /// Single transfer, stops after completion
+    Single,
+    /// Continuous transfer, such as for circular buffers
+    Continuous,
+}
+
+/// DMA trigger source
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Trigger {
+    /// Software-triggered transfer
+    Software,
+    /// Hardware-triggered transfer
+    Hardware,
+}
+
 /// DMA transfer options
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -18,10 +38,10 @@ pub struct TransferOptions {
     pub priority: Priority,
 
     /// Transfer is intended to be done continuously, such as for a circular buffer
-    pub is_continuous: bool,
+    pub mode: Mode,
 
-    /// Transfer is software triggerred
-    pub is_sw_trig: bool,
+    /// Trigger source: software or hardware
+    pub trigger: Trigger,
 }
 
 impl Default for TransferOptions {
@@ -29,8 +49,8 @@ impl Default for TransferOptions {
         Self {
             width: Width::Bit8,
             priority: Priority::Priority0,
-            is_continuous: false,
-            is_sw_trig: false,
+            mode: Mode::Single,
+            trigger: Trigger::Hardware,
         }
     }
 }

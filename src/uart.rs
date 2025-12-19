@@ -11,7 +11,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 
 use crate::dma::channel::Channel;
-use crate::dma::transfer::Transfer;
+use crate::dma::transfer::{self, Transfer};
 use crate::flexcomm::{Clock, FlexcommRef};
 use crate::gpio::{AnyPin, GpioPin as Pin};
 use crate::interrupt::typelevel::Interrupt;
@@ -221,13 +221,9 @@ impl<'a> UartTx<'a, Blocking> {
 }
 
 struct BufferConfig {
-    #[cfg(feature = "time")]
     buffer: &'static mut [u8],
-    #[cfg(feature = "time")]
     write_index: usize,
-    #[cfg(feature = "time")]
     read_index: usize,
-    #[cfg(feature = "time")]
     polling_rate: u64,
 }
 
@@ -704,11 +700,10 @@ impl<'a> UartRx<'a, Async> {
         Ok(Self::new_inner::<T>(flexcomm, rx_dma, None))
     }
 
-    /// create a new DMA enabled UART which can only receive data, but uses a buffer to avoid FIFO overflow
-    /// Note: requires time-driver due to hardware constraint requiring a polled interface (no UART Idle bus indicator)
-    ///       alternative approaches are possible, this was done as it maintains most similarity between Buffered and
-    ///       Unbuffered read interfaces
-    #[cfg(feature = "time")]
+    /// Create a new DMA enabled UART which can only receive data, using a buffer to enable continuous DMA reception via a circular buffer.
+    /// This prevents data loss that would otherwise occur if DMA were toggled on every `read()` call, and also helps avoid FIFO overflow.
+    /// Note: requires time-driver due to hardware constraint requiring a polled interface (no UART Idle bus indicator).
+    ///       Alternative approaches are possible; this was done to maintain similarity between buffered and unbuffered read interfaces.
     pub fn new_async_with_buffer<T: Instance>(
         _inner: Peri<'a, T>,
         rx: Peri<'a, impl RxPin<T>>,
@@ -724,8 +719,8 @@ impl<'a> UartRx<'a, Async> {
 
         rx.as_rx();
 
-        let mut _rx = rx.into();
-        let flexcomm = Uart::<Async>::init::<T>(None, Some(_rx.reborrow()), None, None, config)?;
+        let mut rx = rx.into();
+        let flexcomm = Uart::<Async>::init::<T>(None, Some(rx.reborrow()), None, None, config)?;
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
@@ -741,8 +736,8 @@ impl<'a> UartRx<'a, Async> {
             dma::transfer::TransferOptions {
                 width: dma::transfer::Width::Bit8,
                 priority: dma::transfer::Priority::Priority0,
-                is_continuous: true,
-                is_sw_trig: true,
+                mode: transfer::Mode::Continuous,
+                trigger: transfer::Trigger::Software,
             },
         );
         rx_dma.enable_channel();
@@ -761,23 +756,15 @@ impl<'a> UartRx<'a, Async> {
     }
 
     /// Read from UART RX asynchronously.
-    pub async fn read(&mut self, buf: &mut [u8]) -> Result<()> {
-        #[cfg(feature = "time")]
-        {
-            if self._buffer_config.is_some() {
-                self.read_buffered(buf).await
-            } else {
-                self.read_unbuffered(buf).await
-            }
-        }
-
-        #[cfg(not(feature = "time"))]
-        {
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        if self._buffer_config.is_some() {
+            self.read_buffered(buf).await
+        } else {
             self.read_unbuffered(buf).await
         }
     }
 
-    async fn read_unbuffered(&mut self, buf: &mut [u8]) -> Result<()> {
+    async fn read_unbuffered(&mut self, buf: &mut [u8]) -> Result<usize> {
         let regs = self.info.regs;
 
         for chunk in buf.chunks_mut(1024) {
@@ -841,15 +828,14 @@ impl<'a> UartRx<'a, Async> {
 
             match res {
                 Either::First(()) | Either::Second(Ok(())) => (),
-                Either::Second(e) => return e,
+                Either::Second(Err(e)) => return Err(e),
             }
         }
 
-        Ok(())
+        Ok(buf.len())
     }
 
-    #[cfg(feature = "time")]
-    async fn read_buffered(&mut self, buf: &mut [u8]) -> Result<()> {
+    async fn read_buffered(&mut self, buf: &mut [u8]) -> Result<usize> {
         // unwrap safe here as only entry path to API requires rx_dma instance
         let rx_dma = self._rx_dma.as_ref().unwrap();
         let buffer_config = self._buffer_config.as_mut().unwrap();
@@ -920,10 +906,10 @@ impl<'a> UartRx<'a, Async> {
                     // finally increment total bytes read
                     bytes_read += read_len;
                     // if we have more bytes to read, do the second part
-                    // only need to copy second part if there's data remaining at the begining of the buffer and we
+                    // only need to copy second part if there's data remaining at the beginning of the buffer and we
                     // still have more bytes requested from read() awaiter
                     if bytes_read < buf.len() && buffer_config.write_index > 0 {
-                        // do the second part (begining of buffer up to write index)
+                        // do the second part (beginning of buffer up to write index)
                         // buffer_config.read_index should be 0 now
                         // calculate the read_len
                         let in_len = buffer_config.write_index - buffer_config.read_index;
@@ -949,9 +935,8 @@ impl<'a> UartRx<'a, Async> {
                     }
                 }
             } else {
-                // sleep until next polling epoch, or if we detect a UART transfer error event
+                // wait for DMA interrupt to signal new data, or if we detect a UART transfer error event
                 let res = select(
-                    // use embassy_time to enable polling the bus for more data
                     embassy_time::Timer::after_micros(buffer_config.polling_rate),
                     // detect bus errors
                     poll_fn(|cx| {
@@ -998,11 +983,11 @@ impl<'a> UartRx<'a, Async> {
 
                 match res {
                     Either::First(()) | Either::Second(Ok(())) => (),
-                    Either::Second(e) => return e,
+                    Either::Second(Err(e)) => return Err(e),
                 }
             }
         }
-        Ok(())
+        Ok(bytes_read)
     }
 }
 
@@ -1039,7 +1024,6 @@ impl<'a> Uart<'a, Async> {
     }
 
     /// Create a new DMA enabled UART with Rx buffering enabled
-    #[cfg(feature = "time")]
     pub fn new_async_with_buffer<T: Instance>(
         _inner: Peri<'a, T>,
         tx: Peri<'a, impl TxPin<T>>,
@@ -1075,8 +1059,8 @@ impl<'a> Uart<'a, Async> {
             dma::transfer::TransferOptions {
                 width: dma::transfer::Width::Bit8,
                 priority: dma::transfer::Priority::Priority0,
-                is_continuous: true,
-                is_sw_trig: true,
+                mode: transfer::Mode::Continuous,
+                trigger: transfer::Trigger::Software,
             },
         );
         rx_dma.enable_channel();
@@ -1139,7 +1123,6 @@ impl<'a> Uart<'a, Async> {
     }
 
     /// Create a new DMA enabled UART with hardware flow control (RTS/CTS) and Rx buffering enabled
-    #[cfg(feature = "time")]
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_rtscts_buffer<T: Instance>(
         _inner: Peri<'a, T>,
@@ -1188,8 +1171,8 @@ impl<'a> Uart<'a, Async> {
             dma::transfer::TransferOptions {
                 width: dma::transfer::Width::Bit8,
                 priority: dma::transfer::Priority::Priority0,
-                is_continuous: true,
-                is_sw_trig: true,
+                mode: transfer::Mode::Continuous,
+                trigger: transfer::Trigger::Software,
             },
         );
         rx_dma.enable_channel();
@@ -1212,7 +1195,7 @@ impl<'a> Uart<'a, Async> {
     }
 
     /// Read from UART RX.
-    pub fn read<'buf>(&mut self, buf: &'buf mut [u8]) -> impl Future<Output = Result<()>> + use<'_, 'a, 'buf> {
+    pub fn read<'buf>(&mut self, buf: &'buf mut [u8]) -> impl Future<Output = Result<usize>> + use<'_, 'a, 'buf> {
         self.rx.read(buf)
     }
 
@@ -1439,7 +1422,7 @@ impl embedded_io_async::ErrorType for Uart<'_, Async> {
 
 impl embedded_io_async::Read for UartRx<'_, Async> {
     async fn read(&mut self, buf: &mut [u8]) -> core::result::Result<usize, Self::Error> {
-        self.read(buf).await.map(|_| buf.len())
+        self.read(buf).await
     }
 }
 

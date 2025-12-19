@@ -6,7 +6,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use super::{DESCRIPTORS, DMA_WAKERS};
 use crate::dma::DmaInfo;
-use crate::dma::transfer::{Direction, Transfer, TransferOptions};
+use crate::dma::transfer::{Direction, Mode, Transfer, TransferOptions, Trigger};
 
 /// DMA channel
 pub struct Channel<'d> {
@@ -120,18 +120,10 @@ impl<'d> Channel<'d> {
         self.info.regs.channel(channel).xfercfg().write(|w| unsafe {
             w.cfgvalid().set_bit();
 
-            if options.is_continuous {
-                w.reload().enabled();
-                w.clrtrig().clear_bit();
-            } else {
-                w.reload().disabled();
-                w.clrtrig().set_bit();
-            }
-            if options.is_sw_trig {
-                w.swtrig().set_bit();
-            } else {
-                w.swtrig().clear_bit();
-            }
+            w.reload().bit(options.mode == Mode::Continuous);
+            w.clrtrig().bit(options.mode == Mode::Single);
+            w.swtrig().bit(options.trigger == Trigger::Software);
+
             w.setinta().set_bit();
             w.width().bits(options.width.into());
             if dir == Direction::PeripheralToMemory {
@@ -151,11 +143,11 @@ impl<'d> Channel<'d> {
         // NOTE: the DMA controller expects the memory buffer end address but peripheral address is actual
         // SAFETY: unsafe due to use of a mutable static (DESCRIPTORS.list)
         unsafe {
-            if options.is_continuous {
+            if options.mode == Mode::Continuous {
                 let xfer_cfg = self.info.regs.channel(channel).xfercfg().read();
-                DESCRIPTORS.list[channel].reserved_reloadcfg = xfer_cfg.bits();
+                DESCRIPTORS.list[channel].reserved = xfer_cfg.bits();
             } else {
-                DESCRIPTORS.list[channel].reserved_reloadcfg = 0;
+                DESCRIPTORS.list[channel].reserved = 0;
             }
 
             if dir == Direction::MemoryToPeripheral {
@@ -169,7 +161,7 @@ impl<'d> Channel<'d> {
             } else {
                 DESCRIPTORS.list[channel].src_data_end_addr = srcbase as u32 + (xfercount * xferwidth) as u32;
             }
-            if options.is_continuous {
+            if options.mode == Mode::Continuous {
                 DESCRIPTORS.list[channel].nxt_desc_link_addr = &DESCRIPTORS.list[channel] as *const _ as u32;
             } else {
                 DESCRIPTORS.list[channel].nxt_desc_link_addr = 0;

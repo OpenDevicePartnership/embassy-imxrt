@@ -27,7 +27,7 @@ const DMA_CHANNEL_COUNT: usize = 33;
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 struct ChannelDescriptor {
-    reserved_reloadcfg: u32,
+    reserved: u32,
     src_data_end_addr: u32,
     dst_data_end_addr: u32,
     nxt_desc_link_addr: u32,
@@ -43,7 +43,7 @@ struct DescriptorBlock {
 /// DMA channel descriptor list
 static mut DESCRIPTORS: DescriptorBlock = DescriptorBlock {
     list: [ChannelDescriptor {
-        reserved_reloadcfg: 0,
+        reserved: 0,
         src_data_end_addr: 0,
         dst_data_end_addr: 0,
         nxt_desc_link_addr: 0,
