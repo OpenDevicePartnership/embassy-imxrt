@@ -22,7 +22,7 @@ async fn main(_spawner: Spawner) {
     info!("Starting hashes");
     // Data that fits into a single block
     info!("Single hash block");
-    hashcrypt.new_sha256().hash(b"abc", &mut hash).await;
+    hashcrypt.new_sha256().hash(b"abc", &mut hash).await.unwrap();
     defmt::assert_eq!(
         &hash,
         &[
@@ -39,7 +39,8 @@ async fn main(_spawner: Spawner) {
             b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@#$%^&*()",
             &mut hash,
         )
-        .await;
+        .await
+        .unwrap();
     defmt::assert_eq!(
         &hash,
         &[
@@ -56,7 +57,8 @@ async fn main(_spawner: Spawner) {
             b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@",
             &mut hash,
         )
-        .await;
+        .await
+        .unwrap();
     defmt::assert_eq!(
         &hash,
         &[
@@ -70,7 +72,7 @@ async fn main(_spawner: Spawner) {
     hashcrypt.new_sha256().hash(
         b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ12345678",
         &mut hash,
-    ).await;
+    ).await.unwrap();
     defmt::assert_eq!(
         &hash,
         &[
