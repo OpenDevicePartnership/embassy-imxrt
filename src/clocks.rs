@@ -1601,8 +1601,9 @@ fn init_clock_hw(config: ClockConfig) -> Result<(), ClockError> {
     init_syscpuahb_clk(256);
 
     const SYSPLL_MULTIPLIER_FOR_PFDS: u32 = 18;
-    let true_main_clk_freq =
-        config.main_pll_clk.freq.load(Ordering::Relaxed) * SYSPLL_MULTIPLIER_FOR_PFDS / config.main_pll_clk.pfd0 as u32;
+    // These calculations will not overflow and panic since that'd require a freq in the GHz range which is not supported by the hardware
+    let true_main_clk_freq: u32 = (config.main_pll_clk.freq.load(Ordering::Relaxed) / config.main_pll_clk.pfd0 as u32)
+        * SYSPLL_MULTIPLIER_FOR_PFDS;
     let config_main_clk_freq = config.main_clk.freq.load(Ordering::Relaxed);
     // Check if the calculated main clock frequency based on PLL and PFD0 matches the desired main clock frequency
     // Round both frequencies to nearest MHz for comparison using integer arithmetic
