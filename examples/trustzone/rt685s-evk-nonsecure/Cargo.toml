@@ -1,0 +1,26 @@
+[package]
+name = "nonsecure-app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+cortex-m = { version = "0.7.7", features = [
+    "inline-asm",
+    "critical-section-single-core",
+] }
+cortex-m-rt = "0.7.3"
+rtt-target = "0.6.1"
+panic-probe = { version = "1.0", features = ["print-rtt"] }
+embassy-imxrt = { version = "0.1.0", path = "../../../", features = [
+    "time-driver-os-timer",
+    "time",
+    "mimxrt685s",
+    "unstable-pac",
+] }
+embassy-executor = { version = "0.9.1", features = [
+    "arch-cortex-m",
+    "executor-thread",
+    "executor-interrupt",
+] }
+embassy-time = "0.5.0"
