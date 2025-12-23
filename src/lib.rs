@@ -23,6 +23,7 @@ pub mod crc;
 pub mod dma;
 
 #[cfg(feature = "_espi")]
+#[allow(clippy::indexing_slicing)]
 pub mod espi;
 
 pub mod flash;
