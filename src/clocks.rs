@@ -828,6 +828,14 @@ impl ConfigurableClock for MainPllClkConfig {
                                 "Setting clock rate of {}Hz failed due to Invalid mult value for Main PLL: {}. A valid combo of parameters must be used.",
                                 freq, mult
                             );
+                            // make sure to power syspll back up before returning the error
+                            // Clear System PLL reset
+                            clkctl0.syspll0ctl0().write(|w| w.reset().normal());
+                            // Power up SYSPLL
+                            sysctl0
+                                .pdruncfg0_clr()
+                                .write(|w| w.syspllana_pd().clr_pdruncfg0().syspllldo_pd().clr_pdruncfg0());
+
                             return Err(ClockError::InvalidMult);
                         }
                     }
