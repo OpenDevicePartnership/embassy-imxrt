@@ -16,16 +16,6 @@ pub enum Mode {
     Continuous,
 }
 
-/// DMA trigger source
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum Trigger {
-    /// Software-triggered transfer
-    Software,
-    /// Hardware-triggered transfer
-    Hardware,
-}
-
 /// DMA transfer options
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

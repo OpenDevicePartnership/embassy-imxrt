@@ -124,32 +124,6 @@ impl<'d> Channel<'d> {
             descriptor.nxt_desc_link_addr = 0;
         }
 
-        unsafe {
-            if options.mode == Mode::Continuous {
-                let xfer_cfg = self.info.regs.channel(channel).xfercfg().read();
-                DESCRIPTORS.list[channel].reserved = xfer_cfg.bits();
-            } else {
-                DESCRIPTORS.list[channel].reserved = 0;
-            }
-
-            if dir == Direction::MemoryToPeripheral {
-                DESCRIPTORS.list[channel].dst_data_end_addr = dstbase as u32;
-            } else {
-                DESCRIPTORS.list[channel].dst_data_end_addr = dstbase as u32 + (xfercount * xferwidth) as u32;
-            }
-
-            if dir == Direction::PeripheralToMemory {
-                DESCRIPTORS.list[channel].src_data_end_addr = srcbase as u32;
-            } else {
-                DESCRIPTORS.list[channel].src_data_end_addr = srcbase as u32 + (xfercount * xferwidth) as u32;
-            }
-            if options.mode == Mode::Continuous {
-                DESCRIPTORS.list[channel].nxt_desc_link_addr = &DESCRIPTORS.list[channel] as *const _ as u32;
-            } else {
-                DESCRIPTORS.list[channel].nxt_desc_link_addr = 0;
-            }
-        }
-
         // Configure for transfer type, no hardware triggering (we'll trigger via software), high priority
         // SAFETY: unsafe due to .bits usage
         self.info.regs.channel(channel).cfg().write(|w| unsafe {
