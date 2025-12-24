@@ -4,15 +4,18 @@ use core::future::{Future, poll_fn};
 use core::marker::PhantomData;
 use core::task::Poll;
 
+#[cfg(feature = "time")]
+use bbqueue::BBBuffer;
 use embassy_futures::select::{Either, select};
 use embassy_hal_internal::drop::OnDrop;
 use embassy_hal_internal::{Peri, PeripheralType};
 use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 
-use bbqueue::BBBuffer;
-
 use crate::dma::channel::Channel;
+#[cfg(not(feature = "time"))]
+use crate::dma::transfer::Transfer;
+#[cfg(feature = "time")]
 use crate::dma::transfer::{self, Transfer};
 use crate::flexcomm::{Clock, FlexcommRef};
 use crate::gpio::{AnyPin, GpioPin as Pin};
@@ -57,7 +60,9 @@ pub struct UartRx<'a, M: Mode> {
     _flexcomm: FlexcommRef,
     _buffer_config: Option<BufferConfig>,
     _rx_dma: Option<Channel<'a>>,
+    #[cfg(feature = "time")]
     bb_prod: Option<bbqueue::Producer<'static, 1024>>,
+    #[cfg(feature = "time")]
     bb_cons: Option<bbqueue::Consumer<'static, 1024>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
@@ -234,6 +239,7 @@ struct BufferConfig {
 }
 
 impl<'a, M: Mode> UartRx<'a, M> {
+    #[allow(unused_variables)]
     fn new_inner<T: Instance>(
         _flexcomm: FlexcommRef,
         _rx_dma: Option<Channel<'a>>,
@@ -246,8 +252,10 @@ impl<'a, M: Mode> UartRx<'a, M> {
             _flexcomm,
             _buffer_config,
             _rx_dma,
-            bb_prod: bb_prod,
-            bb_cons: bb_cons,
+            #[cfg(feature = "time")]
+            bb_prod,
+            #[cfg(feature = "time")]
+            bb_cons,
             _phantom: PhantomData,
         }
     }
@@ -856,6 +864,7 @@ impl<'a> UartRx<'a, Async> {
         Ok(buf.len())
     }
 
+    #[cfg(feature = "time")]
     fn pump_data_into_bb(&mut self) {
         let cfg = self._buffer_config.as_mut().unwrap();
         let rx_dma = self._rx_dma.as_ref().unwrap();
@@ -1471,6 +1480,7 @@ unsafe impl Send for Info {}
 trait SealedInstance {
     fn info() -> Info;
     fn waker() -> &'static AtomicWaker;
+    #[cfg(feature = "time")]
     fn bb() -> &'static BBBuffer<1024>;
 }
 
@@ -1538,6 +1548,7 @@ macro_rules! impl_instance {
                         &WAKER
                     }
 
+                    #[cfg(feature = "time")]
                     fn bb() -> &'static BBBuffer<1024> {
                         static BB: BBBuffer<1024> = BBBuffer::new();
                         &BB
