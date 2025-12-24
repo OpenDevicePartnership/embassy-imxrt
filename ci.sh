@@ -124,5 +124,5 @@ cargo batch \
 	  echo "--- build --release --manifest-path Cargo.toml --target thumbv8m.main-none-eabihf --features $features "
 	done) $BUILD_EXTRA
 
-cargo clippy --locked --manifest-path Cargo.toml --target thumbv8m.main-none-eabihf --features "mimxrt633s,rt,time-driver-os-timer,unstable-pac" -- -Dwarnings -D clippy::suspicious -D clippy::correctness -D clippy::perf -D clippy::style
-cargo clippy --locked --manifest-path Cargo.toml --target thumbv8m.main-none-eabihf --features "mimxrt633s,rt,time-driver-rtc,unstable-pac" -- -Dwarnings -D clippy::suspicious -D clippy::correctness -D clippy::perf -D clippy::style
+cargo clippy --locked --manifest-path Cargo.toml --target thumbv8m.main-none-eabihf --features "mimxrt633s,rt,time-driver-os-timer,unstable-pac" -- -Dwarnings
+cargo clippy --locked --manifest-path Cargo.toml --target thumbv8m.main-none-eabihf --features "mimxrt633s,rt,time-driver-rtc,unstable-pac" -- -Dwarnings
