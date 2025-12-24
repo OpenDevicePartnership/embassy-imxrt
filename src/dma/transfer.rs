@@ -39,9 +39,6 @@ pub struct TransferOptions {
 
     /// Transfer is intended to be done continuously, such as for a circular buffer
     pub mode: Mode,
-
-    /// Trigger source: software or hardware
-    pub trigger: Trigger,
 }
 
 impl Default for TransferOptions {
@@ -50,7 +47,6 @@ impl Default for TransferOptions {
             width: Width::Bit8,
             priority: Priority::Priority0,
             mode: Mode::Single,
-            trigger: Trigger::Hardware,
         }
     }
 }

@@ -6,7 +6,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use super::{DESCRIPTORS, DMA_WAKERS};
 use crate::dma::DmaInfo;
-use crate::dma::transfer::{Direction, Mode, Transfer, TransferOptions, Trigger};
+use crate::dma::transfer::{Direction, Mode, Transfer, TransferOptions};
 
 /// DMA channel
 pub struct Channel<'d> {
@@ -122,7 +122,6 @@ impl<'d> Channel<'d> {
 
             w.reload().bit(options.mode == Mode::Continuous);
             w.clrtrig().bit(options.mode == Mode::Single);
-            w.swtrig().bit(options.trigger == Trigger::Software);
 
             w.setinta().set_bit();
             w.width().bits(options.width.into());
