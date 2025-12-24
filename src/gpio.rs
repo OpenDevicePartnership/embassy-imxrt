@@ -190,6 +190,16 @@ impl<S: Sense> Flex<'_, S> {
             unsafe { w.dirsetp().bits(1 << self.pin.pin()) });
     }
 
+    /// Set the input buffer state
+    ///
+    pub fn set_input_buffer(&mut self, enable: bool) {
+        if enable {
+            self.pin.enable_input_buffer();
+        } else {
+            self.pin.disable_input_buffer();
+        }
+    }
+
     /// Set high
     pub fn set_high(&mut self) {
         self.pin.block().set(self.pin.port()).write(|w|
