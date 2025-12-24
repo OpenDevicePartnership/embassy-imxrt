@@ -505,12 +505,18 @@ impl<'a> FlexSpi<'a> {
     pub fn fill_tx_fifo(&mut self, buffer: &[u8]) -> usize {
         // Limit buffer to fifo length.
         let watermark = self.get_tx_fifo_watermark_bytes();
-        let copy_len = buffer.len().min(watermark);
 
         let flex_spi = unsafe { pac::Flexspi::steal() };
 
+        // If this somehow were to end up out of bounds (maybe from cosmic rays?),
+        // we return 0 bytes copied instead of panicking
+        let copy_len = buffer.len().min(watermark);
+        let Some(source) = buffer.get(..copy_len) else {
+            return 0;
+        };
+
         unsafe {
-            read_u8_write_u32_volatile(&buffer[..copy_len], flex_spi.tfdr(0).as_ptr().cast());
+            read_u8_write_u32_volatile(source, flex_spi.tfdr(0).as_ptr().cast());
         }
 
         // Clear the TX watermark empty interrupt to transmit the data.
@@ -535,11 +541,17 @@ impl<'a> FlexSpi<'a> {
         // Get number of bytes to pop.
         let watermark = self.get_rx_fifo_watermark_bytes();
         let fill_level = self.get_rx_fill_level_bytes();
+
+        // If this somehow were to end up out of bounds (maybe from cosmic rays?),
+        // we return 0 bytes written instead of panicking
         let copy_len = buffer.len().min(fill_level).min(watermark);
+        let Some(dest) = buffer.get_mut(..copy_len) else {
+            return 0;
+        };
 
         // Copy data from TX FIFO to buffer.
         unsafe {
-            read_u32_volatile_write_u8(flex_spi.rfdr(0).as_ptr().cast(), &mut buffer[..copy_len]);
+            read_u32_volatile_write_u8(flex_spi.rfdr(0).as_ptr().cast(), dest);
         }
 
         // Pop watermark data from the FIFO.
@@ -788,24 +800,25 @@ pub struct InvalidCommandSequence {
 /// There may be no reference in existence to the destination region.
 /// This also means that the destination may not overlap with the source.
 unsafe fn read_u8_write_u32_volatile(source: &[u8], dest: *mut u32) {
-    unsafe {
-        let word_count = source.len() / 4;
-        let remainder = source.len() % 4;
+    // Split source into 4 byte chunks and a remainder (if any)
+    let (src_words, remainder) = source.as_chunks::<4>();
 
-        // Write whole words.
-        for i in 0..word_count {
-            let source: &[u8; 4] = &*source[i * 4..][..4].as_ptr().cast();
-            let word = u32::from_ne_bytes(*source);
-            dest.add(i).write_volatile(word);
-        }
+    // Write whole words.
+    for (i, src_word) in src_words.iter().enumerate() {
+        let src_word = u32::from_ne_bytes(*src_word);
+        // SAFETY: Assumes caller has upheld the requirements for destination pointer
+        unsafe { dest.add(i).write_volatile(src_word) }
+    }
 
-        // Write remainder, zero padded.
-        if remainder > 0 {
-            let mut word = [0; 4];
-            word[..remainder].copy_from_slice(&source[word_count * 4..][..remainder]);
-            let word = u32::from_ne_bytes(word);
-            dest.add(word_count).write_volatile(word);
+    // Write remainder, zero padded.
+    if !remainder.is_empty() {
+        let mut src_word = [0u8; 4];
+        for (to, from) in src_word.iter_mut().zip(remainder.iter()) {
+            *to = *from;
         }
+        let src_word = u32::from_ne_bytes(src_word);
+        // SAFETY: Assumes caller has upheld the requirements for destination pointer
+        unsafe { dest.add(src_words.len()).write_volatile(src_word) }
     }
 }
 
@@ -822,23 +835,22 @@ unsafe fn read_u8_write_u32_volatile(source: &[u8], dest: *mut u32) {
 /// The size in bytes of the region must be at least `dest.len()` rounded up to a multiple of 4.
 /// The source region may not overlap with the `dest` slice.
 unsafe fn read_u32_volatile_write_u8(source: *const u32, dest: &mut [u8]) {
-    unsafe {
-        let word_count = dest.len() / 4;
-        let remainder = dest.len() % 4;
+    // Split dest into 4 byte chunks and a remainder (if any)
+    let (dst_words, remainder) = dest.as_chunks_mut::<4>();
 
-        // Read whole words.
-        for i in 0..word_count {
-            let dest: &mut [u8; 4] = &mut *dest[i * 4..].as_mut_ptr().cast();
-            let source = source.add(i);
-            let word = source.read_volatile();
-            *dest = word.to_ne_bytes();
-        }
+    // Read whole words.
+    for (i, dst_word) in dst_words.iter_mut().enumerate() {
+        // SAFETY: Assumes caller has upheld the requirements for source pointer
+        let src_word = unsafe { source.add(i).read_volatile() };
+        *dst_word = src_word.to_ne_bytes();
+    }
 
-        // Read last word and truncate.
-        if remainder > 0 {
-            let word = source.add(word_count).read_volatile();
-            let word = word.to_ne_bytes();
-            dest[word_count * 4..].copy_from_slice(&word[..remainder]);
+    // Read last word and truncate.
+    if !remainder.is_empty() {
+        // SAFETY: Assumes caller has upheld the requirements for source pointer
+        let src_word = unsafe { source.add(dst_words.len()).read_volatile() };
+        for (to, from) in remainder.iter_mut().zip(src_word.to_ne_bytes().iter()) {
+            *to = *from;
         }
     }
 }
