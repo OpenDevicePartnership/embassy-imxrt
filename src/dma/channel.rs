@@ -6,7 +6,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use super::DESCRIPTORS;
 use crate::dma::DmaInfo;
-use crate::dma::transfer::{Direction, Transfer, TransferOptions};
+use crate::dma::transfer::{Direction, Mode, Transfer, TransferOptions};
 
 /// DMA channel
 pub struct Channel<'d> {
@@ -102,7 +102,12 @@ impl<'d> Channel<'d> {
 
         // Configure the channel descriptor
         // NOTE: the DMA controller expects the memory buffer end address but peripheral address is actual
-        descriptor.reserved = 0;
+        if options.mode == Mode::Continuous {
+            let xfer_cfg = self.info.regs.channel(channel).xfercfg().read();
+            descriptor.reserved = xfer_cfg.bits();
+        } else {
+            descriptor.reserved = 0;
+        }
         if dir == Direction::MemoryToPeripheral {
             descriptor.dst_data_end_addr = dstbase as u32;
         } else {
@@ -113,7 +118,11 @@ impl<'d> Channel<'d> {
         } else {
             descriptor.src_data_end_addr = srcbase as u32 + (xfercount * xferwidth) as u32;
         }
-        descriptor.nxt_desc_link_addr = 0;
+        if options.mode == Mode::Continuous {
+            descriptor.nxt_desc_link_addr = &descriptor as *const _ as u32;
+        } else {
+            descriptor.nxt_desc_link_addr = 0;
+        }
 
         // Configure for transfer type, no hardware triggering (we'll trigger via software), high priority
         // SAFETY: unsafe due to .bits usage
@@ -137,8 +146,10 @@ impl<'d> Channel<'d> {
         // SAFETY: unsafe due to .bits usage
         self.info.regs.channel(channel).xfercfg().write(|w| unsafe {
             w.cfgvalid().set_bit();
-            w.clrtrig().set_bit();
-            w.reload().clear_bit();
+
+            w.reload().bit(options.mode == Mode::Continuous);
+            w.clrtrig().bit(options.mode == Mode::Single);
+
             w.setinta().set_bit();
             w.width().bits(options.width.into());
             if dir == Direction::PeripheralToMemory {
@@ -153,6 +164,35 @@ impl<'d> Channel<'d> {
             }
             w.xfercount().bits(xfercount as u16)
         });
+
+        // Configure the channel descriptor
+        // NOTE: the DMA controller expects the memory buffer end address but peripheral address is actual
+        // SAFETY: unsafe due to use of a mutable static (DESCRIPTORS.list)
+        unsafe {
+            if options.mode == Mode::Continuous {
+                let xfer_cfg = self.info.regs.channel(channel).xfercfg().read();
+                DESCRIPTORS.list[channel].reserved = xfer_cfg.bits();
+            } else {
+                DESCRIPTORS.list[channel].reserved = 0;
+            }
+
+            if dir == Direction::MemoryToPeripheral {
+                DESCRIPTORS.list[channel].dst_data_end_addr = dstbase as u32;
+            } else {
+                DESCRIPTORS.list[channel].dst_data_end_addr = dstbase as u32 + (xfercount * xferwidth) as u32;
+            }
+
+            if dir == Direction::PeripheralToMemory {
+                DESCRIPTORS.list[channel].src_data_end_addr = srcbase as u32;
+            } else {
+                DESCRIPTORS.list[channel].src_data_end_addr = srcbase as u32 + (xfercount * xferwidth) as u32;
+            }
+            if options.mode == Mode::Continuous {
+                DESCRIPTORS.list[channel].nxt_desc_link_addr = &DESCRIPTORS.list[channel] as *const _ as u32;
+            } else {
+                DESCRIPTORS.list[channel].nxt_desc_link_addr = 0;
+            }
+        }
     }
 
     /// Enable the DMA channel (only after configuring)
