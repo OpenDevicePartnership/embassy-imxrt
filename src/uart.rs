@@ -2,6 +2,8 @@
 
 use core::future::{Future, poll_fn};
 use core::marker::PhantomData;
+#[cfg(feature = "time")]
+use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::Poll;
 
 #[cfg(feature = "time")]
@@ -60,10 +62,6 @@ pub struct UartRx<'a, M: Mode> {
     _flexcomm: FlexcommRef,
     _buffer_config: Option<BufferConfig>,
     _rx_dma: Option<Channel<'a>>,
-    #[cfg(feature = "time")]
-    bb_prod: Option<bbqueue::Producer<'static, 1024>>,
-    #[cfg(feature = "time")]
-    bb_cons: Option<bbqueue::Consumer<'static, 1024>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
 
@@ -236,6 +234,12 @@ struct BufferConfig {
     dma_last_pos: usize,
     #[cfg(feature = "time")]
     polling_rate: u64,
+    #[cfg(feature = "time")]
+    bb_prod: Option<bbqueue::Producer<'static, 2048>>,
+    #[cfg(feature = "time")]
+    bb_cons: Option<bbqueue::Consumer<'static, 2048>>,
+    #[cfg(feature = "time")]
+    bb_overrun: AtomicBool,
 }
 
 impl<'a, M: Mode> UartRx<'a, M> {
@@ -243,8 +247,6 @@ impl<'a, M: Mode> UartRx<'a, M> {
     fn new_inner<T: Instance>(
         _flexcomm: FlexcommRef,
         _rx_dma: Option<Channel<'a>>,
-        bb_prod: Option<bbqueue::Producer<'static, 1024>>,
-        bb_cons: Option<bbqueue::Consumer<'static, 1024>>,
         _buffer_config: Option<BufferConfig>,
     ) -> Self {
         Self {
@@ -252,10 +254,6 @@ impl<'a, M: Mode> UartRx<'a, M> {
             _flexcomm,
             _buffer_config,
             _rx_dma,
-            #[cfg(feature = "time")]
-            bb_prod,
-            #[cfg(feature = "time")]
-            bb_cons,
             _phantom: PhantomData,
         }
     }
@@ -268,7 +266,7 @@ impl<'a> UartRx<'a, Blocking> {
 
         let flexcomm = Uart::<Blocking>::init::<T>(None, Some(rx.into().reborrow()), None, None, config)?;
 
-        Ok(Self::new_inner::<T>(flexcomm, None, None, None, None))
+        Ok(Self::new_inner::<T>(flexcomm, None, None))
     }
 }
 
@@ -530,7 +528,7 @@ impl<'a> Uart<'a, Blocking> {
         Ok(Self {
             info: T::info(),
             tx: UartTx::new_inner::<T>(flexcomm.clone(), None),
-            rx: UartRx::new_inner::<T>(flexcomm, None, None, None, None),
+            rx: UartRx::new_inner::<T>(flexcomm, None, None),
         })
     }
 
@@ -715,7 +713,7 @@ impl<'a> UartRx<'a, Async> {
 
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
-        Ok(Self::new_inner::<T>(flexcomm, rx_dma, None, None, None))
+        Ok(Self::new_inner::<T>(flexcomm, rx_dma, None))
     }
 
     /// Create a new DMA enabled UART which can only receive data, using a buffer to enable continuous DMA reception via a circular buffer.
@@ -766,12 +764,13 @@ impl<'a> UartRx<'a, Async> {
         Ok(Self::new_inner::<T>(
             flexcomm,
             Some(rx_dma),
-            Some(bb_prod),
-            Some(bb_cons),
             Some(BufferConfig {
                 buffer,
                 dma_last_pos: 0,
                 polling_rate: polling_rate_us,
+                bb_prod: Some(bb_prod),
+                bb_cons: Some(bb_cons),
+                bb_overrun: AtomicBool::new(false),
             }),
         ))
     }
@@ -866,11 +865,14 @@ impl<'a> UartRx<'a, Async> {
 
     #[cfg(feature = "time")]
     fn pump_data_into_bb(&mut self) {
+        // Half of the buffer size of BBBqueue
+        const CHUNK: usize = 1024;
+
         let cfg = self._buffer_config.as_mut().unwrap();
-        let rx_dma = self._rx_dma.as_ref().unwrap();
-        let prod = self.bb_prod.as_mut().unwrap();
+        let prod = cfg.bb_prod.as_mut().unwrap();
 
         let dma_len = cfg.buffer.len();
+        let rx_dma = self._rx_dma.as_ref().unwrap();
         let remaining_bytes = rx_dma.get_xfer_count() as usize + 1;
         let current_pos = (dma_len - remaining_bytes) % dma_len;
 
@@ -878,38 +880,40 @@ impl<'a> UartRx<'a, Async> {
             // no new data
             return;
         }
+        let produced = if current_pos > cfg.dma_last_pos {
+            current_pos - cfg.dma_last_pos
+        } else {
+            dma_len - cfg.dma_last_pos + current_pos
+        };
 
-        let mut push = |data: &[u8]| {
-            let mut off = 0;
-            while off < data.len() {
-                // Try to get as much space as possible, up to what we need
-                let remaining = data.len() - off;
-                match prod.grant_max_remaining(remaining) {
-                    Ok(mut g) => {
-                        let n = g.len().min(remaining);
-                        g[..n].copy_from_slice(&data[off..off + n]);
-                        g.commit(n);
-                        off += n;
-                    }
-                    Err(_) => {
-                        // BBQueue is full, cannot push more data
-                        // This indicates data loss
-                        break;
-                    }
-                }
+        // Limit to CHUNK size to avoid write quicker than read from BBQueue,
+        // which would lead to data loss.
+        let to_produce = produced.min(CHUNK);
+        let mut g = match prod.grant_max_remaining(to_produce) {
+            Ok(g) => g,
+            Err(_) => {
+                // No space in BBQueue, this indicates that the reader is not keeping up.
+                cfg.bb_overrun.store(true, Ordering::Relaxed);
+                return;
             }
         };
 
-        if current_pos > cfg.dma_last_pos {
+        // Copy data from DMA buffer to BBQueue
+        let n = g.len().min(to_produce);
+        let start = cfg.dma_last_pos;
+        let end = (start + n) % dma_len;
+        if start < end {
             // straightforward copy
-            push(&cfg.buffer[cfg.dma_last_pos..current_pos]);
+            g[..n].copy_from_slice(&cfg.buffer[start..end]);
         } else {
             // rollover copy
-            push(&cfg.buffer[cfg.dma_last_pos..dma_len]);
-            push(&cfg.buffer[0..current_pos]);
+            let first = dma_len - start;
+            g[..first].copy_from_slice(&cfg.buffer[start..dma_len]);
+            g[first..n].copy_from_slice(&cfg.buffer[0..end]);
         }
 
-        cfg.dma_last_pos = current_pos;
+        g.commit(n);
+        cfg.dma_last_pos = end;
     }
 
     #[cfg(feature = "time")]
@@ -922,10 +926,41 @@ impl<'a> UartRx<'a, Async> {
         while bytes_read < buf.len() {
             // Try to pump data from DMA buffer into BBQueue
             self.pump_data_into_bb();
+
+            // Overrun occurred - data loss detected
+            if self
+                ._buffer_config
+                .as_ref()
+                .unwrap()
+                .bb_overrun
+                .swap(false, Ordering::Relaxed)
+            {
+                // Clear the BBQueue and update the DMA index to current position
+                // to avoid reading stale data on subsequent read_buffered calls
+                let cfg = self._buffer_config.as_mut().unwrap();
+                let cons = cfg.bb_cons.as_mut().unwrap();
+
+                // Drain all data from BBQueue
+                while let Ok(g) = cons.read() {
+                    let len = g.len();
+                    g.release(len);
+                }
+
+                // Update DMA index to current position to avoid read previous data next time
+                let dma_len = cfg.buffer.len();
+                let rx_dma = self._rx_dma.as_ref().unwrap();
+                let remaining_bytes = rx_dma.get_xfer_count() as usize + 1;
+                cfg.dma_last_pos = (dma_len - remaining_bytes) % dma_len;
+
+                return Err(Error::Overrun);
+            }
+
             // Read from BBQueue
+            let cfg = self._buffer_config.as_mut().unwrap();
+            let cons = cfg.bb_cons.as_mut().unwrap();
             while bytes_read < buf.len() {
                 // Read all available bytes
-                match self.bb_cons.as_mut().unwrap().read() {
+                match cons.read() {
                     Ok(g) => {
                         let grant_len = g.len();
                         let n = grant_len.min(buf.len() - bytes_read);
@@ -1028,7 +1063,7 @@ impl<'a> Uart<'a, Async> {
         Ok(Self {
             info: T::info(),
             tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
-            rx: UartRx::new_inner::<T>(flexcomm, rx_dma, None, None, None),
+            rx: UartRx::new_inner::<T>(flexcomm, rx_dma, None),
         })
     }
 
@@ -1083,12 +1118,13 @@ impl<'a> Uart<'a, Async> {
             rx: UartRx::new_inner::<T>(
                 flexcomm,
                 Some(rx_dma),
-                Some(bb_prod),
-                Some(bb_cons),
                 Some(BufferConfig {
                     buffer,
                     dma_last_pos: 0,
                     polling_rate: polling_rate_us,
+                    bb_prod: Some(bb_prod),
+                    bb_cons: Some(bb_cons),
+                    bb_overrun: AtomicBool::new(false),
                 }),
             ),
         })
@@ -1130,7 +1166,7 @@ impl<'a> Uart<'a, Async> {
         Ok(Self {
             info: T::info(),
             tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
-            rx: UartRx::new_inner::<T>(flexcomm, rx_dma, None, None, None),
+            rx: UartRx::new_inner::<T>(flexcomm, rx_dma, None),
         })
     }
 
@@ -1198,12 +1234,13 @@ impl<'a> Uart<'a, Async> {
             rx: UartRx::new_inner::<T>(
                 flexcomm,
                 Some(rx_dma),
-                Some(bb_prod),
-                Some(bb_cons),
                 Some(BufferConfig {
                     buffer,
                     dma_last_pos: 0,
                     polling_rate: polling_rate_us,
+                    bb_prod: Some(bb_prod),
+                    bb_cons: Some(bb_cons),
+                    bb_overrun: AtomicBool::new(false),
                 }),
             ),
         })
@@ -1481,7 +1518,7 @@ trait SealedInstance {
     fn info() -> Info;
     fn waker() -> &'static AtomicWaker;
     #[cfg(feature = "time")]
-    fn bb() -> &'static BBBuffer<1024>;
+    fn bb() -> &'static BBBuffer<2048>;
 }
 
 /// UART interrupt handler.
@@ -1549,8 +1586,8 @@ macro_rules! impl_instance {
                     }
 
                     #[cfg(feature = "time")]
-                    fn bb() -> &'static BBBuffer<1024> {
-                        static BB: BBBuffer<1024> = BBBuffer::new();
+                    fn bb() -> &'static BBBuffer<2048> {
+                        static BB: BBBuffer<2048> = BBBuffer::new();
                         &BB
                     }
                 }
