@@ -6,7 +6,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use super::DESCRIPTORS;
 use crate::dma::DmaInfo;
-use crate::dma::transfer::{Direction, Transfer, TransferOptions};
+use crate::dma::transfer::{Direction, Mode, Transfer, TransferOptions};
 
 /// DMA channel
 pub struct Channel<'d> {
@@ -95,26 +95,6 @@ impl<'d> Channel<'d> {
         let xfercount = (mem_len / xferwidth) - 1;
         let channel = self.info.ch_num;
 
-        // Panic safety: `info()` would have returned None if our channel number was out of bounds and thus would never get here
-        // SAFETY: unsafe due to use of a mutable static (DESCRIPTORS.list)
-        #[allow(clippy::indexing_slicing)]
-        let descriptor = unsafe { &mut DESCRIPTORS.list[channel] };
-
-        // Configure the channel descriptor
-        // NOTE: the DMA controller expects the memory buffer end address but peripheral address is actual
-        descriptor.reserved = 0;
-        if dir == Direction::MemoryToPeripheral {
-            descriptor.dst_data_end_addr = dstbase as u32;
-        } else {
-            descriptor.dst_data_end_addr = dstbase as u32 + (xfercount * xferwidth) as u32;
-        }
-        if dir == Direction::PeripheralToMemory {
-            descriptor.src_data_end_addr = srcbase as u32;
-        } else {
-            descriptor.src_data_end_addr = srcbase as u32 + (xfercount * xferwidth) as u32;
-        }
-        descriptor.nxt_desc_link_addr = 0;
-
         // Configure for transfer type, no hardware triggering (we'll trigger via software), high priority
         // SAFETY: unsafe due to .bits usage
         self.info.regs.channel(channel).cfg().write(|w| unsafe {
@@ -137,8 +117,10 @@ impl<'d> Channel<'d> {
         // SAFETY: unsafe due to .bits usage
         self.info.regs.channel(channel).xfercfg().write(|w| unsafe {
             w.cfgvalid().set_bit();
-            w.clrtrig().set_bit();
-            w.reload().clear_bit();
+
+            w.reload().bit(options.mode == Mode::Continuous);
+            w.clrtrig().bit(options.mode == Mode::Single);
+
             w.setinta().set_bit();
             w.width().bits(options.width.into());
             if dir == Direction::PeripheralToMemory {
@@ -153,6 +135,33 @@ impl<'d> Channel<'d> {
             }
             w.xfercount().bits(xfercount as u16)
         });
+
+        #[allow(clippy::indexing_slicing)]
+        let descriptor = unsafe { &mut DESCRIPTORS.list[channel] };
+
+        // Configure the channel descriptor
+        // NOTE: the DMA controller expects the memory buffer end address but peripheral address is actual
+        if options.mode == Mode::Continuous {
+            let xfer_cfg = self.info.regs.channel(channel).xfercfg().read();
+            descriptor.reserved = xfer_cfg.bits();
+        } else {
+            descriptor.reserved = 0;
+        }
+        if dir == Direction::MemoryToPeripheral {
+            descriptor.dst_data_end_addr = dstbase as u32;
+        } else {
+            descriptor.dst_data_end_addr = dstbase as u32 + (xfercount * xferwidth) as u32;
+        }
+        if dir == Direction::PeripheralToMemory {
+            descriptor.src_data_end_addr = srcbase as u32;
+        } else {
+            descriptor.src_data_end_addr = srcbase as u32 + (xfercount * xferwidth) as u32;
+        }
+        if options.mode == Mode::Continuous {
+            descriptor.nxt_desc_link_addr = descriptor as *const _ as u32;
+        } else {
+            descriptor.nxt_desc_link_addr = 0;
+        }
     }
 
     /// Enable the DMA channel (only after configuring)

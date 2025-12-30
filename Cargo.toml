@@ -102,6 +102,8 @@ embedded-io = { version = "0.6.1" }
 embedded-io-async = { version = "0.6.1" }
 rand_core = "0.9"
 fixed = "1.23.1"
+bbqueue = "0.5"
+
 
 embedded-hal-02 = { package = "embedded-hal", version = "0.2.6", features = [
     "unproven",

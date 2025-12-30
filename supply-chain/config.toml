@@ -24,6 +24,10 @@ criteria = "safe-to-deploy"
 version = "0.2.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.bbqueue]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.bitfield]]
 version = "0.13.2"
 criteria = "safe-to-deploy"
