@@ -608,12 +608,9 @@ impl BlockingNorStorageBusDriver for FlexspiNorStorageBus<'_, Blocking> {
         read_buf: Option<&mut [u8]>,
         write_buf: Option<&[u8]>,
     ) -> Result<(), NorStorageBusError> {
-        // `program_lut` expects data_bytes to be available so we bail out early if that's not the case
-        let Some(data_bytes) = cmd.data_bytes else {
-            return Err(NorStorageBusError::StorageBusInternalError);
-        };
-
-        if data_bytes > MAX_TRANSFER_SIZE_PER_COMMAND as u32 {
+        if let Some(data_bytes) = cmd.data_bytes
+            && data_bytes > MAX_TRANSFER_SIZE_PER_COMMAND as u32
+        {
             return Err(NorStorageBusError::StorageBusInternalError);
         }
 
@@ -621,7 +618,7 @@ impl BlockingNorStorageBusDriver for FlexspiNorStorageBus<'_, Blocking> {
         self.setup_ip_transfer(self.command_sequence_number, cmd.addr, cmd.data_bytes);
 
         // Program the LUT instructions for the command
-        self.program_lut(&cmd, data_bytes, self.command_sequence_number);
+        self.program_lut(&cmd, self.command_sequence_number)?;
 
         // Start the transfer
         self.execute_ip_cmd();
@@ -932,7 +929,7 @@ impl<M: Mode> FlexspiNorStorageBus<'_, M> {
         cookie.next_instruction();
     }
 
-    fn program_lut(&self, cmd: &NorStorageCmd, data_bytes: u32, seq_id: u8) {
+    fn program_lut(&self, cmd: &NorStorageCmd, seq_id: u8) -> Result<(), NorStorageBusError> {
         let mut cookie = LutInstrCookie {
             seq_num: seq_id * 4,
             instr_num: LutInstrNum::First,
@@ -973,6 +970,8 @@ impl<M: Mode> FlexspiNorStorageBus<'_, M> {
         self.program_dummy_instruction_if_non_zero(cmd, &mut cookie);
 
         if let Some(transfertype) = cmd.cmdtype {
+            let data_bytes = cmd.data_bytes.ok_or(NorStorageBusError::StorageBusInternalError)?;
+
             match transfertype {
                 NorStorageCmdType::Read => {
                     self.program_read_data_instruction(cmd, &mut cookie, data_bytes as u8);
@@ -991,6 +990,8 @@ impl<M: Mode> FlexspiNorStorageBus<'_, M> {
             .lutkey()
             .modify(|_, w| unsafe { w.key().bits(LUT_UNLOCK_CODE) });
         self.info.regs.lutcr().modify(|_, w| w.lock().set_bit());
+
+        Ok(())
     }
 }
 
