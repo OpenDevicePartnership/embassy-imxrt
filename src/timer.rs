@@ -1053,8 +1053,8 @@ impl<'p> CTimerPwmPeriodChannel<'p> {
         // Calculate clock ticks per PWM period
         let period_clock_ticks = clock_rate.0 / requested_pwm_rate.0;
 
-        // Set PWM period
-        channel_info.pwm_configure(period_clock_ticks);
+        // Set PWM period to n - 1 in the match as it starts from 0 so it should be 0..n-1 to count n ticks
+        channel_info.pwm_configure(period_clock_ticks - 1);
 
         Ok(Self {
             _lifetime: PhantomData,
@@ -1234,6 +1234,7 @@ macro_rules! impl_pin {
 
 // CTimer Match output pins
 // We can add all the GPIO pins here which can be used as CTimer Match output pins
+impl_pin!(PIO0_30, F4);
 impl_pin!(PIO0_31, F4);
 impl_pin!(PIO2_6, F4);
 impl_pin!(PIO2_8, F4);
