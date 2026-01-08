@@ -4,8 +4,7 @@
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_imxrt::gpio;
-use embassy_imxrt::pwm::Pwm;
-use embassy_imxrt::pwm::{CentiPercent, Channel, MicroSeconds, SCTClockSource, SCTPwm};
+use embassy_imxrt::pwm::{CentiPercent, Channel, MicroSeconds, Pwm, SCTClockSource, SCTPwm};
 use embassy_imxrt::timer::{CTimerPwm, CTimerPwmPeriodChannel};
 use embassy_time::{Duration, Timer, WithTimeout, with_timeout};
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
