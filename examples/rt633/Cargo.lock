@@ -404,7 +404,7 @@ dependencies = [
 [[package]]
 name = "embedded-mcu-hal"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#1903e774f4ef86735f0c16bf59ca911412ee5534"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#4dadf27b212ce91d884e9a33b3c2725d5d0511fb"
 dependencies = [
  "defmt",
  "num_enum",
@@ -795,7 +795,7 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 [[package]]
 name = "storage_bus"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#1903e774f4ef86735f0c16bf59ca911412ee5534"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#4dadf27b212ce91d884e9a33b3c2725d5d0511fb"
 
 [[package]]
 name = "strsim"
