@@ -175,4 +175,14 @@ impl<'r> Nvram<'r, RtcNvramStorage<'r>, u32, IMXRT_GPREG_COUNT> for RtcNvram<'r>
         //         so we can safely access it as long as it's always from an object that has the handle-to-RTC.
         &mut self.storage
     }
+
+    fn clear_storage(&mut self) {
+        for storage in self.storage.iter_mut() {
+            storage.write(0);
+        }
+    }
+
+    fn dump_storage(&self) -> [u32; IMXRT_GPREG_COUNT] {
+        self.storage.each_ref().map(|storage| storage.read())
+    }
 }
