@@ -167,19 +167,6 @@ impl<'r> RtcNvram<'r> {
             }),
         }
     }
-
-    /// Clears all NVRAM storage cells.
-    pub fn clear_storage(&mut self) {
-        for storage in self.storage.iter_mut() {
-            storage.write(0);
-        }
-    }
-
-    /// Dumps the current contents of all NVRAM storage cells into an array.
-    /// This is primarily useful for integrity checks and is NOT intended as a replacement for accessing individual cells via `storage()` and calling `read()` on them.
-    pub fn dump_storage(&self) -> [u32; IMXRT_GPREG_COUNT] {
-        self.storage.each_ref().map(|storage| storage.read())
-    }
 }
 
 impl<'r> Nvram<'r, RtcNvramStorage<'r>, u32, IMXRT_GPREG_COUNT> for RtcNvram<'r> {
@@ -187,5 +174,15 @@ impl<'r> Nvram<'r, RtcNvramStorage<'r>, u32, IMXRT_GPREG_COUNT> for RtcNvram<'r>
         // SAFETY: We have sole ownership of the RTC peripheral and we enforce that there is only one instance of RtcDatetime,
         //         so we can safely access it as long as it's always from an object that has the handle-to-RTC.
         &mut self.storage
+    }
+
+    fn clear_storage(&mut self) {
+        for storage in self.storage.iter_mut() {
+            storage.write(0);
+        }
+    }
+
+    fn dump_storage(&self) -> [u32; IMXRT_GPREG_COUNT] {
+        self.storage.each_ref().map(|storage| storage.read())
     }
 }
