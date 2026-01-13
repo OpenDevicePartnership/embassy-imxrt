@@ -93,9 +93,21 @@ impl<'r> RtcDatetimeClock<'r> {
         Ok(secs.into())
     }
 
-    /// Sets the RTC wake alarm via the match register to wake after the given time in seconds
+    /// Sets the RTC wake alarm via the match register to wake after the given time
+    ///  
+    /// # Parameters  
+    ///  
+    /// * `secs_from_now` - A relative offset in seconds from the current RTC time  
+    ///   after which the alarm should fire.  
+    ///  
+    /// # Returns  
+    ///  
+    /// The absolute RTC time in seconds at which the alarm is scheduled to fire.
     pub fn set_alarm(&self, secs_from_now: u64) -> Result<u64, DatetimeClockError> {
-        let secs_u64 = self.get_datetime_in_secs()? + secs_from_now;
+        let secs_u64 = self
+            .get_datetime_in_secs()?
+            .checked_add(secs_from_now)
+            .ok_or(DatetimeClockError::UnsupportedDatetime)?;
         let secs: u32 = secs_u64
             .try_into()
             .map_err(|_| DatetimeClockError::UnsupportedDatetime)?;
