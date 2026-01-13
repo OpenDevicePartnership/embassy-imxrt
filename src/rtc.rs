@@ -1,6 +1,7 @@
 //! RTC DateTime driver.
 
 use core::marker::PhantomData;
+
 use embassy_hal_internal::interrupt::InterruptExt;
 use embassy_sync::waitqueue::AtomicWaker;
 use embedded_mcu_hal::time::{Datetime, DatetimeClock, DatetimeClockError};
