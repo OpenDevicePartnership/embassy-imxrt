@@ -153,10 +153,10 @@ impl<'r> RtcDatetimeClock<'r> {
 
             // Resets the match register to its default
             r.match_().write(|w| unsafe { w.bits(u32::MAX) });
-        });
 
-        // Disable RTC interrupt
-        interrupt::RTC.disable();
+            // Disable RTC interrupt
+            interrupt::RTC.disable();
+        });
 
         Ok(())
     }
