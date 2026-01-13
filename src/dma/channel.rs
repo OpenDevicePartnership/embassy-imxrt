@@ -316,7 +316,7 @@ impl<'d> Channel<'d> {
     pub fn buffer_status(&self, selector: PingPongSelector) -> BufferConsumeStatus {
         let channel = self.info.ch_num;
         #[allow(clippy::indexing_slicing)]
-        let ping_pong_status = unsafe { &mut PING_PONG_STATUS[channel] };
+        let ping_pong_status = unsafe { &PING_PONG_STATUS[channel] };
         match selector {
             PingPongSelector::BufferA => ping_pong_status.buffer_a_status,
             PingPongSelector::BufferB => ping_pong_status.buffer_b_status,

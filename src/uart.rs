@@ -854,9 +854,24 @@ impl<'a> UartRx<'a, Async> {
 
     #[cfg(feature = "time")]
     async fn read_buffered(&mut self, buf: &mut [u8]) -> Result<usize> {
-        // unwrap safe here as only entry path to API requires rx_dma instance
-        let rx_dma = self._rx_dma.as_ref().expect("RX DMA not configured");
-        let buffer_config = self._buffer_config.as_mut().expect("Buffer config not initialized");
+        let rx_dma = match self._rx_dma.as_ref() {
+            Some(dma) => dma,
+            None => {
+                debug_assert!(false, "RX DMA not configured");
+                // SAFETY: This branch is unreachable because the only entry path
+                // to this API requires rx_dma to be configured.
+                unsafe { core::hint::unreachable_unchecked() }
+            }
+        };
+        let buffer_config = match self._buffer_config.as_mut() {
+            Some(cfg) => cfg,
+            None => {
+                debug_assert!(false, "Buffer config not initialized");
+                // SAFETY: This branch is unreachable because the only entry path
+                // to this API requires a configured buffer.
+                unsafe { core::hint::unreachable_unchecked() }
+            }
+        };
 
         let half_size = buffer_config.buffer_a.len();
 
@@ -902,8 +917,7 @@ impl<'a> UartRx<'a, Async> {
                         let src_slice_opt = buffer_config
                             .buffer_a
                             .get(buffer_config.read_off..buffer_config.read_off + to_read);
-                        let dst_slice_opt =
-                            buf.get_mut(bytes_read..bytes_read + to_read);
+                        let dst_slice_opt = buf.get_mut(bytes_read..bytes_read + to_read);
                         match (src_slice_opt, dst_slice_opt) {
                             (Some(src_slice), Some(dst_slice)) => {
                                 dst_slice.copy_from_slice(src_slice);
@@ -918,8 +932,7 @@ impl<'a> UartRx<'a, Async> {
                         let src_slice_opt = buffer_config
                             .buffer_b
                             .get(buffer_config.read_off..buffer_config.read_off + to_read);
-                        let dst_slice_opt =
-                            buf.get_mut(bytes_read..bytes_read + to_read);
+                        let dst_slice_opt = buf.get_mut(bytes_read..bytes_read + to_read);
                         match (src_slice_opt, dst_slice_opt) {
                             (Some(src_slice), Some(dst_slice)) => {
                                 dst_slice.copy_from_slice(src_slice);
