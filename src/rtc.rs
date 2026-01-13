@@ -94,14 +94,14 @@ impl<'r> RtcDatetimeClock<'r> {
     }
 
     /// Sets the RTC wake alarm via the match register to wake after the given time
-    ///  
-    /// # Parameters  
-    ///  
-    /// * `secs_from_now` - A relative offset in seconds from the current RTC time  
-    ///   after which the alarm should fire.  
-    ///  
-    /// # Returns  
-    ///  
+    ///
+    /// # Parameters
+    ///
+    /// * `secs_from_now` - A relative offset in seconds from the current RTC time
+    ///   after which the alarm should fire.
+    ///
+    /// # Returns
+    ///
     /// The absolute RTC time in seconds at which the alarm is scheduled to fire.
     pub fn set_alarm(&self, secs_from_now: u64) -> Result<u64, DatetimeClockError> {
         let secs_u64 = self
