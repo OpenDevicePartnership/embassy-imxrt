@@ -1,7 +1,6 @@
 //! RTC DateTime driver.
 
 use core::marker::PhantomData;
-use core::task::Poll;
 use embassy_hal_internal::interrupt::InterruptExt;
 use embassy_sync::waitqueue::AtomicWaker;
 use embedded_mcu_hal::time::{Datetime, DatetimeClock, DatetimeClockError};
@@ -22,7 +21,7 @@ unsafe fn rtc() -> &'static pac::rtc::RegisterBlock {
 }
 
 /// Static waker for RTC alarm interrupts
-static ALARM_WAKER: AtomicWaker = AtomicWaker::new();
+pub static RTC_ALARM_WAKER: AtomicWaker = AtomicWaker::new();
 
 /// Represents the real-time clock (RTC) peripheral and provides access to its datetime clock and NVRAM functionality.
 pub struct Rtc<'r> {
@@ -46,33 +45,6 @@ impl<'r> Rtc<'r> {
     /// Obtains a clock and NVRAM wrapper from the Rtc peripheral.
     pub fn split(&'r mut self) -> (&'r mut RtcDatetimeClock<'r>, &'r mut RtcNvram<'r>) {
         (&mut self.clock, &mut self.nvram)
-    }
-}
-
-/// RTC alarm struct to await the time alarm wakeup location
-pub struct RtcAlarm<'r> {
-    expires_at: u64,
-    rtc: &'r RtcDatetimeClock<'r>,
-}
-
-impl<'r> Future for RtcAlarm<'r> {
-    type Output = Result<(), DatetimeClockError>;
-    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
-        match self.rtc.get_datetime_in_secs() {
-            Ok(now) => {
-                if self.expires_at <= now {
-                    Poll::Ready(Ok(()))
-                } else {
-                    info!("Alarm pending at time {}, expires at {}", now, self.expires_at);
-
-                    // Register our waker to be called by the interrupt handler
-                    ALARM_WAKER.register(cx.waker());
-
-                    Poll::Pending
-                }
-            }
-            Err(e) => Poll::Ready(Err(e)),
-        }
     }
 }
 
@@ -121,9 +93,9 @@ impl<'r> RtcDatetimeClock<'r> {
     }
 
     /// Sets the RTC wake alarm via the match register to wake after the given time in seconds
-    pub fn set_alarm(&self, secs_from_now: u64) -> Result<RtcAlarm<'_>, DatetimeClockError> {
-        info!("RTC: Setting the alarm!");
-        let secs: u32 = (self.get_datetime_in_secs()? + secs_from_now)
+    pub fn set_alarm(&self, secs_from_now: u64) -> Result<u64, DatetimeClockError> {
+        let secs_u64 = self.get_datetime_in_secs()? + secs_from_now;
+        let secs: u32 = secs_u64
             .try_into()
             .map_err(|_| DatetimeClockError::UnsupportedDatetime)?;
 
@@ -133,8 +105,7 @@ impl<'r> RtcDatetimeClock<'r> {
         let r = unsafe { rtc() };
 
         critical_section::with(|_cs| {
-            // Clear the Alarm1Hz match status register
-            // Note: "Writing a 1 clears this bit"
+            // Clear any pending alarm interrupt
             r.ctrl().modify(|_r, w| w.alarm1hz().set_bit());
 
             // Set the match register with the new time
@@ -143,17 +114,14 @@ impl<'r> RtcDatetimeClock<'r> {
             // Enable the 1Hz timer alarm for deep power down
             r.ctrl().modify(|_r, w| w.alarmdpd_en().set_bit());
 
-            // Enable RTC interrupt in NVIC
+            // Enable RTC interrupt
             interrupt::RTC.unpend();
             unsafe {
                 interrupt::RTC.enable();
             }
         });
 
-        Ok(RtcAlarm {
-            expires_at: secs.into(),
-            rtc: self,
-        })
+        Ok(secs.into())
     }
 
     /// Clears the RTC 1Hz alarm by resetting related registers
@@ -178,61 +146,6 @@ impl<'r> RtcDatetimeClock<'r> {
         interrupt::RTC.disable();
 
         Ok(())
-    }
-
-    /// Dumps the current state of all RTC registers
-    pub fn dump_registers(&self) {
-        // SAFETY: We have sole ownership of the RTC peripheral and we enforce that there is only one instance of RtcDatetime,
-        //         so we can safely access it as long as it's always from an object that has the handle-to-RTC.
-        let r = unsafe { rtc() };
-
-        info!("=== RTC Register Dump ===");
-
-        // Read CTRL register
-        let ctrl = r.ctrl().read();
-        info!("CTRL register: 0x{:08X}", ctrl.bits());
-        info!("  RTC_EN (enabled): {}", ctrl.rtc_en().bit());
-        info!("  RTC_OSC_PD (oscillator powered down): {}", ctrl.rtc_osc_pd().bit());
-        info!("  RTC1KHZ_EN (1kHz enabled): {}", ctrl.rtc1khz_en().bit());
-        info!("  ALARM1HZ (alarm status): {}", ctrl.alarm1hz().bit());
-        info!("  WAKE1KHZ (wake status): {}", ctrl.wake1khz().bit());
-        info!(
-            "  ALARMDPD_EN (alarm deep power down enabled): {}",
-            ctrl.alarmdpd_en().bit()
-        );
-        info!(
-            "  WAKEDPD_EN (wake deep power down enabled): {}",
-            ctrl.wakedpd_en().bit()
-        );
-        info!(
-            "  RTC_OSC_LOADCAP (oscillator load capacitance): {}",
-            ctrl.rtc_osc_loadcap().bits()
-        );
-
-        // Read COUNT register
-        let count = r.count().read().bits();
-        info!("COUNT register: {} (0x{:08X})", count, count);
-
-        // Read MATCH register
-        let match_val = r.match_().read().bits();
-        info!("MATCH register: {} (0x{:08X})", match_val, match_val);
-
-        // Read SUBSEC register
-        let subsec = r.subsec().read().bits();
-        info!("SUBSEC register: {} (0x{:08X})", subsec, subsec);
-
-        // Read WAKE register
-        let wake = r.wake().read().bits();
-        info!("WAKE register: {} (0x{:04X})", wake, wake);
-
-        // Read general purpose registers
-        info!("GPREG registers:");
-        for i in 0..IMXRT_GPREG_COUNT {
-            let gpreg_val = r.gpreg(i).read().gpdata().bits();
-            info!("  GPREG[{}]: 0x{:08X}", i, gpreg_val);
-        }
-
-        info!("=== End RTC Register Dump ===");
     }
 }
 
@@ -342,19 +255,15 @@ fn RTC() {
     // SAFETY: This is called from an interrupt context, but we only read/write the CTRL register
     //         which is safe to access from multiple contexts with proper atomic operations
     let r = unsafe { rtc() };
-    info!("RTC alarm interrupt fired!");
 
     // Check if this is an alarm interrupt
     if r.ctrl().read().alarm1hz().bit_is_set() {
-        info!("RTC alarm register is set!");
-
-        // Clear the Alarm1Hz match status register
-        // Note: "Writing a 1 clears this bit"
+        // Clear the alarm interrupt flag by writing 1 to it
         critical_section::with(|_cs| {
             r.ctrl().modify(|_r, w| w.alarm1hz().set_bit());
         });
 
         // Wake any task waiting on the alarm
-        ALARM_WAKER.wake();
+        RTC_ALARM_WAKER.wake();
     }
 }
