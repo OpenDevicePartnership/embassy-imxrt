@@ -4,11 +4,7 @@ use core::marker::PhantomData;
 
 use embassy_sync::waitqueue::AtomicWaker;
 
-use super::DESCRIPTORS;
-use super::PING_DESCRIPTORS;
-use super::PING_PONG_STATUS;
-use super::PONG_DESCRIPTORS;
-use super::{BufferConsumeStatus, PingPongSelector};
+use super::{BufferConsumeStatus, DESCRIPTORS, PING_DESCRIPTORS, PING_PONG_STATUS, PONG_DESCRIPTORS, PingPongSelector};
 use crate::dma::DmaInfo;
 use crate::dma::transfer::{Direction, Transfer, TransferOptions};
 
@@ -227,7 +223,9 @@ impl<'d> Channel<'d> {
 
         #[allow(clippy::indexing_slicing)]
         let descriptor_initial = unsafe { &mut DESCRIPTORS.list[channel] };
+        #[allow(clippy::indexing_slicing)]
         let descriptor_a = unsafe { &mut PING_DESCRIPTORS.list[channel] };
+        #[allow(clippy::indexing_slicing)]
         let descriptor_b = unsafe { &mut PONG_DESCRIPTORS.list[channel] };
 
         // Configure the channel descriptor
@@ -249,6 +247,7 @@ impl<'d> Channel<'d> {
         descriptor_a.dst_data_end_addr = dstbase_a as u32 + (xfercount * xferwidth) as u32;
         descriptor_a.nxt_desc_link_addr = descriptor_b as *const _ as u32;
 
+        #[allow(clippy::indexing_slicing)]
         let ping_pong_status = unsafe { &mut PING_PONG_STATUS[channel] };
         ping_pong_status.current = PingPongSelector::BufferA;
         ping_pong_status.buffer_a_status = BufferConsumeStatus::Committed;
@@ -288,13 +287,20 @@ impl<'d> Channel<'d> {
     /// Return the current ping-pong buffer being used by the DMA channel
     pub fn current_buffer(&self) -> PingPongSelector {
         let channel = self.info.ch_num;
+        #[allow(clippy::indexing_slicing)]
         let ping_pong_status = unsafe { &PING_PONG_STATUS[channel] };
         ping_pong_status.current
     }
 
     /// Mark the specified ping-pong buffer as committed (ready for DMA to use)
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the buffer being committed is not currently being accessed
+    /// by the DMA controller or other parts of the system.
     pub unsafe fn commit_buffer(&self, selector: PingPongSelector) {
         let channel = self.info.ch_num;
+        #[allow(clippy::indexing_slicing)]
         let ping_pong_status = unsafe { &mut PING_PONG_STATUS[channel] };
         match selector {
             PingPongSelector::BufferA => {
@@ -309,6 +315,7 @@ impl<'d> Channel<'d> {
     /// Get the status of the specified ping-pong buffer
     pub fn buffer_status(&self, selector: PingPongSelector) -> BufferConsumeStatus {
         let channel = self.info.ch_num;
+        #[allow(clippy::indexing_slicing)]
         let ping_pong_status = unsafe { &mut PING_PONG_STATUS[channel] };
         match selector {
             PingPongSelector::BufferA => ping_pong_status.buffer_a_status,

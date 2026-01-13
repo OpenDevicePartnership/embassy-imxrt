@@ -730,7 +730,7 @@ impl<'a> UartRx<'a, Async> {
 
         let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
 
-        if buffer.len() % 2 != 0 {
+        if !buffer.len().is_multiple_of(2) {
             return Err(Error::InvalidArgument);
         }
 
@@ -855,8 +855,8 @@ impl<'a> UartRx<'a, Async> {
     #[cfg(feature = "time")]
     async fn read_buffered(&mut self, buf: &mut [u8]) -> Result<usize> {
         // unwrap safe here as only entry path to API requires rx_dma instance
-        let rx_dma = self._rx_dma.as_ref().unwrap();
-        let buffer_config = self._buffer_config.as_mut().unwrap();
+        let rx_dma = self._rx_dma.as_ref().expect("RX DMA not configured");
+        let buffer_config = self._buffer_config.as_mut().expect("Buffer config not initialized");
 
         let half_size = buffer_config.buffer_a.len();
 
@@ -899,14 +899,24 @@ impl<'a> UartRx<'a, Async> {
                 // Read data from the appropriate buffer
                 match cur_buf {
                     dma::PingPongSelector::BufferA => {
-                        buf[bytes_read..bytes_read + to_read].copy_from_slice(
-                            &buffer_config.buffer_a[buffer_config.read_off..buffer_config.read_off + to_read],
-                        );
+                        let src_slice = buffer_config
+                            .buffer_a
+                            .get(buffer_config.read_off..buffer_config.read_off + to_read)
+                            .expect("Buffer A slice out of bounds");
+                        let dst_slice = buf
+                            .get_mut(bytes_read..bytes_read + to_read)
+                            .expect("Output buffer slice out of bounds");
+                        dst_slice.copy_from_slice(src_slice);
                     }
                     dma::PingPongSelector::BufferB => {
-                        buf[bytes_read..bytes_read + to_read].copy_from_slice(
-                            &buffer_config.buffer_b[buffer_config.read_off..buffer_config.read_off + to_read],
-                        );
+                        let src_slice = buffer_config
+                            .buffer_b
+                            .get(buffer_config.read_off..buffer_config.read_off + to_read)
+                            .expect("Buffer B slice out of bounds");
+                        let dst_slice = buf
+                            .get_mut(bytes_read..bytes_read + to_read)
+                            .expect("Output buffer slice out of bounds");
+                        dst_slice.copy_from_slice(src_slice);
                     }
                 }
 
@@ -1037,7 +1047,7 @@ impl<'a> Uart<'a, Async> {
 
         let flexcomm = Self::init::<T>(Some(tx.into()), Some(rx.into()), None, None, config)?;
 
-        if buffer.len() % 2 != 0 {
+        if !buffer.len().is_multiple_of(2) {
             return Err(Error::InvalidArgument);
         }
 
@@ -1151,7 +1161,7 @@ impl<'a> Uart<'a, Async> {
             config,
         )?;
 
-        if buffer.len() % 2 != 0 {
+        if !buffer.len().is_multiple_of(2) {
             return Err(Error::InvalidArgument);
         }
 

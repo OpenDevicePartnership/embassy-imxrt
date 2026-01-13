@@ -60,7 +60,7 @@ async fn main(spawner: Spawner) {
     let mut counter = 1;
     loop {
         let mut data: [u8; BUFLEN / 2] = [0; BUFLEN / 2];
-        for (_i, b) in data.iter_mut().enumerate() {
+        for b in data.iter_mut() {
             *b = counter;
         }
         tx.write(&data).await.unwrap();

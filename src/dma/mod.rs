@@ -157,6 +157,7 @@ fn dma0_irq_handler<const N: usize>(wakers: &[AtomicWaker; N]) {
 
                 // For continuous transfers, retrigger the transfer if there is a reload configured and there is free buffer descriptor
                 if reg.channel(channel as usize).xfercfg().read().reload().bit_is_set() {
+                    #[allow(clippy::indexing_slicing)]
                     let ping_pong_status = unsafe { &mut PING_PONG_STATUS[channel as usize] };
 
                     if ping_pong_status.current == PingPongSelector::BufferA {
