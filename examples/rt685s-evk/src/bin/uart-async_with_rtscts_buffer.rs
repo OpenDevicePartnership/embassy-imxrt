@@ -13,20 +13,20 @@ bind_interrupts!(struct Irqs {
     FLEXCOMM4 => uart::InterruptHandler<peripherals::FLEXCOMM4>;
 });
 
-const BUFLEN: usize = 32;
+const BUFLEN: usize = 2048;
 const POLLING_RATE_US: u64 = 1000;
 
 #[embassy_executor::task]
 async fn usart4_task(mut uart: Uart<'static, Async>) {
     loop {
-        let mut rx_buf = [0; BUFLEN];
+        let mut rx_buf = [0; BUFLEN / 2];
         uart.read(&mut rx_buf).await.unwrap();
         assert!(rx_buf.iter().all(|b| *b == 0x55));
         info!("usart4_task read");
 
         Timer::after_millis(10).await;
 
-        let tx_buf = [0xaa; BUFLEN];
+        let tx_buf = [0xaa; BUFLEN / 2];
         uart.write(&tx_buf).await.unwrap();
         info!("usart4_task write");
     }
@@ -35,13 +35,13 @@ async fn usart4_task(mut uart: Uart<'static, Async>) {
 #[embassy_executor::task]
 async fn usart2_task(mut uart: Uart<'static, Async>) {
     loop {
-        let tx_buf = [0x55; BUFLEN];
+        let tx_buf = [0x55; BUFLEN / 2];
         uart.write(&tx_buf).await.unwrap();
         info!("usart2_task write");
 
         Timer::after_millis(10).await;
 
-        let mut rx_buf = [0x00; BUFLEN];
+        let mut rx_buf = [0x00; BUFLEN / 2];
         uart.read(&mut rx_buf).await.unwrap();
         assert!(rx_buf.iter().all(|b| *b == 0xaa));
         info!("usart2_task read");

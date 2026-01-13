@@ -8,7 +8,7 @@ use embassy_imxrt::{bind_interrupts, peripherals, uart};
 use embassy_time::Timer;
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
-const BUFLEN: usize = 32;
+const BUFLEN: usize = 2048;
 const POLLING_RATE_US: u64 = 1000;
 
 bind_interrupts!(struct Irqs {
@@ -18,10 +18,18 @@ bind_interrupts!(struct Irqs {
 #[embassy_executor::task]
 async fn reader(mut rx: UartRx<'static, Async>) {
     info!("Reading...");
+    let mut expected_counter = 0;
     loop {
-        let mut buf = [0; 32];
+        let mut buf = [0; BUFLEN / 2];
         rx.read(&mut buf).await.unwrap();
         info!("RX {:?}", buf);
+
+        for &b in buf.iter() {
+            assert_eq!(b, expected_counter);
+        }
+        expected_counter = expected_counter.wrapping_add(1);
+
+        Timer::after_millis(1).await;
     }
 }
 
@@ -45,17 +53,18 @@ async fn main(spawner: Spawner) {
     )
     .unwrap();
     let (mut tx, rx) = uart.split();
-
     spawner.must_spawn(reader(rx));
 
     info!("Writing...");
+
+    let mut counter = 1;
     loop {
-        let data = [
-            1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-            29, 30, 31,
-        ];
-        info!("TX {:?}", data);
+        let mut data: [u8; BUFLEN / 2] = [0; BUFLEN / 2];
+        for (_i, b) in data.iter_mut().enumerate() {
+            *b = counter;
+        }
         tx.write(&data).await.unwrap();
-        Timer::after_secs(1).await;
+
+        counter = counter.wrapping_add(1);
     }
 }
