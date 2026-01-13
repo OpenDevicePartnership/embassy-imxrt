@@ -899,24 +899,36 @@ impl<'a> UartRx<'a, Async> {
                 // Read data from the appropriate buffer
                 match cur_buf {
                     dma::PingPongSelector::BufferA => {
-                        let src_slice = buffer_config
+                        let src_slice_opt = buffer_config
                             .buffer_a
-                            .get(buffer_config.read_off..buffer_config.read_off + to_read)
-                            .expect("Buffer A slice out of bounds");
-                        let dst_slice = buf
-                            .get_mut(bytes_read..bytes_read + to_read)
-                            .expect("Output buffer slice out of bounds");
-                        dst_slice.copy_from_slice(src_slice);
+                            .get(buffer_config.read_off..buffer_config.read_off + to_read);
+                        let dst_slice_opt =
+                            buf.get_mut(bytes_read..bytes_read + to_read);
+                        match (src_slice_opt, dst_slice_opt) {
+                            (Some(src_slice), Some(dst_slice)) => {
+                                dst_slice.copy_from_slice(src_slice);
+                            }
+                            _ => {
+                                // Unexpected out-of-bounds; stop reading further to avoid panic.
+                                break;
+                            }
+                        }
                     }
                     dma::PingPongSelector::BufferB => {
-                        let src_slice = buffer_config
+                        let src_slice_opt = buffer_config
                             .buffer_b
-                            .get(buffer_config.read_off..buffer_config.read_off + to_read)
-                            .expect("Buffer B slice out of bounds");
-                        let dst_slice = buf
-                            .get_mut(bytes_read..bytes_read + to_read)
-                            .expect("Output buffer slice out of bounds");
-                        dst_slice.copy_from_slice(src_slice);
+                            .get(buffer_config.read_off..buffer_config.read_off + to_read);
+                        let dst_slice_opt =
+                            buf.get_mut(bytes_read..bytes_read + to_read);
+                        match (src_slice_opt, dst_slice_opt) {
+                            (Some(src_slice), Some(dst_slice)) => {
+                                dst_slice.copy_from_slice(src_slice);
+                            }
+                            _ => {
+                                // Unexpected out-of-bounds; stop reading further to avoid panic.
+                                break;
+                            }
+                        }
                     }
                 }
 
