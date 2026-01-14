@@ -72,7 +72,7 @@ async fn main(_spawner: Spawner) {
 
     // Set an RTC alarm to trigger after ALARM_SECONDS
     info!("Setting alarm to trigger in {} seconds...", ALARM_SECONDS);
-    let expires_at_secs = dt_clock.set_alarm(ALARM_SECONDS).expect("Failed to set alarm");
+    let expires_at_secs = dt_clock.set_alarm_from_now(ALARM_SECONDS).expect("Failed to set alarm");
 
     let alarm = RtcAlarm {
         expires_at: expires_at_secs,
