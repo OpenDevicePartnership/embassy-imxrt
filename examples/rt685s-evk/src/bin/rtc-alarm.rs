@@ -88,6 +88,6 @@ async fn main(_spawner: Spawner) {
     info!("Alarm triggered! Wake time: {:?}", wake_time);
 
     // Clear the alarm
-    dt_clock.clear_alarm().expect("Failed to clear alarm");
+    dt_clock.clear_alarm();
     info!("Alarm cleared");
 }

@@ -155,14 +155,16 @@ impl<'r> RtcDatetimeClock<'r> {
     ///         This is the `alarm_time` argument converted into u64
     pub fn set_alarm_at(&mut self, alarm_time: Datetime) -> Result<u64, DatetimeClockError> {
         let secs_u64 = alarm_time.to_unix_time_seconds();
-        let secs: u32 = secs_u64
-            .try_into()
-            .map_err(|_| DatetimeClockError::UnsupportedDatetime)?;
 
         // Check that the alarm end is not in the past
         if self.get_datetime_in_secs()? > secs_u64 {
             return Err(DatetimeClockError::UnsupportedDatetime);
         }
+
+        // Convert seconds to u32 to interface with 32 bit hardware RTC
+        let secs: u32 = secs_u64
+            .try_into()
+            .map_err(|_| DatetimeClockError::UnsupportedDatetime)?;
 
         // SAFETY: We have sole ownership of the RTC peripheral and we enforce that there is only one instance of RtcDatetime,
         //         so we can safely access it as long as it's always from an object that has the handle-to-RTC.
@@ -190,7 +192,7 @@ impl<'r> RtcDatetimeClock<'r> {
     }
 
     /// Clears the RTC 1Hz alarm by resetting related registers
-    pub fn clear_alarm(&mut self) -> Result<(), DatetimeClockError> {
+    pub fn clear_alarm(&mut self) {
         // SAFETY: We have sole ownership of the RTC peripheral and we enforce that there is only one instance of RtcDatetime,
         //         so we can safely access it as long as it's always from an object that has the handle-to-RTC.
         let r = unsafe { rtc() };
@@ -209,8 +211,6 @@ impl<'r> RtcDatetimeClock<'r> {
             // Disable RTC interrupt
             interrupt::RTC.disable();
         });
-
-        Ok(())
     }
 
     /// Registers a waker to be notified when the RTC alarm fires.
@@ -340,13 +340,11 @@ fn RTC() {
 
     // Check if this is an alarm interrupt
     if r.ctrl().read().alarm1hz().bit_is_set() {
-        critical_section::with(|_cs| {
-            // Clear any pending RTC interrupt before waking tasks to avoid spurious retriggers
-            interrupt::RTC.unpend();
+        // Clear any pending RTC interrupt before waking tasks to avoid spurious retriggers
+        interrupt::RTC.unpend();
 
-            // Clear the alarm interrupt flag by writing 1 to it
-            r.ctrl().modify(|_r, w| w.alarm1hz().set_bit());
-        });
+        // Clear the alarm interrupt flag by writing 1 to it
+        r.ctrl().modify(|_r, w| w.alarm1hz().set_bit());
 
         // Wake any task waiting on the alarm
         RTC_ALARM_WAKER.wake();
