@@ -343,6 +343,9 @@ fn RTC() {
         // Clear any pending RTC interrupt before waking tasks to avoid spurious retriggers
         interrupt::RTC.unpend();
 
+        // Disable the 1Hz timer alarm for deep power down
+        r.ctrl().modify(|_r, w| w.alarmdpd_en().clear_bit());
+
         // Clear the alarm interrupt flag by writing 1 to it
         r.ctrl().modify(|_r, w| w.alarm1hz().set_bit());
 
