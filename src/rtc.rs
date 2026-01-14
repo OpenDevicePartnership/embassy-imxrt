@@ -116,9 +116,9 @@ impl<'r> RtcDatetimeClock<'r> {
     /// WARNING:
     /// * Only one RTC alarm can be present in the system at a time.
     ///   Setting a new alarm will cancel an existing one.
-    /// * After an alarm register is set, any call to set the RTC to a different time
-    ///   will NOT update the alarm's end time, and the relative alarm time will
-    ///   be different than when originally set.
+    /// * After an alarm is set, changing the RTC time will NOT adjust the alarm accordingly.
+    ///   The alarm will still fire at the originally configured absolute time value
+    ///   in the hardware register.
     ///
     /// # Parameters
     ///
@@ -141,9 +141,9 @@ impl<'r> RtcDatetimeClock<'r> {
     /// WARNING:
     /// * Only one RTC alarm can be present in the system at a time.
     ///   Setting a new alarm will cancel an existing one.
-    /// * After an alarm register is set, any call to set the RTC to a different time
-    ///   will NOT update the alarm's end time. Thus, absolute UTC time set in this
-    ///   call will remain as the alarm time.
+    /// * After an alarm is set, changing the RTC time will NOT adjust the alarm accordingly.
+    ///   The alarm will still fire at the originally configured absolute time value
+    ///   in the hardware register.
     ///
     /// # Parameters
     ///
