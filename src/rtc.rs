@@ -111,14 +111,14 @@ impl<'r> RtcDatetimeClock<'r> {
         Ok(secs.into())
     }
 
-    /// Sets the RTC wake alarm via the match register to wake after the given time in seconds
+    /// Sets the RTC wake alarm via the match register to wake after the given time in seconds.
     ///
     /// WARNING:
-    /// - Only one RTC alarm can be present in the system at a time.
-    /// Setting a new alarm will cancel an existing one
-    /// - After an alarm register is set, any call to set the RTC to a different time
-    /// will NOT update the alarm's end time, and the relative alarm time will
-    /// be different than when originally set.
+    /// * Only one RTC alarm can be present in the system at a time.
+    ///   Setting a new alarm will cancel an existing one.
+    /// * After an alarm register is set, any call to set the RTC to a different time
+    ///   will NOT update the alarm's end time, and the relative alarm time will
+    ///   be different than when originally set.
     ///
     /// # Parameters
     ///
@@ -136,14 +136,14 @@ impl<'r> RtcDatetimeClock<'r> {
         self.set_alarm_at(Datetime::from_unix_time_seconds(secs))
     }
 
-    /// Sets the RTC wake alarm via the match register to wake at the given Datetime
+    /// Sets the RTC wake alarm via the match register to wake at the given Datetime.
     ///
     /// WARNING:
-    /// - Only one RTC alarm can be present in the system at a time.
-    /// Setting a new alarm will cancel an existing one
-    /// - After an alarm register is set, any call to set the RTC to a different time
-    /// will NOT update the alarm's end time. Thus, absolute UTC time set in this call
-    /// will remain as the alarm time.
+    /// * Only one RTC alarm can be present in the system at a time.
+    ///   Setting a new alarm will cancel an existing one.
+    /// * After an alarm register is set, any call to set the RTC to a different time
+    ///   will NOT update the alarm's end time. Thus, absolute UTC time set in this
+    ///   call will remain as the alarm time.
     ///
     /// # Parameters
     ///
