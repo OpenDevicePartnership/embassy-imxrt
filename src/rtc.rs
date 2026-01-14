@@ -156,7 +156,7 @@ impl<'r> RtcDatetimeClock<'r> {
     pub fn set_alarm_at(&mut self, alarm_time: Datetime) -> Result<u64, DatetimeClockError> {
         let secs_u64 = alarm_time.to_unix_time_seconds();
 
-        // Check that the alarm end is not in the past
+        // Check that the alarm end time is not in the past
         if self.get_datetime_in_secs()? > secs_u64 {
             return Err(DatetimeClockError::UnsupportedDatetime);
         }
@@ -342,6 +342,9 @@ fn RTC() {
     if r.ctrl().read().alarm1hz().bit_is_set() {
         // Clear any pending RTC interrupt before waking tasks to avoid spurious retriggers
         interrupt::RTC.unpend();
+
+        // Disable RTC interrupt
+        interrupt::RTC.disable();
 
         // Disable the 1Hz timer alarm for deep power down
         r.ctrl().modify(|_r, w| w.alarmdpd_en().clear_bit());
