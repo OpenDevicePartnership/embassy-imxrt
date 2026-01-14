@@ -213,7 +213,17 @@ impl<'r> RtcDatetimeClock<'r> {
         Ok(())
     }
 
-    /// Returns a handle to the waker for the RTC alarm interrupt
+    /// Returns a reference to the global waker used for RTC alarm interrupts.
+    ///
+    /// This method exposes the same [`AtomicWaker`] instance as the internal
+    /// static [`RTC_ALARM_WAKER`]. The RTC interrupt handler signals this
+    /// waker when the 1 Hz alarm fires, allowing async tasks or futures that
+    /// are waiting on the RTC alarm to be woken.
+    ///
+    /// Consumers should call this method when they need to register or manage
+    /// a waker that is notified by the RTC alarm interrupt. Because the waker
+    /// is global and shared, it is typically used by higher-level abstractions
+    /// (such as async timers) rather than directly in application code.
     pub fn get_waker() -> &'static AtomicWaker {
         &RTC_ALARM_WAKER
     }
