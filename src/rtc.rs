@@ -72,7 +72,7 @@ pub struct RtcDatetimeClock<'r> {
     _phantom: PhantomData<&'r Peri<'r, peripherals::RTC>>,
 }
 
-/// Implementation for `RtcDatetime`.
+/// Implementation for `RtcDatetimeClock`.
 impl<'r> RtcDatetimeClock<'r> {
     /// Set the datetime in seconds since the Unix time epoch (January 1, 1970).
     fn set_datetime_in_secs(&mut self, secs: u64) -> Result<(), DatetimeClockError> {
@@ -213,19 +213,21 @@ impl<'r> RtcDatetimeClock<'r> {
         Ok(())
     }
 
-    /// Returns a reference to the global waker used for RTC alarm interrupts.
+    /// Registers a waker to be notified when the RTC alarm fires.
     ///
-    /// This method exposes the same [`AtomicWaker`] instance as the internal
-    /// static [`RTC_ALARM_WAKER`]. The RTC interrupt handler signals this
-    /// waker when the 1 Hz alarm fires, allowing async tasks or futures that
-    /// are waiting on the RTC alarm to be woken.
+    /// This method forwards the waker to the internal static [`AtomicWaker`] used
+    /// by the RTC interrupt handler. When the alarm interrupt fires, the registered
+    /// waker will be called.
     ///
-    /// Consumers should call this method when they need to register or manage
-    /// a waker that is notified by the RTC alarm interrupt. Because the waker
-    /// is global and shared, it is typically used by higher-level abstractions
-    /// (such as async timers) rather than directly in application code.
-    pub fn get_waker() -> &'static AtomicWaker {
-        &RTC_ALARM_WAKER
+    /// This is typically called from a `Future::poll` implementation when waiting
+    /// for an RTC alarm to expire. Only one waker can be registered at a time;
+    /// calling this method replaces any previously registered waker.
+    ///
+    /// # Parameters
+    ///
+    /// * `waker` - The waker to be notified when the alarm fires
+    pub fn register_alarm_waker(&self, waker: &core::task::Waker) {
+        RTC_ALARM_WAKER.register(waker);
     }
 }
 

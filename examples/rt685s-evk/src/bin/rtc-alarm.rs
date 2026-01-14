@@ -28,7 +28,7 @@ impl<'r> Future for RtcAlarm<'r> {
                     info!("Alarm pending at time {}, expires at {}", now, self.expires_at);
 
                     // Register our waker to be called by the interrupt handler
-                    RtcDatetimeClock::get_waker().register(cx.waker());
+                    self.rtc.register_alarm_waker(cx.waker());
 
                     Poll::Pending
                 }
