@@ -21,8 +21,26 @@ unsafe fn rtc() -> &'static pac::rtc::RegisterBlock {
     unsafe { &*pac::Rtc::ptr() }
 }
 
-/// Static waker for RTC alarm interrupts
-pub static RTC_ALARM_WAKER: AtomicWaker = AtomicWaker::new();
+/// Static waker for RTC alarm interrupts.
+///
+/// This is a **global** `AtomicWaker` used by the RTC alarm interrupt handler to
+/// wake an asynchronous task waiting for the next alarm.
+///
+/// # Concurrency and usage constraints
+///
+/// - Only **one** alarm can be pending at a time when using this waker. Registering
+///   a new waker (e.g. by polling a different future that also uses this waker)
+///   will replace the previously registered waker.
+/// - This value is a low-level primitive and does **not** itself represent a
+///   future. Consumers are expected to implement their own `Future` wrapper
+///   (for example, a type like `RtcAlarm`) that:
+///   - registers its task's waker with `RTC_ALARM_WAKER`,
+///   - programs/configures the hardware alarm, and
+///   - completes when the alarm interrupt fires and calls `wake()`.
+///
+/// Using this waker directly from multiple independent alarm abstractions at the
+/// same time is not supported and may lead to lost wakeups.
+static RTC_ALARM_WAKER: AtomicWaker = AtomicWaker::new();
 
 /// Represents the real-time clock (RTC) peripheral and provides access to its datetime clock and NVRAM functionality.
 pub struct Rtc<'r> {
@@ -57,7 +75,7 @@ pub struct RtcDatetimeClock<'r> {
 /// Implementation for `RtcDatetime`.
 impl<'r> RtcDatetimeClock<'r> {
     /// Set the datetime in seconds since the Unix time epoch (January 1, 1970).
-    fn set_datetime_in_secs(&self, secs: u64) -> Result<(), DatetimeClockError> {
+    fn set_datetime_in_secs(&mut self, secs: u64) -> Result<(), DatetimeClockError> {
         // SAFETY: We have sole ownership of the RTC peripheral and we enforce that there is only one instance of RtcDatetime,
         //         so we can safely access it as long as it's always from an object that has the handle-to-RTC.
         let r = unsafe { rtc() };
@@ -95,6 +113,9 @@ impl<'r> RtcDatetimeClock<'r> {
 
     /// Sets the RTC wake alarm via the match register to wake after the given time
     ///
+    /// WARNING: Only one RTC alarm can be present in the system at a time.
+    /// Setting a new alarm will cancel an existing one
+    ///
     /// # Parameters
     ///
     /// * `secs_from_now` - A relative offset in seconds from the current RTC time
@@ -102,8 +123,8 @@ impl<'r> RtcDatetimeClock<'r> {
     ///
     /// # Returns
     ///
-    /// The absolute RTC time in seconds at which the alarm is scheduled to fire.
-    pub fn set_alarm(&self, secs_from_now: u64) -> Result<u64, DatetimeClockError> {
+    /// `u64` - The absolute RTC time in seconds at which the alarm is scheduled to fire.
+    pub fn set_alarm(&mut self, secs_from_now: u64) -> Result<u64, DatetimeClockError> {
         let secs_u64 = self
             .get_datetime_in_secs()?
             .checked_add(secs_from_now)
@@ -138,7 +159,7 @@ impl<'r> RtcDatetimeClock<'r> {
     }
 
     /// Clears the RTC 1Hz alarm by resetting related registers
-    pub fn clear_alarm(&self) -> Result<(), DatetimeClockError> {
+    pub fn clear_alarm(&mut self) -> Result<(), DatetimeClockError> {
         // SAFETY: We have sole ownership of the RTC peripheral and we enforce that there is only one instance of RtcDatetime,
         //         so we can safely access it as long as it's always from an object that has the handle-to-RTC.
         let r = unsafe { rtc() };
@@ -159,6 +180,11 @@ impl<'r> RtcDatetimeClock<'r> {
         });
 
         Ok(())
+    }
+
+    /// Returns a handle to the waker for the RTC alarm interrupt
+    pub fn get_waker() -> &'static AtomicWaker {
+        &RTC_ALARM_WAKER
     }
 }
 
@@ -271,8 +297,11 @@ fn RTC() {
 
     // Check if this is an alarm interrupt
     if r.ctrl().read().alarm1hz().bit_is_set() {
-        // Clear the alarm interrupt flag by writing 1 to it
         critical_section::with(|_cs| {
+            // Clear any pending RTC interrupt before waking tasks to avoid spurious retriggers
+            interrupt::RTC.unpend();
+
+            // Clear the alarm interrupt flag by writing 1 to it
             r.ctrl().modify(|_r, w| w.alarm1hz().set_bit());
         });
 

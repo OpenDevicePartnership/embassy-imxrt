@@ -5,7 +5,7 @@ use core::task::Poll;
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_imxrt::rtc::{RTC_ALARM_WAKER, Rtc, RtcDatetimeClock};
+use embassy_imxrt::rtc::{Rtc, RtcDatetimeClock};
 use embassy_time::Timer;
 use embedded_mcu_hal::time::{Datetime, DatetimeClock, DatetimeClockError, Month, UncheckedDatetime};
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
@@ -28,7 +28,7 @@ impl<'r> Future for RtcAlarm<'r> {
                     info!("Alarm pending at time {}, expires at {}", now, self.expires_at);
 
                     // Register our waker to be called by the interrupt handler
-                    RTC_ALARM_WAKER.register(cx.waker());
+                    RtcDatetimeClock::get_waker().register(cx.waker());
 
                     Poll::Pending
                 }
