@@ -133,7 +133,8 @@ impl<'r> RtcDatetimeClock<'r> {
             .get_datetime_in_secs()?
             .checked_add(secs_from_now)
             .ok_or(DatetimeClockError::UnsupportedDatetime)?;
-        self.set_alarm_at(Datetime::from_unix_time_seconds(secs))
+        self.set_alarm_at(secs)?;
+        Ok(secs)
     }
 
     /// Sets the RTC wake alarm via the match register to wake at the given Datetime.
@@ -147,22 +148,20 @@ impl<'r> RtcDatetimeClock<'r> {
     ///
     /// # Parameters
     ///
-    /// * `alarm_time` - An absolute Datetime at which the alarm should fire.
+    /// * `alarm_time` - An absolute RTC time in seconds at which the alarm should fire.
     ///
     /// # Returns
     ///
     /// `u64` - The absolute RTC time in seconds at which the alarm is scheduled to fire.
     ///         This is the `alarm_time` argument converted into u64
-    pub fn set_alarm_at(&mut self, alarm_time: Datetime) -> Result<u64, DatetimeClockError> {
-        let secs_u64 = alarm_time.to_unix_time_seconds();
-
+    pub fn set_alarm_at(&mut self, unix_time_secs: u64) -> Result<(), DatetimeClockError> {
         // Check that the alarm end time is not in the past
-        if self.get_datetime_in_secs()? > secs_u64 {
+        if self.get_datetime_in_secs()? > unix_time_secs {
             return Err(DatetimeClockError::UnsupportedDatetime);
         }
 
         // Convert seconds to u32 to interface with 32 bit hardware RTC
-        let secs: u32 = secs_u64
+        let secs: u32 = unix_time_secs
             .try_into()
             .map_err(|_| DatetimeClockError::UnsupportedDatetime)?;
 
@@ -188,7 +187,7 @@ impl<'r> RtcDatetimeClock<'r> {
             }
         });
 
-        Ok(secs_u64)
+        Ok(())
     }
 
     /// Clears the RTC 1Hz alarm by resetting related registers
