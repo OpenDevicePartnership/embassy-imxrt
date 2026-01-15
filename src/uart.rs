@@ -610,7 +610,10 @@ impl<'a> UartTx<'a, Async> {
                             .set_bit()
                     });
 
+                    self.info.regs.fifointenset().write(|w| w.txerr().set_bit());
+
                     let stat = self.info.regs.stat().read();
+                    let fifointstat = self.info.regs.fifointstat().read();
 
                     self.info.regs.stat().write(|w| {
                         w.framerrint()
@@ -623,6 +626,8 @@ impl<'a> UartTx<'a, Async> {
                             .clear_bit_by_one()
                     });
 
+                    self.info.regs.fifostat().write(|w| w.txerr().set_bit());
+
                     if stat.framerrint().bit_is_set() {
                         Poll::Ready(Err(Error::Framing))
                     } else if stat.parityerrint().bit_is_set() {
@@ -631,6 +636,8 @@ impl<'a> UartTx<'a, Async> {
                         Poll::Ready(Err(Error::Noise))
                     } else if stat.aberr().bit_is_set() {
                         Poll::Ready(Err(Error::Fail))
+                    } else if fifointstat.txerr().bit_is_set() {
+                        Poll::Ready(Err(Error::Overrun))
                     } else {
                         Poll::Pending
                     }
@@ -815,7 +822,10 @@ impl<'a> UartRx<'a, Async> {
                             .set_bit()
                     });
 
+                    self.info.regs.fifointenset().write(|w| w.rxerr().set_bit());
+
                     let stat = self.info.regs.stat().read();
+                    let fifointstat = self.info.regs.fifointstat().read();
 
                     self.info.regs.stat().write(|w| {
                         w.framerrint()
@@ -828,6 +838,8 @@ impl<'a> UartRx<'a, Async> {
                             .clear_bit_by_one()
                     });
 
+                    self.info.regs.fifostat().write(|w| w.rxerr().set_bit());
+
                     if stat.framerrint().bit_is_set() {
                         Poll::Ready(Err(Error::Framing))
                     } else if stat.parityerrint().bit_is_set() {
@@ -836,6 +848,8 @@ impl<'a> UartRx<'a, Async> {
                         Poll::Ready(Err(Error::Noise))
                     } else if stat.aberr().bit_is_set() {
                         Poll::Ready(Err(Error::Fail))
+                    } else if fifointstat.rxerr().bit_is_set() {
+                        Poll::Ready(Err(Error::Overrun))
                     } else {
                         Poll::Pending
                     }
@@ -1527,11 +1541,13 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             });
             T::waker().wake();
         }
-        let fifostat = regs.fifointstat().read();
-        if fifostat.rxerr().bit_is_set() {
-            regs.fifointenclr().write(|w| w.rxerr().set_bit());
-            T::waker().wake();
+
+        let fifointstat = regs.fifointstat().read();
+        if fifointstat.txerr().bit_is_set() || fifointstat.rxerr().bit_is_set() {
+            regs.fifointenclr().write(|w| w.txerr().set_bit().rxerr().set_bit());
         }
+
+        T::waker().wake();
     }
 }
 
