@@ -148,12 +148,7 @@ impl<'r> RtcDatetimeClock<'r> {
     ///
     /// # Parameters
     ///
-    /// * `alarm_time` - An absolute RTC time in seconds at which the alarm should fire.
-    ///
-    /// # Returns
-    ///
-    /// `u64` - The absolute RTC time in seconds at which the alarm is scheduled to fire.
-    ///         This is the `alarm_time` argument converted into u64
+    /// * `unix_time_secs` - An absolute RTC time in seconds at which the alarm should fire.
     pub fn set_alarm_at(&mut self, unix_time_secs: u64) -> Result<(), DatetimeClockError> {
         // Check that the alarm end time is not in the past
         if self.get_datetime_in_secs()? > unix_time_secs {
