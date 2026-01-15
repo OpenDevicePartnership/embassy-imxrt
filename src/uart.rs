@@ -230,7 +230,7 @@ struct BufferConfig {
     #[cfg(feature = "time")]
     polling_rate: u64,
     #[cfg(feature = "time")]
-    current_buffer: dma::PingPongSelector,
+    consumer_buf: dma::PingPongSelector,
 }
 
 impl<'a, M: Mode> UartRx<'a, M> {
@@ -706,8 +706,8 @@ impl<'a> UartRx<'a, Async> {
         Ok(Self::new_inner::<T>(flexcomm, rx_dma, None))
     }
 
-    /// Create a new DMA enabled UART which can only receive data, using a buffer to enable continuous DMA reception via a circular buffer.
-    /// This prevents data loss that would otherwise occur if DMA were toggled on every `read()` call, and also helps avoid FIFO overflow.
+    /// Create a new DMA enabled UART which can only receive data, using a ping-pong buffer to enable continuous DMA reception.
+    /// This uses dual buffers (buffer A and buffer B) that alternate, preventing data loss that would otherwise occur
     /// Note: requires time-driver due to hardware constraint requiring a polled interface (no UART Idle bus indicator).
     ///       Alternative approaches are possible; this was done to maintain similarity between buffered and unbuffered read interfaces.
     #[cfg(feature = "time")]
@@ -759,7 +759,7 @@ impl<'a> UartRx<'a, Async> {
                 buffer_b,
                 read_off: 0,
                 polling_rate: polling_rate_us,
-                current_buffer: dma::PingPongSelector::BufferA,
+                consumer_buf: dma::PingPongSelector::BufferA,
             }),
         ))
     }
@@ -858,20 +858,21 @@ impl<'a> UartRx<'a, Async> {
             Some(dma) => dma,
             None => {
                 debug_assert!(false, "RX DMA not configured");
-                // SAFETY: This branch is unreachable because the only entry path
-                // to this API requires rx_dma to be configured.
-                unsafe { core::hint::unreachable_unchecked() }
+                return Err(Error::Fail);
             }
         };
         let buffer_config = match self._buffer_config.as_mut() {
             Some(cfg) => cfg,
             None => {
                 debug_assert!(false, "Buffer config not initialized");
-                // SAFETY: This branch is unreachable because the only entry path
-                // to this API requires a configured buffer.
-                unsafe { core::hint::unreachable_unchecked() }
+                return Err(Error::Fail);
             }
         };
+
+        // Check for ping-pong buffer overrun error from DMA
+        if rx_dma.check_and_clear_overrun_error() {
+            return Err(Error::Overrun);
+        }
 
         let half_size = buffer_config.buffer_a.len();
 
@@ -881,13 +882,13 @@ impl<'a> UartRx<'a, Async> {
         // As the Rx Idle interrupt is not present for this processor, we must poll to see if new data is available
         while bytes_read < buf.len() {
             // Check if current buffer has been granted (filled by DMA)
-            let cur_buf = buffer_config.current_buffer;
+            let cur_buf = buffer_config.consumer_buf;
             // Current DMA buffer status
             let buffer_status = rx_dma.buffer_status(cur_buf);
 
             let mut available = 0usize;
 
-            if buffer_status == dma::BufferConsumeStatus::Granted {
+            if buffer_status == dma::BufferStatus::Granted {
                 // Current buffer is equal to the granted buffer
                 // The entire buffer is available to read
                 available = half_size - buffer_config.read_off;
@@ -897,7 +898,14 @@ impl<'a> UartRx<'a, Async> {
                 let dma_current_buffer = rx_dma.current_buffer();
                 if dma_current_buffer == cur_buf {
                     // DMA is writing to the current buffer, allow to use xfer count to determine available data
-                    let remaining = rx_dma.get_xfer_count() as usize + 1;
+                    let xfercount = rx_dma.get_xfer_count();
+                    let dma_is_active = rx_dma.is_active();
+                    // Channel not active (transfer finished) and value is 0x3FF - nothing to transfer
+                    let remaining = if (xfercount == 0x3FF) && !dma_is_active {
+                        0
+                    } else {
+                        xfercount as usize + 1
+                    };
 
                     let written = half_size - remaining;
                     if written > buffer_config.read_off {
@@ -924,7 +932,7 @@ impl<'a> UartRx<'a, Async> {
                             }
                             _ => {
                                 // Unexpected out-of-bounds; stop reading further to avoid panic.
-                                break;
+                                return Err(Error::Read);
                             }
                         }
                     }
@@ -939,7 +947,7 @@ impl<'a> UartRx<'a, Async> {
                             }
                             _ => {
                                 // Unexpected out-of-bounds; stop reading further to avoid panic.
-                                break;
+                                return Err(Error::Read);
                             }
                         }
                     }
@@ -954,13 +962,13 @@ impl<'a> UartRx<'a, Async> {
                     buffer_config.read_off = 0;
                     unsafe { rx_dma.commit_buffer(cur_buf) };
 
-                    buffer_config.current_buffer = match cur_buf {
+                    buffer_config.consumer_buf = match cur_buf {
                         dma::PingPongSelector::BufferA => dma::PingPongSelector::BufferB,
                         dma::PingPongSelector::BufferB => dma::PingPongSelector::BufferA,
                     };
                 }
             } else {
-                // No data available, wait for either new data or polling timeout
+                // No data available, wait for new data to arrive or error condition
                 let res = select(
                     embassy_time::Timer::after_micros(buffer_config.polling_rate),
                     // detect bus errors
@@ -1104,7 +1112,7 @@ impl<'a> Uart<'a, Async> {
                     buffer_b,
                     read_off: 0,
                     polling_rate: polling_rate_us,
-                    current_buffer: dma::PingPongSelector::BufferA,
+                    consumer_buf: dma::PingPongSelector::BufferA,
                 }),
             ),
         })
@@ -1218,7 +1226,7 @@ impl<'a> Uart<'a, Async> {
                     buffer_b,
                     read_off: 0,
                     polling_rate: polling_rate_us,
-                    current_buffer: dma::PingPongSelector::BufferA,
+                    consumer_buf: dma::PingPongSelector::BufferA,
                 }),
             ),
         })

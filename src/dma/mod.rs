@@ -81,7 +81,7 @@ pub enum PingPongSelector {
 
 /// Ping Pong buffer status
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum BufferConsumeStatus {
+pub enum BufferStatus {
     /// Buffer is free for DMA to use
     Committed,
     /// Buffer is not ready for DMA to use yet
@@ -90,17 +90,19 @@ pub enum BufferConsumeStatus {
 
 /// Ping Pong descriptor status per channel
 #[derive(Copy, Clone, Debug)]
-struct PingPongDescriptorStatus {
+struct PingPingStatus {
     current: PingPongSelector,
-    buffer_a_status: BufferConsumeStatus,
-    buffer_b_status: BufferConsumeStatus,
+    buffer_a_status: BufferStatus,
+    buffer_b_status: BufferStatus,
+    overrun_error: bool,
 }
 
 /// Ping Pong descriptor status for all channels
-static mut PING_PONG_STATUS: [PingPongDescriptorStatus; DMA_CHANNEL_COUNT] = [PingPongDescriptorStatus {
+static mut PING_PONG_STATUS: [PingPingStatus; DMA_CHANNEL_COUNT] = [PingPingStatus {
     current: PingPongSelector::BufferA,
-    buffer_a_status: BufferConsumeStatus::Committed,
-    buffer_b_status: BufferConsumeStatus::Committed,
+    buffer_a_status: BufferStatus::Committed,
+    buffer_b_status: BufferStatus::Committed,
+    overrun_error: false,
 }; DMA_CHANNEL_COUNT];
 
 /// DMA errors
@@ -162,10 +164,11 @@ fn dma0_irq_handler<const N: usize>(wakers: &[AtomicWaker; N]) {
 
                     if ping_pong_status.current == PingPongSelector::BufferA {
                         // Just finished Buffer A, switching to Buffer B
-                        ping_pong_status.buffer_a_status = BufferConsumeStatus::Granted;
+                        ping_pong_status.buffer_a_status = BufferStatus::Granted;
                         ping_pong_status.current = PingPongSelector::BufferB;
 
-                        if ping_pong_status.buffer_b_status == BufferConsumeStatus::Granted {
+                        if ping_pong_status.buffer_b_status == BufferStatus::Granted {
+                            ping_pong_status.overrun_error = true;
                             error!("DMA Ping-Pong buffer overrun on channel {}!", channel);
                         } else {
                             reg.channel(channel as usize)
@@ -174,10 +177,11 @@ fn dma0_irq_handler<const N: usize>(wakers: &[AtomicWaker; N]) {
                         }
                     } else {
                         // Just finished Buffer B, switching to Buffer A
-                        ping_pong_status.buffer_b_status = BufferConsumeStatus::Granted;
+                        ping_pong_status.buffer_b_status = BufferStatus::Granted;
                         ping_pong_status.current = PingPongSelector::BufferA;
 
-                        if ping_pong_status.buffer_a_status == BufferConsumeStatus::Granted {
+                        if ping_pong_status.buffer_a_status == BufferStatus::Granted {
+                            ping_pong_status.overrun_error = true;
                             error!("DMA Ping-Pong buffer overrun on channel {}!", channel);
                         } else {
                             reg.channel(channel as usize)

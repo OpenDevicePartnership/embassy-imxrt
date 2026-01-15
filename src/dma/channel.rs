@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 
 use embassy_sync::waitqueue::AtomicWaker;
 
-use super::{BufferConsumeStatus, DESCRIPTORS, PING_DESCRIPTORS, PING_PONG_STATUS, PONG_DESCRIPTORS, PingPongSelector};
+use super::{BufferStatus, DESCRIPTORS, PING_DESCRIPTORS, PING_PONG_STATUS, PONG_DESCRIPTORS, PingPongSelector};
 use crate::dma::DmaInfo;
 use crate::dma::transfer::{Direction, Transfer, TransferOptions};
 
@@ -250,10 +250,8 @@ impl<'d> Channel<'d> {
         #[allow(clippy::indexing_slicing)]
         let ping_pong_status = unsafe { &mut PING_PONG_STATUS[channel] };
         ping_pong_status.current = PingPongSelector::BufferA;
-        ping_pong_status.buffer_a_status = BufferConsumeStatus::Committed;
-        ping_pong_status.buffer_b_status = BufferConsumeStatus::Committed;
-
-        info!("DMA Ping-Pong Descriptors set up on channel {}", channel);
+        ping_pong_status.buffer_a_status = BufferStatus::Committed;
+        ping_pong_status.buffer_b_status = BufferStatus::Committed;
     }
 
     /// Enable the DMA channel (only after configuring)
@@ -304,16 +302,16 @@ impl<'d> Channel<'d> {
         let ping_pong_status = unsafe { &mut PING_PONG_STATUS[channel] };
         match selector {
             PingPongSelector::BufferA => {
-                ping_pong_status.buffer_a_status = BufferConsumeStatus::Committed;
+                ping_pong_status.buffer_a_status = BufferStatus::Committed;
             }
             PingPongSelector::BufferB => {
-                ping_pong_status.buffer_b_status = BufferConsumeStatus::Committed;
+                ping_pong_status.buffer_b_status = BufferStatus::Committed;
             }
         }
     }
 
     /// Get the status of the specified ping-pong buffer
-    pub fn buffer_status(&self, selector: PingPongSelector) -> BufferConsumeStatus {
+    pub fn buffer_status(&self, selector: PingPongSelector) -> BufferStatus {
         let channel = self.info.ch_num;
         #[allow(clippy::indexing_slicing)]
         let ping_pong_status = unsafe { &PING_PONG_STATUS[channel] };
@@ -321,5 +319,15 @@ impl<'d> Channel<'d> {
             PingPongSelector::BufferA => ping_pong_status.buffer_a_status,
             PingPongSelector::BufferB => ping_pong_status.buffer_b_status,
         }
+    }
+
+    /// Check and clear ping-pong buffer overrun error
+    pub fn check_and_clear_overrun_error(&self) -> bool {
+        let channel = self.info.ch_num;
+        #[allow(clippy::indexing_slicing)]
+        let ping_pong_status = unsafe { &mut PING_PONG_STATUS[channel] };
+        let had_error = ping_pong_status.overrun_error;
+        ping_pong_status.overrun_error = false; // Clear the error flag
+        had_error
     }
 }
