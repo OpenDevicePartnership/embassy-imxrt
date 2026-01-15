@@ -90,7 +90,7 @@ pub enum BufferStatus {
 
 /// Ping Pong descriptor status per channel
 #[derive(Copy, Clone, Debug)]
-struct PingPingStatus {
+struct PingPongStatus {
     current: PingPongSelector,
     buffer_a_status: BufferStatus,
     buffer_b_status: BufferStatus,
@@ -98,7 +98,7 @@ struct PingPingStatus {
 }
 
 /// Ping Pong descriptor status for all channels
-static mut PING_PONG_STATUS: [PingPingStatus; DMA_CHANNEL_COUNT] = [PingPingStatus {
+static mut PING_PONG_STATUS: [PingPongStatus; DMA_CHANNEL_COUNT] = [PingPongStatus {
     current: PingPongSelector::BufferA,
     buffer_a_status: BufferStatus::Committed,
     buffer_b_status: BufferStatus::Committed,

@@ -736,7 +736,7 @@ impl<'a> UartRx<'a, Async> {
 
         let (buffer_a, buffer_b) = buffer.split_at_mut(buffer.len() / 2);
         T::info().regs.fifocfg().modify(|_, w| w.dmarx().enabled());
-        // immediately configure and enable channel for circular buffered reception
+        // immediately configure and enable channel for ping-pong (double-buffered) reception
         rx_dma.configure_channel_ping_pong(
             dma::transfer::Direction::PeripheralToMemory,
             T::info().regs.fiford().as_ptr() as *const u8 as *const u32,
@@ -1086,7 +1086,7 @@ impl<'a> Uart<'a, Async> {
 
         let (buffer_a, buffer_b) = buffer.split_at_mut(buffer.len() / 2);
         T::info().regs.fifocfg().modify(|_, w| w.dmarx().enabled());
-        // immediately configure and enable channel for circular buffered reception
+        // immediately configure and enable channel for ping-pong (double-buffered) reception
         rx_dma.configure_channel_ping_pong(
             dma::transfer::Direction::PeripheralToMemory,
             T::info().regs.fiford().as_ptr() as *const u8 as *const u32,
@@ -1184,7 +1184,7 @@ impl<'a> Uart<'a, Async> {
         let cts = cts.into();
 
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
-        let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::InvalidArgument)?;
+        let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
 
         let flexcomm = Self::init::<T>(
             Some(tx.into()),
@@ -1200,7 +1200,7 @@ impl<'a> Uart<'a, Async> {
 
         let (buffer_a, buffer_b) = buffer.split_at_mut(buffer.len() / 2);
         T::info().regs.fifocfg().modify(|_, w| w.dmarx().enabled());
-        // immediately configure and enable channel for circular buffered reception
+        // immediately configure and enable channel for ping-pong (double-buffered) reception
         rx_dma.configure_channel_ping_pong(
             dma::transfer::Direction::PeripheralToMemory,
             T::info().regs.fiford().as_ptr() as *const u8 as *const u32,
