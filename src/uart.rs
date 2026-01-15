@@ -137,6 +137,27 @@ pub enum Error {
     /// TX Busy
     TxBusy,
 }
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::Read => write!(f, "Read error"),
+            Error::Overrun => write!(f, "Buffer overflow"),
+            Error::Noise => write!(f, "Noise error"),
+            Error::Framing => write!(f, "Framing error"),
+            Error::Parity => write!(f, "Parity error"),
+            Error::Fail => write!(f, "Other failure"),
+            Error::InvalidArgument => write!(f, "Invalid argument"),
+            Error::UnsupportedBaudrate => write!(f, "Unsupported baudrate"),
+            Error::RxFifoEmpty => write!(f, "RX FIFO empty"),
+            Error::TxFifoFull => write!(f, "TX FIFO full"),
+            Error::TxBusy => write!(f, "TX busy"),
+        }
+    }
+}
+
+impl core::error::Error for Error {}
+
 /// shorthand for -> `Result<T>`
 pub type Result<T> = core::result::Result<T, Error>;
 
