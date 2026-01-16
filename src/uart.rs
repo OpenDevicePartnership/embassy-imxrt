@@ -854,21 +854,8 @@ impl<'a> UartRx<'a, Async> {
 
     #[cfg(feature = "time")]
     async fn read_buffered(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let rx_dma = match self._rx_dma.as_ref() {
-            Some(dma) => dma,
-            None => {
-                debug_assert!(false, "RX DMA not configured");
-                return Err(Error::Fail);
-            }
-        };
-        let buffer_config = match self._buffer_config.as_mut() {
-            Some(cfg) => cfg,
-            None => {
-                debug_assert!(false, "Buffer config not initialized");
-                return Err(Error::Fail);
-            }
-        };
-
+        let rx_dma = self._rx_dma.as_ref().ok_or(Error::Fail)?;
+        let buffer_config = self._buffer_config.as_mut().ok_or(Error::Fail)?;
         // Check for ping-pong buffer overrun error from DMA
         if rx_dma.check_and_clear_overrun_error() {
             return Err(Error::Overrun);
@@ -881,6 +868,17 @@ impl<'a> UartRx<'a, Async> {
 
         // As the Rx Idle interrupt is not present for this processor, we must poll to see if new data is available
         while bytes_read < buf.len() {
+            // Check for ping-pong buffer overrun error from DMA
+            if rx_dma.check_and_clear_overrun_error() {
+                return Err(Error::Overrun);
+            }
+
+            // Check for UART RX FIFO overrun error
+            if self.info.regs.fifostat().read().rxerr().bit_is_set() {
+                self.info.regs.fifostat().modify(|_, w| w.rxerr().set_bit());
+                return Err(Error::Overrun);
+            }
+
             // Check if current buffer has been granted (filled by DMA)
             let cur_buf = buffer_config.consumer_buf;
             // Current DMA buffer status
@@ -899,13 +897,16 @@ impl<'a> UartRx<'a, Async> {
                 if dma_current_buffer == cur_buf {
                     // DMA is writing to the current buffer, allow to use xfer count to determine available data
                     let xfercount = rx_dma.get_xfer_count();
-                    let dma_is_active = rx_dma.is_active();
+
+                    // xfercount counts down to 0x3FF at the end of transfer
+                    // But if it is 0x3FF and buffer is not granted, this can mean we just finished transfer after
+                    //   our grant check - so we skip this case to avoid overflowing written calculation below
+                    if xfercount == 0x3FF {
+                        continue;
+                    }
+
                     // Channel not active (transfer finished) and value is 0x3FF - nothing to transfer
-                    let remaining = if (xfercount == 0x3FF) && !dma_is_active {
-                        0
-                    } else {
-                        xfercount as usize + 1
-                    };
+                    let remaining = xfercount as usize + 1;
 
                     let written = half_size - remaining;
                     if written > buffer_config.read_off {
@@ -924,32 +925,18 @@ impl<'a> UartRx<'a, Async> {
                     dma::PingPongSelector::BufferA => {
                         let src_slice_opt = buffer_config
                             .buffer_a
-                            .get(buffer_config.read_off..buffer_config.read_off + to_read);
-                        let dst_slice_opt = buf.get_mut(bytes_read..bytes_read + to_read);
-                        match (src_slice_opt, dst_slice_opt) {
-                            (Some(src_slice), Some(dst_slice)) => {
-                                dst_slice.copy_from_slice(src_slice);
-                            }
-                            _ => {
-                                // Unexpected out-of-bounds; stop reading further to avoid panic.
-                                return Err(Error::Read);
-                            }
-                        }
+                            .get(buffer_config.read_off..buffer_config.read_off + to_read)
+                            .ok_or(Error::Read)?;
+                        let dst_slice_opt = buf.get_mut(bytes_read..bytes_read + to_read).ok_or(Error::Read)?;
+                        dst_slice_opt.copy_from_slice(src_slice_opt);
                     }
                     dma::PingPongSelector::BufferB => {
                         let src_slice_opt = buffer_config
                             .buffer_b
-                            .get(buffer_config.read_off..buffer_config.read_off + to_read);
-                        let dst_slice_opt = buf.get_mut(bytes_read..bytes_read + to_read);
-                        match (src_slice_opt, dst_slice_opt) {
-                            (Some(src_slice), Some(dst_slice)) => {
-                                dst_slice.copy_from_slice(src_slice);
-                            }
-                            _ => {
-                                // Unexpected out-of-bounds; stop reading further to avoid panic.
-                                return Err(Error::Read);
-                            }
-                        }
+                            .get(buffer_config.read_off..buffer_config.read_off + to_read)
+                            .ok_or(Error::Read)?;
+                        let dst_slice_opt = buf.get_mut(bytes_read..bytes_read + to_read).ok_or(Error::Read)?;
+                        dst_slice_opt.copy_from_slice(src_slice_opt);
                     }
                 }
 
@@ -975,18 +962,14 @@ impl<'a> UartRx<'a, Async> {
                     poll_fn(|cx| {
                         self.info.waker.register(cx.waker());
 
-                        self.info.regs.intenset().write(|w| {
-                            w.framerren()
-                                .set_bit()
-                                .parityerren()
-                                .set_bit()
-                                .rxnoiseen()
-                                .set_bit()
-                                .aberren()
-                                .set_bit()
-                        });
+                        self.info
+                            .regs
+                            .intenset()
+                            .write(|w| w.framerren().set_bit().parityerren().set_bit().rxnoiseen().set_bit());
+                        self.info.regs.fifointenset().write(|w| w.rxerr().set_bit());
 
                         let stat = self.info.regs.stat().read();
+                        let fifointstat = self.info.regs.fifointstat().read();
 
                         self.info.regs.stat().write(|w| {
                             w.framerrint()
@@ -995,9 +978,9 @@ impl<'a> UartRx<'a, Async> {
                                 .clear_bit_by_one()
                                 .rxnoiseint()
                                 .clear_bit_by_one()
-                                .aberr()
-                                .clear_bit_by_one()
                         });
+
+                        self.info.regs.fifostat().write(|w| w.rxerr().set_bit());
 
                         if stat.framerrint().bit_is_set() {
                             Poll::Ready(Err(Error::Framing))
@@ -1005,8 +988,8 @@ impl<'a> UartRx<'a, Async> {
                             Poll::Ready(Err(Error::Parity))
                         } else if stat.rxnoiseint().bit_is_set() {
                             Poll::Ready(Err(Error::Noise))
-                        } else if stat.aberr().bit_is_set() {
-                            Poll::Ready(Err(Error::Fail))
+                        } else if fifointstat.rxerr().bit_is_set() {
+                            Poll::Ready(Err(Error::Overrun))
                         } else {
                             Poll::Pending
                         }
@@ -1075,6 +1058,9 @@ impl<'a> Uart<'a, Async> {
         let tx = tx.into();
         let rx = rx.into();
 
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
+
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
         let rx_dma: Channel<'_> = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
 
@@ -1139,6 +1125,9 @@ impl<'a> Uart<'a, Async> {
         let rts = rts.into();
         let cts = cts.into();
 
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
+
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
@@ -1182,6 +1171,9 @@ impl<'a> Uart<'a, Async> {
         let rx = rx.into();
         let rts = rts.into();
         let cts = cts.into();
+
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
 
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
         let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
@@ -1536,11 +1528,9 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             T::waker().wake();
         }
         let fifostat = regs.fifointstat().read();
-        if fifostat.txlvl().bit_is_set() || fifostat.txerr().bit_is_set() {
-            regs.fifointenclr().write(|w| w.txlvl().set_bit().txerr().set_bit());
-        }
-        if fifostat.rxlvl().bit_is_set() || fifostat.rxerr().bit_is_set() {
-            regs.fifointenclr().write(|w| w.rxlvl().set_bit().rxerr().set_bit());
+        if fifostat.rxerr().bit_is_set() {
+            regs.fifointenclr().write(|w| w.rxerr().set_bit());
+            T::waker().wake();
         }
     }
 }

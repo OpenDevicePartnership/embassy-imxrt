@@ -28,7 +28,12 @@ async fn reader(mut rx: UartRx<'static, Async>) {
 
         info!("Total bytes read: {}, read length: {}", byte_counter, read_len);
 
-        rx.read(&mut buf[..read_len]).await.unwrap();
+        let res = rx.read(&mut buf[..read_len]).await;
+
+        if res.is_err() {
+            info!("Read error: {:?}", res);
+            panic!("Read error");
+        }
 
         for (i, b) in buf[..read_len].iter().enumerate() {
             if *b != (byte_counter % 256) as u8 {
