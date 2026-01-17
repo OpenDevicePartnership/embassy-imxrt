@@ -597,7 +597,7 @@ impl<'a> UartTx<'a, Async> {
             let res = select(
                 transfer,
                 poll_fn(|cx| {
-                    self.info.waker.register(cx.waker());
+                    self.info.tx_waker.register(cx.waker());
 
                     self.info.regs.fifointenset().write(|w| w.txerr().set_bit());
 
@@ -625,38 +625,23 @@ impl<'a> UartTx<'a, Async> {
 
     /// Flush UART TX asynchronously.
     pub fn flush(&mut self) -> impl Future<Output = Result<()>> + use<'_, 'a> {
-        self.wait_on(
-            |me| {
-                if me.info.regs.stat().read().txidle().bit_is_set() {
-                    Poll::Ready(Ok(()))
-                } else {
-                    Poll::Pending
-                }
-            },
-            |me| {
-                me.info.regs.intenset().write(|w| w.txidleen().set_bit());
-            },
-        )
-    }
+        poll_fn(|cx| {
+            self.info.tx_waker.register(cx.waker());
 
-    /// Calls `f` to check if we are ready or not.
-    /// If not, `g` is called once the waker is set (to eg enable the required interrupts).
-    fn wait_on<F, U, G>(&mut self, mut f: F, mut g: G) -> impl Future<Output = U> + use<'_, 'a, F, U, G>
-    where
-        F: FnMut(&mut Self) -> Poll<U>,
-        G: FnMut(&mut Self),
-    {
-        poll_fn(move |cx| {
-            // Register waker before checking condition, to ensure that wakes/interrupts
-            // aren't lost between f() and g()
-            self.info.waker.register(cx.waker());
-            let r = f(self);
+            self.info.regs.intenset().write(|w| w.txidleen().set_bit());
+            self.info.regs.fifointenset().write(|w| w.txerr().set_bit());
 
-            if r.is_pending() {
-                g(self);
+            let fifointstat = self.info.regs.fifointstat().read();
+
+            self.info.regs.fifostat().write(|w| w.txerr().set_bit());
+
+            if self.info.regs.stat().read().txidle().bit_is_set() {
+                Poll::Ready(Ok(()))
+            } else if fifointstat.txerr().bit_is_set() {
+                Poll::Ready(Err(Error::Overrun))
+            } else {
+                Poll::Pending
             }
-
-            r
         })
     }
 }
@@ -778,7 +763,7 @@ impl<'a> UartRx<'a, Async> {
             let res = select(
                 transfer,
                 poll_fn(|cx| {
-                    self.info.waker.register(cx.waker());
+                    self.info.rx_waker.register(cx.waker());
 
                     self.info
                         .regs
@@ -1457,7 +1442,8 @@ impl embedded_io_async::Write for Uart<'_, Async> {
 
 struct Info {
     regs: &'static crate::pac::usart0::RegisterBlock,
-    waker: &'static AtomicWaker,
+    tx_waker: &'static AtomicWaker,
+    rx_waker: &'static AtomicWaker,
 }
 
 // SAFETY: safety for Send here is the same as the other accessors to unsafe blocks: it must be done from a single executor context.
@@ -1467,7 +1453,8 @@ unsafe impl Send for Info {}
 
 trait SealedInstance {
     fn info() -> Info;
-    fn waker() -> &'static AtomicWaker;
+    fn tx_waker() -> &'static AtomicWaker;
+    fn rx_waker() -> &'static AtomicWaker;
 }
 
 /// UART interrupt handler.
@@ -1480,32 +1467,28 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
         let regs = T::info().regs;
         let stat = regs.intstat().read();
 
-        if stat.txidle().bit_is_set()
-            || stat.framerrint().bit_is_set()
-            || stat.parityerrint().bit_is_set()
-            || stat.rxnoiseint().bit_is_set()
-        {
-            regs.intenclr().write(|w| {
-                w.txidleclr()
-                    .set_bit()
-                    .framerrclr()
-                    .set_bit()
-                    .parityerrclr()
-                    .set_bit()
-                    .rxnoiseclr()
-                    .set_bit()
-            });
-            T::waker().wake();
+        if stat.txidle().bit_is_set() {
+            regs.intenclr().write(|w| w.txidleclr().set_bit());
+            T::tx_waker().wake();
+        }
+
+        if stat.framerrint().bit_is_set() || stat.parityerrint().bit_is_set() || stat.rxnoiseint().bit_is_set() {
+            regs.intenclr()
+                .write(|w| w.framerrclr().set_bit().parityerrclr().set_bit().rxnoiseclr().set_bit());
+
+            T::rx_waker().wake();
         }
 
         let fifointstat = regs.fifointstat().read();
-        if fifointstat.txerr().bit_is_set() || fifointstat.rxerr().bit_is_set() {
-            regs.fifointenclr().write(|w| w.txerr().set_bit().rxerr().set_bit());
+        if fifointstat.txerr().bit_is_set() {
+            regs.fifointenclr().write(|w| w.txerr().set_bit());
+
+            T::tx_waker().wake();
         }
-        let fifostat = regs.fifointstat().read();
-        if fifostat.rxerr().bit_is_set() {
-            regs.fifointenclr().write(|w| w.rxerr().set_bit());
-            T::waker().wake();
+
+        if fifointstat.rxerr().bit_is_set() {
+            regs.fifointenclr().write(|w| w.txerr().set_bit().rxerr().set_bit());
+            T::rx_waker().wake();
         }
     }
 }
@@ -1525,13 +1508,19 @@ macro_rules! impl_instance {
                     fn info() -> Info {
                         Info {
                             regs: unsafe { &*crate::pac::[<Usart $n>]::ptr() },
-                            waker: Self::waker(),
+                            tx_waker: Self::tx_waker(),
+                            rx_waker: Self::rx_waker(),
                         }
                     }
 
-                    fn waker() -> &'static AtomicWaker {
-                        static WAKER: AtomicWaker = AtomicWaker::new();
-                        &WAKER
+                    fn tx_waker() -> &'static AtomicWaker {
+                        static TX_WAKER: AtomicWaker = AtomicWaker::new();
+                        &TX_WAKER
+                    }
+
+                    fn rx_waker() -> &'static AtomicWaker {
+                        static RX_WAKER: AtomicWaker = AtomicWaker::new();
+                        &RX_WAKER
                     }
                 }
 
