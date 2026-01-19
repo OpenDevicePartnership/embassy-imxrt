@@ -1475,19 +1475,17 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
         if stat.framerrint().bit_is_set() || stat.parityerrint().bit_is_set() || stat.rxnoiseint().bit_is_set() {
             regs.intenclr()
                 .write(|w| w.framerrclr().set_bit().parityerrclr().set_bit().rxnoiseclr().set_bit());
-
             T::rx_waker().wake();
         }
 
         let fifointstat = regs.fifointstat().read();
         if fifointstat.txerr().bit_is_set() {
             regs.fifointenclr().write(|w| w.txerr().set_bit());
-
             T::tx_waker().wake();
         }
 
         if fifointstat.rxerr().bit_is_set() {
-            regs.fifointenclr().write(|w| w.txerr().set_bit().rxerr().set_bit());
+            regs.fifointenclr().write(|w| w.rxerr().set_bit());
             T::rx_waker().wake();
         }
     }
