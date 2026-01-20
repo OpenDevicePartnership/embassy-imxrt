@@ -911,6 +911,8 @@ impl<'a> UartRx<'a, Async> {
                         dma::PingPongSelector::BufferB => dma::PingPongSelector::BufferA,
                     };
                 }
+
+                embassy_time::Timer::after_micros(buffer_config.polling_rate).await;
             } else {
                 poll_fn(|cx| {
                     self.info.rx_waker.register(cx.waker());
@@ -965,8 +967,6 @@ impl<'a> UartRx<'a, Async> {
                     }
                 })
                 .await?;
-
-                embassy_time::Timer::after_micros(buffer_config.polling_rate).await;
             }
         }
         Ok(bytes_read)
