@@ -53,6 +53,7 @@ pub struct UartTx<'a, M: Mode> {
 pub struct UartRx<'a, M: Mode> {
     info: Info,
     _flexcomm: FlexcommRef,
+    _buffer_config: Option<BufferConfig>,
     _rx_dma: Option<Channel<'a>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
@@ -219,11 +220,29 @@ impl<'a> UartTx<'a, Blocking> {
     }
 }
 
+struct BufferConfig {
+    #[cfg(feature = "time")]
+    buffer_a: &'static mut [u8],
+    #[cfg(feature = "time")]
+    buffer_b: &'static mut [u8],
+    #[cfg(feature = "time")]
+    read_off: usize,
+    #[cfg(feature = "time")]
+    polling_rate: u64,
+    #[cfg(feature = "time")]
+    consumer_buf: dma::PingPongSelector,
+}
+
 impl<'a, M: Mode> UartRx<'a, M> {
-    fn new_inner<T: Instance>(_flexcomm: FlexcommRef, _rx_dma: Option<Channel<'a>>) -> Self {
+    fn new_inner<T: Instance>(
+        _flexcomm: FlexcommRef,
+        _rx_dma: Option<Channel<'a>>,
+        _buffer_config: Option<BufferConfig>,
+    ) -> Self {
         Self {
             info: T::info(),
             _flexcomm,
+            _buffer_config,
             _rx_dma,
             _phantom: PhantomData,
         }
@@ -237,7 +256,7 @@ impl<'a> UartRx<'a, Blocking> {
 
         let flexcomm = Uart::<Blocking>::init::<T>(None, Some(rx.into().reborrow()), None, None, config)?;
 
-        Ok(Self::new_inner::<T>(flexcomm, None))
+        Ok(Self::new_inner::<T>(flexcomm, None, None))
     }
 }
 
@@ -499,7 +518,7 @@ impl<'a> Uart<'a, Blocking> {
         Ok(Self {
             info: T::info(),
             tx: UartTx::new_inner::<T>(flexcomm.clone(), None),
-            rx: UartRx::new_inner::<T>(flexcomm, None),
+            rx: UartRx::new_inner::<T>(flexcomm, None, None),
         })
     }
 
@@ -684,11 +703,85 @@ impl<'a> UartRx<'a, Async> {
 
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
-        Ok(Self::new_inner::<T>(flexcomm, rx_dma))
+        Ok(Self::new_inner::<T>(flexcomm, rx_dma, None))
+    }
+
+    /// Create a new DMA enabled UART which can only receive data, using a ping-pong buffer to enable continuous DMA reception.
+    /// This uses dual buffers (buffer A and buffer B) that alternate, preventing data loss that would otherwise occur
+    /// Note: requires time-driver due to hardware constraint requiring a polled interface (no UART Idle bus indicator).
+    ///       Alternative approaches are possible; this was done to maintain similarity between buffered and unbuffered read interfaces.
+    #[cfg(feature = "time")]
+    pub fn new_async_with_buffer<T: Instance>(
+        _inner: Peri<'a, T>,
+        rx: Peri<'a, impl RxPin<T>>,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'a,
+        rx_dma: Peri<'a, impl RxDma<T>>,
+        config: Config,
+        buffer: &'static mut [u8],
+        polling_rate_us: u64,
+    ) -> Result<Self> {
+        rx.as_rx();
+
+        let mut rx = rx.into();
+        let flexcomm = Uart::<Async>::init::<T>(None, Some(rx.reborrow()), None, None, config)?;
+
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
+
+        let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
+
+        if !buffer.len().is_multiple_of(2) {
+            return Err(Error::InvalidArgument);
+        }
+
+        let (buffer_a, buffer_b) = buffer.split_at_mut(buffer.len() / 2);
+        T::info().regs.fifocfg().modify(|_, w| w.dmarx().enabled());
+        // immediately configure and enable channel for ping-pong (double-buffered) reception
+        rx_dma.configure_channel_ping_pong(
+            dma::transfer::Direction::PeripheralToMemory,
+            T::info().regs.fiford().as_ptr() as *const u8 as *const u32,
+            buffer_a.as_mut_ptr() as *mut u32,
+            buffer_b.as_mut_ptr() as *mut u32,
+            buffer_a.len(),
+            dma::transfer::TransferOptions {
+                width: dma::transfer::Width::Bit8,
+                priority: dma::transfer::Priority::Priority0,
+            },
+        );
+        rx_dma.enable_channel();
+        rx_dma.trigger_channel();
+
+        Ok(Self::new_inner::<T>(
+            flexcomm,
+            Some(rx_dma),
+            Some(BufferConfig {
+                buffer_a,
+                buffer_b,
+                read_off: 0,
+                polling_rate: polling_rate_us,
+                consumer_buf: dma::PingPongSelector::BufferA,
+            }),
+        ))
     }
 
     /// Read from UART RX asynchronously.
-    pub async fn read(&mut self, buf: &mut [u8]) -> Result<()> {
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        #[cfg(feature = "time")]
+        {
+            if self._buffer_config.is_some() {
+                self.read_buffered(buf).await
+            } else {
+                self.read_unbuffered(buf).await
+            }
+        }
+
+        #[cfg(not(feature = "time"))]
+        {
+            self.read_unbuffered(buf).await
+        }
+    }
+
+    async fn read_unbuffered(&mut self, buf: &mut [u8]) -> Result<usize> {
         let regs = self.info.regs;
 
         for chunk in buf.chunks_mut(1024) {
@@ -752,11 +845,165 @@ impl<'a> UartRx<'a, Async> {
 
             match res {
                 Either::First(()) | Either::Second(Ok(())) => (),
-                Either::Second(e) => return e,
+                Either::Second(Err(e)) => return Err(e),
             }
         }
 
-        Ok(())
+        Ok(buf.len())
+    }
+
+    #[cfg(feature = "time")]
+    async fn read_buffered(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let rx_dma = self._rx_dma.as_ref().ok_or(Error::Fail)?;
+        let buffer_config = self._buffer_config.as_mut().ok_or(Error::Fail)?;
+        // Check for ping-pong buffer overrun error from DMA
+        if rx_dma.check_and_clear_overrun_error() {
+            return Err(Error::Overrun);
+        }
+
+        let half_size = buffer_config.buffer_a.len();
+
+        // Total bytes read into user buffer
+        let mut bytes_read = 0;
+
+        // As the Rx Idle interrupt is not present for this processor, we must poll to see if new data is available
+        while bytes_read < buf.len() {
+            // Check for ping-pong buffer overrun error from DMA
+            if rx_dma.check_and_clear_overrun_error() {
+                return Err(Error::Overrun);
+            }
+
+            // Check for UART RX FIFO overrun error
+            if self.info.regs.fifostat().read().rxerr().bit_is_set() {
+                self.info.regs.fifostat().modify(|_, w| w.rxerr().set_bit());
+                return Err(Error::Overrun);
+            }
+
+            // Check if current buffer has been granted (filled by DMA)
+            let cur_buf = buffer_config.consumer_buf;
+            // Current DMA buffer status
+            let buffer_status = rx_dma.buffer_status(cur_buf);
+
+            let mut available = 0usize;
+
+            if buffer_status == dma::BufferStatus::Granted {
+                // Current buffer is equal to the granted buffer
+                // The entire buffer is available to read
+                available = half_size - buffer_config.read_off;
+            } else {
+                // Buffer not yet granted - check if DMA is writing to it
+                // We can try to read partial data using xfercount
+                let dma_current_buffer = rx_dma.current_buffer();
+                if dma_current_buffer == cur_buf {
+                    // DMA is writing to the current buffer, allow to use xfer count to determine available data
+                    let xfercount = rx_dma.get_xfer_count();
+
+                    // xfercount counts down to 0x3FF at the end of transfer
+                    // But if it is 0x3FF and buffer is not granted, this can mean we just finished transfer after
+                    //   our grant check - so we skip this case to avoid overflowing written calculation below
+                    if xfercount == 0x3FF {
+                        continue;
+                    }
+
+                    // Channel not active (transfer finished) and value is 0x3FF - nothing to transfer
+                    let remaining = xfercount as usize + 1;
+
+                    let written = half_size - remaining;
+                    if written > buffer_config.read_off {
+                        available = written - buffer_config.read_off;
+                    }
+                }
+                // If DMA is writing to the other buffer, no new data is available
+            }
+
+            if available > 0 {
+                let want_to_read = buf.len() - bytes_read;
+                let to_read = want_to_read.min(available);
+
+                // Read data from the appropriate buffer
+                match cur_buf {
+                    dma::PingPongSelector::BufferA => {
+                        let src_slice_opt = buffer_config
+                            .buffer_a
+                            .get(buffer_config.read_off..buffer_config.read_off + to_read)
+                            .ok_or(Error::Read)?;
+                        let dst_slice_opt = buf.get_mut(bytes_read..bytes_read + to_read).ok_or(Error::Read)?;
+                        dst_slice_opt.copy_from_slice(src_slice_opt);
+                    }
+                    dma::PingPongSelector::BufferB => {
+                        let src_slice_opt = buffer_config
+                            .buffer_b
+                            .get(buffer_config.read_off..buffer_config.read_off + to_read)
+                            .ok_or(Error::Read)?;
+                        let dst_slice_opt = buf.get_mut(bytes_read..bytes_read + to_read).ok_or(Error::Read)?;
+                        dst_slice_opt.copy_from_slice(src_slice_opt);
+                    }
+                }
+
+                // Update counters
+                bytes_read += to_read;
+                buffer_config.read_off += to_read;
+
+                // The whole half buffer has been read, switch to next buffer
+                if buffer_config.read_off == half_size {
+                    buffer_config.read_off = 0;
+                    unsafe { rx_dma.commit_buffer(cur_buf) };
+
+                    buffer_config.consumer_buf = match cur_buf {
+                        dma::PingPongSelector::BufferA => dma::PingPongSelector::BufferB,
+                        dma::PingPongSelector::BufferB => dma::PingPongSelector::BufferA,
+                    };
+                }
+            } else {
+                // No data available, wait for new data to arrive or error condition
+                let res = select(
+                    embassy_time::Timer::after_micros(buffer_config.polling_rate),
+                    // detect bus errors
+                    poll_fn(|cx| {
+                        self.info.waker.register(cx.waker());
+
+                        self.info
+                            .regs
+                            .intenset()
+                            .write(|w| w.framerren().set_bit().parityerren().set_bit().rxnoiseen().set_bit());
+                        self.info.regs.fifointenset().write(|w| w.rxerr().set_bit());
+
+                        let stat = self.info.regs.stat().read();
+                        let fifointstat = self.info.regs.fifointstat().read();
+
+                        self.info.regs.stat().write(|w| {
+                            w.framerrint()
+                                .clear_bit_by_one()
+                                .parityerrint()
+                                .clear_bit_by_one()
+                                .rxnoiseint()
+                                .clear_bit_by_one()
+                        });
+
+                        self.info.regs.fifostat().write(|w| w.rxerr().set_bit());
+
+                        if stat.framerrint().bit_is_set() {
+                            Poll::Ready(Err(Error::Framing))
+                        } else if stat.parityerrint().bit_is_set() {
+                            Poll::Ready(Err(Error::Parity))
+                        } else if stat.rxnoiseint().bit_is_set() {
+                            Poll::Ready(Err(Error::Noise))
+                        } else if fifointstat.rxerr().bit_is_set() {
+                            Poll::Ready(Err(Error::Overrun))
+                        } else {
+                            Poll::Pending
+                        }
+                    }),
+                )
+                .await;
+
+                match res {
+                    Either::First(()) | Either::Second(Ok(())) => (),
+                    Either::Second(Err(e)) => return Err(e),
+                }
+            }
+        }
+        Ok(bytes_read)
     }
 }
 
@@ -788,10 +1035,74 @@ impl<'a> Uart<'a, Async> {
         Ok(Self {
             info: T::info(),
             tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
-            rx: UartRx::new_inner::<T>(flexcomm, rx_dma),
+            rx: UartRx::new_inner::<T>(flexcomm, rx_dma, None),
         })
     }
 
+    /// Create a new DMA enabled UART with Rx buffering enabled
+    #[cfg(feature = "time")]
+    pub fn new_async_with_buffer<T: Instance>(
+        _inner: Peri<'a, T>,
+        tx: Peri<'a, impl TxPin<T>>,
+        rx: Peri<'a, impl RxPin<T>>,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'a,
+        tx_dma: Peri<'a, impl TxDma<T>>,
+        rx_dma: Peri<'a, impl RxDma<T>>,
+        config: Config,
+        buffer: &'static mut [u8],
+        polling_rate_us: u64,
+    ) -> Result<Self> {
+        tx.as_tx();
+        rx.as_rx();
+
+        let tx = tx.into();
+        let rx = rx.into();
+
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
+
+        let tx_dma = dma::Dma::reserve_channel(tx_dma);
+        let rx_dma: Channel<'_> = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
+
+        let flexcomm = Self::init::<T>(Some(tx.into()), Some(rx.into()), None, None, config)?;
+
+        if !buffer.len().is_multiple_of(2) {
+            return Err(Error::InvalidArgument);
+        }
+
+        let (buffer_a, buffer_b) = buffer.split_at_mut(buffer.len() / 2);
+        T::info().regs.fifocfg().modify(|_, w| w.dmarx().enabled());
+        // immediately configure and enable channel for ping-pong (double-buffered) reception
+        rx_dma.configure_channel_ping_pong(
+            dma::transfer::Direction::PeripheralToMemory,
+            T::info().regs.fiford().as_ptr() as *const u8 as *const u32,
+            buffer_a.as_mut_ptr() as *mut u32,
+            buffer_b.as_mut_ptr() as *mut u32,
+            buffer_a.len(),
+            dma::transfer::TransferOptions {
+                width: dma::transfer::Width::Bit8,
+                priority: dma::transfer::Priority::Priority0,
+            },
+        );
+        rx_dma.enable_channel();
+        rx_dma.trigger_channel();
+
+        Ok(Self {
+            info: T::info(),
+            tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
+            rx: UartRx::new_inner::<T>(
+                flexcomm,
+                Some(rx_dma),
+                Some(BufferConfig {
+                    buffer_a,
+                    buffer_b,
+                    read_off: 0,
+                    polling_rate: polling_rate_us,
+                    consumer_buf: dma::PingPongSelector::BufferA,
+                }),
+            ),
+        })
+    }
     /// Create a new DMA enabled UART with hardware flow control (RTS/CTS)
     pub fn new_with_rtscts<T: Instance>(
         _inner: Peri<'a, T>,
@@ -814,6 +1125,9 @@ impl<'a> Uart<'a, Async> {
         let rts = rts.into();
         let cts = cts.into();
 
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
+
         let tx_dma = dma::Dma::reserve_channel(tx_dma);
         let rx_dma = dma::Dma::reserve_channel(rx_dma);
 
@@ -828,12 +1142,90 @@ impl<'a> Uart<'a, Async> {
         Ok(Self {
             info: T::info(),
             tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
-            rx: UartRx::new_inner::<T>(flexcomm, rx_dma),
+            rx: UartRx::new_inner::<T>(flexcomm, rx_dma, None),
+        })
+    }
+
+    /// Create a new DMA enabled UART with hardware flow control (RTS/CTS) and Rx buffering enabled
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "time")]
+    pub fn new_async_with_rtscts_buffer<T: Instance>(
+        _inner: Peri<'a, T>,
+        tx: Peri<'a, impl TxPin<T>>,
+        rx: Peri<'a, impl RxPin<T>>,
+        rts: Peri<'a, impl RtsPin<T>>,
+        cts: Peri<'a, impl CtsPin<T>>,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'a,
+        tx_dma: Peri<'a, impl TxDma<T>>,
+        rx_dma: Peri<'a, impl RxDma<T>>,
+        config: Config,
+        buffer: &'static mut [u8],
+        polling_rate_us: u64,
+    ) -> Result<Self> {
+        tx.as_tx();
+        rx.as_rx();
+        rts.as_rts();
+        cts.as_cts();
+
+        let tx = tx.into();
+        let rx = rx.into();
+        let rts = rts.into();
+        let cts = cts.into();
+
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
+
+        let tx_dma = dma::Dma::reserve_channel(tx_dma);
+        let rx_dma = dma::Dma::reserve_channel(rx_dma).ok_or(Error::Fail)?;
+
+        let flexcomm = Self::init::<T>(
+            Some(tx.into()),
+            Some(rx.into()),
+            Some(rts.into()),
+            Some(cts.into()),
+            config,
+        )?;
+
+        if !buffer.len().is_multiple_of(2) {
+            return Err(Error::InvalidArgument);
+        }
+
+        let (buffer_a, buffer_b) = buffer.split_at_mut(buffer.len() / 2);
+        T::info().regs.fifocfg().modify(|_, w| w.dmarx().enabled());
+        // immediately configure and enable channel for ping-pong (double-buffered) reception
+        rx_dma.configure_channel_ping_pong(
+            dma::transfer::Direction::PeripheralToMemory,
+            T::info().regs.fiford().as_ptr() as *const u8 as *const u32,
+            buffer_a.as_mut_ptr() as *mut u32,
+            buffer_b.as_mut_ptr() as *mut u32,
+            buffer_a.len(),
+            dma::transfer::TransferOptions {
+                width: dma::transfer::Width::Bit8,
+                priority: dma::transfer::Priority::Priority0,
+            },
+        );
+        rx_dma.enable_channel();
+        rx_dma.trigger_channel();
+
+        Ok(Self {
+            info: T::info(),
+            tx: UartTx::new_inner::<T>(flexcomm.clone(), tx_dma),
+            rx: UartRx::new_inner::<T>(
+                flexcomm,
+                Some(rx_dma),
+                Some(BufferConfig {
+                    buffer_a,
+                    buffer_b,
+                    read_off: 0,
+                    polling_rate: polling_rate_us,
+                    consumer_buf: dma::PingPongSelector::BufferA,
+                }),
+            ),
         })
     }
 
     /// Read from UART RX.
-    pub fn read<'buf>(&mut self, buf: &'buf mut [u8]) -> impl Future<Output = Result<()>> + use<'_, 'a, 'buf> {
+    pub fn read<'buf>(&mut self, buf: &'buf mut [u8]) -> impl Future<Output = Result<usize>> + use<'_, 'a, 'buf> {
         self.rx.read(buf)
     }
 
@@ -1060,7 +1452,7 @@ impl embedded_io_async::ErrorType for Uart<'_, Async> {
 
 impl embedded_io_async::Read for UartRx<'_, Async> {
     async fn read(&mut self, buf: &mut [u8]) -> core::result::Result<usize, Self::Error> {
-        self.read(buf).await.map(|_| buf.len())
+        self.read(buf).await
     }
 }
 
@@ -1133,9 +1525,13 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                     .aberrclr()
                     .set_bit()
             });
+            T::waker().wake();
         }
-
-        T::waker().wake();
+        let fifostat = regs.fifointstat().read();
+        if fifostat.rxerr().bit_is_set() {
+            regs.fifointenclr().write(|w| w.rxerr().set_bit());
+            T::waker().wake();
+        }
     }
 }
 

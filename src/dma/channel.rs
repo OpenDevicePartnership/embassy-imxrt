@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 
 use embassy_sync::waitqueue::AtomicWaker;
 
-use super::DESCRIPTORS;
+use super::{BufferStatus, DESCRIPTORS, PING_DESCRIPTORS, PING_PONG_STATUS, PONG_DESCRIPTORS, PingPongSelector};
 use crate::dma::DmaInfo;
 use crate::dma::transfer::{Direction, Transfer, TransferOptions};
 
@@ -45,6 +45,11 @@ impl<'d> Channel<'d> {
     /// Return a reference to the channel's waker
     pub fn get_waker(&self) -> &'d AtomicWaker {
         self.info.waker
+    }
+
+    /// Return the channel number
+    pub fn get_channel_number(&self) -> usize {
+        self.info.ch_num
     }
 
     /// Check whether DMA is active
@@ -155,6 +160,100 @@ impl<'d> Channel<'d> {
         });
     }
 
+    /// Configure the DMA channel for ping-pong (double buffer) transfer
+    ///
+    /// # Note
+    ///
+    /// `mem_len` should be a multiple of the transfer width, otherwise transfer count will be rounded down
+    pub fn configure_channel_ping_pong(
+        &self,
+        dir: Direction,
+        srcbase: *const u32,
+        dstbase_a: *mut u32,
+        dstbase_b: *mut u32,
+        mem_len: usize,
+        options: TransferOptions,
+    ) {
+        debug_assert!(mem_len.is_multiple_of(options.width.byte_width()));
+
+        let xferwidth: usize = options.width.byte_width();
+        let xfercount = (mem_len / xferwidth) - 1;
+        let channel = self.info.ch_num;
+
+        // Configure for transfer type, no hardware triggering (we'll trigger via software), high priority
+        // SAFETY: unsafe due to .bits usage
+        self.info.regs.channel(channel).cfg().write(|w| unsafe {
+            if dir == Direction::MemoryToMemory {
+                w.periphreqen().clear_bit();
+            } else {
+                w.periphreqen().set_bit();
+            }
+            w.hwtrigen().clear_bit();
+            w.chpriority().bits(0)
+        });
+
+        // Enable the interrupt on this channel
+        self.info
+            .regs
+            .intenset0()
+            .write(|w| unsafe { w.inten().bits(1 << channel) });
+
+        // Mark configuration valid, clear trigger on complete, width is 1 byte, source & destination increments are width x 1 (1 byte)
+        // SAFETY: unsafe due to .bits usage
+        self.info.regs.channel(channel).xfercfg().write(|w| unsafe {
+            w.cfgvalid().set_bit();
+            // Descriptor is exhausted and we need to manually hit SWTRIG to trigger the next one.
+            w.clrtrig().set_bit();
+            // Set reload to enable continuous ping-pong operation
+            w.reload().set_bit();
+            w.setinta().set_bit();
+            w.width().bits(options.width.into());
+            if dir == Direction::PeripheralToMemory {
+                w.srcinc().bits(0);
+            } else {
+                w.srcinc().bits(1);
+            }
+            if dir == Direction::MemoryToPeripheral {
+                w.dstinc().bits(0);
+            } else {
+                w.dstinc().bits(1);
+            }
+            w.xfercount().bits(xfercount as u16)
+        });
+
+        #[allow(clippy::indexing_slicing)]
+        let descriptor_initial = unsafe { &mut DESCRIPTORS.list[channel] };
+        #[allow(clippy::indexing_slicing)]
+        let descriptor_a = unsafe { &mut PING_DESCRIPTORS.list[channel] };
+        #[allow(clippy::indexing_slicing)]
+        let descriptor_b = unsafe { &mut PONG_DESCRIPTORS.list[channel] };
+
+        // Configure the channel descriptor
+        // NOTE: the DMA controller expects the memory buffer end address but peripheral address is actual
+        let xfer_cfg = self.info.regs.channel(channel).xfercfg().read();
+        descriptor_initial.reserved = 0;
+        descriptor_a.reserved = xfer_cfg.bits();
+        descriptor_b.reserved = xfer_cfg.bits();
+
+        descriptor_initial.src_data_end_addr = srcbase as u32;
+        descriptor_initial.dst_data_end_addr = dstbase_a as u32 + (xfercount * xferwidth) as u32;
+        descriptor_initial.nxt_desc_link_addr = descriptor_b as *const _ as u32;
+
+        descriptor_b.src_data_end_addr = srcbase as u32;
+        descriptor_b.dst_data_end_addr = dstbase_b as u32 + (xfercount * xferwidth) as u32;
+        descriptor_b.nxt_desc_link_addr = descriptor_a as *const _ as u32;
+
+        descriptor_a.src_data_end_addr = srcbase as u32;
+        descriptor_a.dst_data_end_addr = dstbase_a as u32 + (xfercount * xferwidth) as u32;
+        descriptor_a.nxt_desc_link_addr = descriptor_b as *const _ as u32;
+
+        #[allow(clippy::indexing_slicing)]
+        let ping_pong_status = unsafe { &mut PING_PONG_STATUS[channel] };
+        ping_pong_status.current = PingPongSelector::BufferA;
+        ping_pong_status.buffer_a_status = BufferStatus::Committed;
+        ping_pong_status.buffer_b_status = BufferStatus::Committed;
+    }
+
     /// Enable the DMA channel (only after configuring)
     // SAFETY: unsafe due to .bits usage
     pub fn enable_channel(&self) {
@@ -181,5 +280,54 @@ impl<'d> Channel<'d> {
             .channel(channel)
             .xfercfg()
             .modify(|_, w| w.swtrig().set_bit());
+    }
+
+    /// Return the current ping-pong buffer being used by the DMA channel
+    pub fn current_buffer(&self) -> PingPongSelector {
+        let channel = self.info.ch_num;
+        #[allow(clippy::indexing_slicing)]
+        let ping_pong_status = unsafe { &PING_PONG_STATUS[channel] };
+        ping_pong_status.current
+    }
+
+    /// Mark the specified ping-pong buffer as committed (ready for DMA to use)
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the buffer being committed is not currently being accessed
+    /// by the DMA controller or other parts of the system.
+    pub unsafe fn commit_buffer(&self, selector: PingPongSelector) {
+        let channel = self.info.ch_num;
+        #[allow(clippy::indexing_slicing)]
+        let ping_pong_status = unsafe { &mut PING_PONG_STATUS[channel] };
+        match selector {
+            PingPongSelector::BufferA => {
+                ping_pong_status.buffer_a_status = BufferStatus::Committed;
+            }
+            PingPongSelector::BufferB => {
+                ping_pong_status.buffer_b_status = BufferStatus::Committed;
+            }
+        }
+    }
+
+    /// Get the status of the specified ping-pong buffer
+    pub fn buffer_status(&self, selector: PingPongSelector) -> BufferStatus {
+        let channel = self.info.ch_num;
+        #[allow(clippy::indexing_slicing)]
+        let ping_pong_status = unsafe { &PING_PONG_STATUS[channel] };
+        match selector {
+            PingPongSelector::BufferA => ping_pong_status.buffer_a_status,
+            PingPongSelector::BufferB => ping_pong_status.buffer_b_status,
+        }
+    }
+
+    /// Check and clear ping-pong buffer overrun error
+    pub fn check_and_clear_overrun_error(&self) -> bool {
+        let channel = self.info.ch_num;
+        #[allow(clippy::indexing_slicing)]
+        let ping_pong_status = unsafe { &mut PING_PONG_STATUS[channel] };
+        let had_error = ping_pong_status.overrun_error;
+        ping_pong_status.overrun_error = false; // Clear the error flag
+        had_error
     }
 }
