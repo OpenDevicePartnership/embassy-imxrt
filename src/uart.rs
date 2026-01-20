@@ -961,9 +961,7 @@ impl<'a> UartRx<'a, Async> {
                         Poll::Ready(Err(Error::Noise))
                     } else if fifointstat.rxerr().bit_is_set() {
                         Poll::Ready(Err(Error::Overrun))
-                    } else if stat.rxidle().bit_is_clear() {
-                        Poll::Ready(Ok(()))
-                    } else if stat.start().bit_is_set() {
+                    } else if stat.rxidle().bit_is_clear() || stat.start().bit_is_set() {
                         Poll::Ready(Ok(()))
                     } else {
                         Poll::Pending
