@@ -912,52 +912,61 @@ impl<'a> UartRx<'a, Async> {
                     };
                 }
             } else {
-                // No data available, wait for new data to arrive or error condition
-                let res = select(
-                    embassy_time::Timer::after_micros(buffer_config.polling_rate),
-                    // detect bus errors
-                    poll_fn(|cx| {
-                        self.info.rx_waker.register(cx.waker());
+                poll_fn(|cx| {
+                    self.info.rx_waker.register(cx.waker());
 
-                        self.info
-                            .regs
-                            .intenset()
-                            .write(|w| w.framerren().set_bit().parityerren().set_bit().rxnoiseen().set_bit());
-                        self.info.regs.fifointenset().write(|w| w.rxerr().set_bit());
+                    self.info.regs.intenset().write(|w| {
+                        w.framerren()
+                            .set_bit()
+                            .parityerren()
+                            .set_bit()
+                            .rxnoiseen()
+                            .set_bit()
+                            .starten()
+                            .set_bit()
+                    });
 
-                        let stat = self.info.regs.stat().read();
-                        let fifointstat = self.info.regs.fifointstat().read();
+                    self.info.regs.fifointenset().write(|w| w.rxerr().set_bit());
 
-                        self.info.regs.stat().write(|w| {
-                            w.framerrint()
-                                .clear_bit_by_one()
-                                .parityerrint()
-                                .clear_bit_by_one()
-                                .rxnoiseint()
-                                .clear_bit_by_one()
-                        });
+                    let stat = self.info.regs.stat().read();
+                    let fifointstat = self.info.regs.fifointstat().read();
 
-                        self.info.regs.fifostat().write(|w| w.rxerr().set_bit());
+                    self.info.regs.stat().write(|w| {
+                        w.framerrint()
+                            .clear_bit_by_one()
+                            .parityerrint()
+                            .clear_bit_by_one()
+                            .rxnoiseint()
+                            .clear_bit_by_one()
+                            .start()
+                            .clear_bit_by_one()
+                    });
 
-                        if stat.framerrint().bit_is_set() {
-                            Poll::Ready(Err(Error::Framing))
-                        } else if stat.parityerrint().bit_is_set() {
-                            Poll::Ready(Err(Error::Parity))
-                        } else if stat.rxnoiseint().bit_is_set() {
-                            Poll::Ready(Err(Error::Noise))
-                        } else if fifointstat.rxerr().bit_is_set() {
-                            Poll::Ready(Err(Error::Overrun))
-                        } else {
-                            Poll::Pending
-                        }
-                    }),
-                )
-                .await;
+                    self.info
+                        .regs
+                        .fifotrig()
+                        .modify(|_, w| unsafe { w.rxlvlena().set_bit().rxlvl().bits(0) });
+                    self.info.regs.fifointenset().write(|w| w.rxlvl().set_bit());
 
-                match res {
-                    Either::First(()) | Either::Second(Ok(())) => (),
-                    Either::Second(Err(e)) => return Err(e),
-                }
+                    if stat.framerrint().bit_is_set() {
+                        Poll::Ready(Err(Error::Framing))
+                    } else if stat.parityerrint().bit_is_set() {
+                        Poll::Ready(Err(Error::Parity))
+                    } else if stat.rxnoiseint().bit_is_set() {
+                        Poll::Ready(Err(Error::Noise))
+                    } else if fifointstat.rxerr().bit_is_set() {
+                        Poll::Ready(Err(Error::Overrun))
+                    } else if stat.rxidle().bit_is_clear() {
+                        Poll::Ready(Ok(()))
+                    } else if stat.start().bit_is_set() {
+                        Poll::Ready(Ok(()))
+                    } else {
+                        Poll::Pending
+                    }
+                })
+                .await?;
+
+                embassy_time::Timer::after_micros(buffer_config.polling_rate).await;
             }
         }
         Ok(bytes_read)
@@ -1477,14 +1486,29 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             T::rx_waker().wake();
         }
 
+        if stat.start().bit_is_set() {
+            regs.intenclr().write(|w| w.startclr().set_bit());
+            T::rx_waker().wake();
+        }
+
         let fifointstat = regs.fifointstat().read();
         if fifointstat.txerr().bit_is_set() {
             regs.fifointenclr().write(|w| w.txerr().set_bit());
             T::tx_waker().wake();
         }
 
+        if fifointstat.txlvl().bit_is_set() {
+            regs.fifointenclr().write(|w| w.txlvl().set_bit());
+            T::tx_waker().wake();
+        }
+
         if fifointstat.rxerr().bit_is_set() {
             regs.fifointenclr().write(|w| w.rxerr().set_bit());
+            T::rx_waker().wake();
+        }
+
+        if fifointstat.rxlvl().bit_is_set() {
+            regs.fifointenclr().write(|w| w.rxlvl().set_bit());
             T::rx_waker().wake();
         }
     }
