@@ -860,15 +860,14 @@ impl<'a> UartRx<'a, Async> {
                     // But if it is 0x3FF and buffer is not granted, this can mean we just finished transfer after
                     //   our grant check - so we skip this case to avoid overflowing written calculation below
                     if xfercount == 0x3FF {
-                        continue;
-                    }
+                        available = 0;
+                    } else {
+                        let remaining = xfercount as usize + 1;
 
-                    // Channel not active (transfer finished) and value is 0x3FF - nothing to transfer
-                    let remaining = xfercount as usize + 1;
-
-                    let written = half_size - remaining;
-                    if written > buffer_config.read_off {
-                        available = written - buffer_config.read_off;
+                        let written = half_size - remaining;
+                        if written > buffer_config.read_off {
+                            available = written - buffer_config.read_off;
+                        }
                     }
                 }
                 // If DMA is writing to the other buffer, no new data is available
