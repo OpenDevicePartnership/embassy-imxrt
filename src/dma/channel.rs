@@ -202,8 +202,8 @@ impl<'d> Channel<'d> {
         // SAFETY: unsafe due to .bits usage
         self.info.regs.channel(channel).xfercfg().write(|w| unsafe {
             w.cfgvalid().set_bit();
-            // Descriptor is exhausted and we need to manually hit SWTRIG to trigger the next one.
-            w.clrtrig().set_bit();
+            // Auto-retrigger on completion for ping-pong operation
+            w.clrtrig().clear_bit();
             // Set reload to enable continuous ping-pong operation
             w.reload().set_bit();
             w.setinta().set_bit();
