@@ -170,10 +170,6 @@ fn dma0_irq_handler<const N: usize>(wakers: &[AtomicWaker; N]) {
                         if ping_pong_status.buffer_b_status == BufferStatus::Granted {
                             ping_pong_status.overrun_error = true;
                             error!("DMA Ping-Pong buffer overrun on channel {}!", channel);
-                        } else {
-                            reg.channel(channel as usize)
-                                .xfercfg()
-                                .modify(|_, w| w.swtrig().set_bit());
                         }
                     } else {
                         // Just finished Buffer B, switching to Buffer A
@@ -183,10 +179,6 @@ fn dma0_irq_handler<const N: usize>(wakers: &[AtomicWaker; N]) {
                         if ping_pong_status.buffer_a_status == BufferStatus::Granted {
                             ping_pong_status.overrun_error = true;
                             error!("DMA Ping-Pong buffer overrun on channel {}!", channel);
-                        } else {
-                            reg.channel(channel as usize)
-                                .xfercfg()
-                                .modify(|_, w| w.swtrig().set_bit());
                         }
                     }
                 }

@@ -814,10 +814,6 @@ impl<'a> UartRx<'a, Async> {
     async fn read_buffered(&mut self, buf: &mut [u8]) -> Result<usize> {
         let rx_dma = self._rx_dma.as_ref().ok_or(Error::Fail)?;
         let buffer_config = self._buffer_config.as_mut().ok_or(Error::Fail)?;
-        // Check for ping-pong buffer overrun error from DMA
-        if rx_dma.check_and_clear_overrun_error() {
-            return Err(Error::Overrun);
-        }
 
         let half_size = buffer_config.buffer_a.len();
 
