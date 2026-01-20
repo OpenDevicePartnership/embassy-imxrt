@@ -918,7 +918,7 @@ impl<'a> UartRx<'a, Async> {
                     embassy_time::Timer::after_micros(buffer_config.polling_rate),
                     // detect bus errors
                     poll_fn(|cx| {
-                        self.info.waker.register(cx.waker());
+                        self.info.rx_waker.register(cx.waker());
 
                         self.info
                             .regs
