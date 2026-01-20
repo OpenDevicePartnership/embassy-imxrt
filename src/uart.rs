@@ -912,7 +912,10 @@ impl<'a> UartRx<'a, Async> {
                     };
                 }
 
-                embassy_time::Timer::after_micros(buffer_config.polling_rate).await;
+                // No need to delay if we already has all the data we requested
+                if bytes_read < buf.len() {
+                    embassy_time::Timer::after_micros(buffer_config.polling_rate).await;
+                }
             } else {
                 poll_fn(|cx| {
                     self.info.rx_waker.register(cx.waker());
