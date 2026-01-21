@@ -3,6 +3,7 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
+use embassy_imxrt::pac::usbhsd::info;
 use embassy_imxrt::uart::{Async, Uart, UartRx};
 use embassy_imxrt::{bind_interrupts, pac, peripherals, uart};
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
@@ -35,9 +36,12 @@ async fn reader(mut rx: UartRx<'static, Async>) {
             panic!("Read error");
         }
 
-        for (i, b) in buf[..read_len].iter().enumerate() {
+        let data_len = res.unwrap();
+        info!("Data length: {}", data_len);
+
+        for (i, b) in buf[..data_len].iter().enumerate() {
             if *b != (byte_counter % 256) as u8 {
-                info!("buf: {:?}", &buf[..read_len]);
+                info!("buf: {:?}", &buf[..data_len]);
 
                 info!(
                     "Data mismatch at index {}: expected {}, got {}",
@@ -106,5 +110,6 @@ async fn main(spawner: Spawner) {
 
     loop {
         tx.write(&data).await.unwrap();
+        embassy_time::Timer::after_micros(10 * POLLING_RATE_US).await;
     }
 }

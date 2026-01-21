@@ -913,7 +913,7 @@ impl<'a> UartRx<'a, Async> {
                     embassy_time::Timer::after_micros(buffer_config.polling_rate).await;
                 }
             } else {
-                poll_fn(|cx| {
+                let rx_active = poll_fn(|cx| {
                     self.info.rx_waker.register(cx.waker());
 
                     self.info.regs.intenset().write(|w| {
@@ -962,8 +962,22 @@ impl<'a> UartRx<'a, Async> {
                     } else {
                         Poll::Pending
                     }
-                })
-                .await?;
+                });
+
+                if bytes_read == 0 {
+                    rx_active.await?;
+                } else {
+                    let res = select(rx_active, embassy_time::Timer::after_micros(buffer_config.polling_rate)).await;
+
+                    match res {
+                        Either::First(r) => {
+                            r?;
+                        }
+                        Either::Second(_) => {
+                            return Ok(bytes_read);
+                        }
+                    }
+                }
             }
         }
         Ok(bytes_read)
