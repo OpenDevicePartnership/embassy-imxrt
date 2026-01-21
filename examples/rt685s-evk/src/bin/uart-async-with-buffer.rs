@@ -7,7 +7,7 @@ use embassy_imxrt::uart::{Async, Uart, UartRx};
 use embassy_imxrt::{bind_interrupts, pac, peripherals, uart};
 use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
-const BUFLEN: usize = 1024;
+const BUFLEN: usize = 512;
 const POLLING_RATE_US: u64 = 1000;
 
 bind_interrupts!(struct Irqs {
@@ -35,9 +35,12 @@ async fn reader(mut rx: UartRx<'static, Async>) {
             panic!("Read error");
         }
 
-        for (i, b) in buf[..read_len].iter().enumerate() {
+        let data_len = res.unwrap();
+        info!("Data length: {}", data_len);
+
+        for (i, b) in buf[..data_len].iter().enumerate() {
             if *b != (byte_counter % 256) as u8 {
-                info!("buf: {:?}", &buf[..read_len]);
+                info!("buf: {:?}", &buf[..data_len]);
 
                 info!(
                     "Data mismatch at index {}: expected {}, got {}",
@@ -104,7 +107,10 @@ async fn main(spawner: Spawner) {
 
     info!("data = {:?}", data);
 
+    let mut index = 0;
     loop {
         tx.write(&data).await.unwrap();
+        embassy_time::Timer::after_micros((index % 20 + 10) * POLLING_RATE_US).await;
+        index = index.wrapping_add(1);
     }
 }
