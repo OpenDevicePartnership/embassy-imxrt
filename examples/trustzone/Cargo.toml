@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = [
+    "rt685s-evk-nonsecure",
+    "rt685s-evk-secure",
+]
+
+[profile.release]
+lto = true # better optimizations
+debug = 2  # enough information for defmt/rtt
+
+[patch.crates-io]
+# Required to get access to unreleased trustzone registers
+cortex-m = { git = "https://github.com/rust-embedded/cortex-m.git", rev="a3ff54b" }
+# Required to be able to pass a linker section to the init functions
+rtt-target = { git = "https://github.com/probe-rs/rtt-target.git", rev = "117d951" }
