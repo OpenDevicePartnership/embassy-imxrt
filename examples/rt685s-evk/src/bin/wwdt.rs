@@ -14,7 +14,7 @@ use panic_probe as _;
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let p = embassy_imxrt::init(Default::default());
-    let mut wwdt = WindowedWatchdog::new(p.WDT0, 1_000_000);
+    let mut wwdt = WindowedWatchdog::new(p.WDT0, 2_000_000);
     wwdt.clear_timeout_flag();
     wwdt.enable_reset().lock().set_warning_threshold(4_096);
 
