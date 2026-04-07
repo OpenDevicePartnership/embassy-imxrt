@@ -2,10 +2,12 @@
 #![no_main]
 
 use defmt::{info, trace};
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::hashcrypt::{self, Hashcrypt, hasher};
 use embassy_imxrt::{bind_interrupts, peripherals};
-use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
+use embassy_imxrt_examples as _;
+use panic_probe as _;
 
 bind_interrupts!(struct Irqs {
     HASHCRYPT => hashcrypt::InterruptHandler<peripherals::HASHCRYPT>;

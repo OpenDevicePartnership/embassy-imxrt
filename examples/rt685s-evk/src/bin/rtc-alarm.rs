@@ -4,11 +4,13 @@
 use core::task::Poll;
 
 use defmt::info;
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::rtc::{Rtc, RtcDatetimeClock};
+use embassy_imxrt_examples as _;
 use embassy_time::Timer;
 use embedded_mcu_hal::time::{Datetime, DatetimeClock, DatetimeClockError, Month, UncheckedDatetime};
-use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
+use panic_probe as _;
 
 /// RTC alarm struct to await the time alarm wakeup location
 /// This should be implemented by the user to handle RTC peripheral synchronization

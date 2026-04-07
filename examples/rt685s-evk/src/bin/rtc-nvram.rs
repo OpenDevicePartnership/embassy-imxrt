@@ -4,13 +4,15 @@
 use core::cell::RefCell;
 
 use defmt::info;
+use defmt_rtt as _;
 use embassy_imxrt::rtc::RtcNvramStorage;
+use embassy_imxrt_examples as _;
 use embassy_sync::blocking_mutex::{CriticalSectionMutex, Mutex};
 use embassy_sync::once_lock::OnceLock;
 use embassy_time::{Duration, Timer};
 use embedded_mcu_hal::{Nvram, NvramStorage};
+use panic_probe as _;
 use static_cell::StaticCell;
-use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 // Tasks demonstrating a way to share an NVRAM storage cell between multiple tasks
 #[embassy_executor::task]

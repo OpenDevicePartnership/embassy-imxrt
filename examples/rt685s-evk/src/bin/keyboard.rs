@@ -2,17 +2,19 @@
 #![no_main]
 
 use defmt::info;
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::clocks::delay_loop_clocks;
 use embassy_imxrt::gpio;
 use embassy_imxrt::gpio::{Input, Level, Output};
 use embassy_imxrt::iopctl::{DriveMode, DriveStrength, Inverter, Pull, SlewRate};
+use embassy_imxrt_examples as _;
 use embassy_time::{Duration, Timer};
 use keyberon::debounce::Debouncer;
 use keyberon::key_code::KbHidReport;
 use keyberon::layout::Layout;
 use keyberon::matrix::Matrix;
-use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
+use panic_probe as _;
 
 const COLS: usize = 4;
 const ROWS: usize = 4;
