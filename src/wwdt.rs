@@ -108,7 +108,7 @@ const fn counter_to_time(counter: u32) -> u32 {
 
 /// Initializes low-power oscillator.
 fn init_lposc() {
-    // Enable low power oscillator
+    // Enable low power oscillator. This is safe to call multiple times - if it's already enabled, this is a no-op.
     let sysctl0 = unsafe { &*crate::pac::Sysctl0::ptr() };
     sysctl0.pdruncfg0_clr().write(|w| w.lposc_pd().set_bit());
 
@@ -212,6 +212,14 @@ impl<'d> WindowedWatchdog<'d> {
                 self.info.regs.feed().write(|w| unsafe { w.feed().bits(*byte) });
             });
         });
+    }
+}
+
+impl embedded_mcu_hal::watchdog::Watchdog for WindowedWatchdog<'_> {
+    type Error = core::convert::Infallible;
+    fn feed(&mut self) -> Result<(), Self::Error> {
+        Self::feed(self);
+        Ok(())
     }
 }
 

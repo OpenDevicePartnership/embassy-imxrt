@@ -4,6 +4,7 @@
 use core::slice;
 
 use defmt::{error, info};
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::bind_interrupts;
 use embassy_imxrt::espi::{
@@ -11,7 +12,8 @@ use embassy_imxrt::espi::{
     PortConfig,
 };
 use embassy_imxrt::peripherals::ESPI;
-use {defmt_rtt as _, panic_probe as _, rt633_examples as _};
+use panic_probe as _;
+use rt633_examples as _;
 
 bind_interrupts!(struct Irqs {
     ESPI => InterruptHandler<ESPI>;

@@ -3,16 +3,18 @@
 
 use cortex_m::peripheral::NVIC;
 use defmt::{info, warn};
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::pac::{Interrupt, interrupt};
 use embassy_imxrt::wwdt::WindowedWatchdog;
+use embassy_imxrt_examples as _;
 use embassy_time::Timer;
-use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
+use panic_probe as _;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let p = embassy_imxrt::init(Default::default());
-    let mut wwdt = WindowedWatchdog::new(p.WDT0, 1_000_000);
+    let mut wwdt = WindowedWatchdog::new(p.WDT0, 2_000_000);
     wwdt.clear_timeout_flag();
     wwdt.enable_reset().lock().set_warning_threshold(4_096);
 

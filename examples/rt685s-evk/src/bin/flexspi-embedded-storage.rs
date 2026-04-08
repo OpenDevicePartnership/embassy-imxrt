@@ -1,11 +1,12 @@
 #![no_std]
 #![no_main]
 
+use defmt_rtt as _;
 use embassy_imxrt::flexspi::nor_flash::FlexSpiNorFlash;
 use embassy_imxrt::gpio;
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use futures::FutureExt as _;
-use {defmt_rtt as _, panic_probe as _};
+use panic_probe as _;
 
 #[embassy_executor::main]
 async fn main(_spawner: embassy_executor::Spawner) {

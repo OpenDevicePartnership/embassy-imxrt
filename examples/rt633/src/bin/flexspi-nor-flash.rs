@@ -2,11 +2,13 @@
 #![no_main]
 
 use defmt::{error, info};
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::flexspi::nor_flash::FlexSpiNorFlash;
 use embassy_imxrt::gpio;
 use embassy_time::Timer;
-use {defmt_rtt as _, panic_probe as _, rt633_examples as _};
+use panic_probe as _;
+use rt633_examples as _;
 
 /* This example demonstrates usage of the FlexSPI NOR flash driver to read, erase, and program.
   This is for the lower level flash operations that is not safe. Application should use the

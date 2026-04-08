@@ -2,10 +2,12 @@
 #![no_main]
 
 use defmt::info;
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::uart::{Async, Uart, UartRx};
 use embassy_imxrt::{bind_interrupts, pac, peripherals, uart};
-use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
+use embassy_imxrt_examples as _;
+use panic_probe as _;
 
 const BUFLEN: usize = 512;
 const POLLING_RATE_US: u64 = 1000;

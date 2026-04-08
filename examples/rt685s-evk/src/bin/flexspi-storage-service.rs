@@ -2,6 +2,7 @@
 #![no_main]
 
 use defmt::info;
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::flexspi::nor_storage_bus::{
     AhbConfig, FlexSpiFlashPort, FlexSpiFlashPortDeviceInstance, FlexspiAhbBufferConfig, FlexspiConfig,
@@ -17,11 +18,11 @@ use embassy_time::Timer;
 use embedded_storage::nor_flash::{
     ErrorType, NorFlash as BlockingNorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash as BlockingReadNorFlash,
 };
+use panic_probe as _;
 use storage_bus::nor::{
     BlockingNorStorageBusDriver, NorStorageBusWidth, NorStorageCmd, NorStorageCmdMode, NorStorageCmdType,
     NorStorageDummyCycles,
 };
-use {defmt_rtt as _, panic_probe as _};
 
 static ADDR: u32 = 0x3FD0000;
 
