@@ -45,13 +45,16 @@ async fn main(spawner: Spawner) {
 
     info!("Keyboard example using Keyberon");
 
-    spawner.spawn(led_task(gpio::Output::new(
+    spawner.spawn(
+        led_task(gpio::Output::new(
             p.PIO0_26,
             gpio::Level::Low,
             gpio::DriveMode::PushPull,
             gpio::DriveStrength::Normal,
             gpio::SlewRate::Standard,
-        )).unwrap());
+        ))
+        .unwrap(),
+    );
 
     let rows = [
         Input::new(p.PIO1_6, Pull::Up, Inverter::Disabled),
