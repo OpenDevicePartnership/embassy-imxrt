@@ -7,15 +7,63 @@ criteria = "safe-to-deploy"
 version = "1.0.0"
 notes = "defmt-rtt is used for all our logging purposes. Version 1.0.0 merely stabilizes what was already available previously."
 
+[[audits.embassy-embedded-hal]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.5.0 -> 0.6.0"
+notes = "Edition 2024. Dependency updates (embassy-sync 0.8.0, embassy-hal-internal 0.4.0). Added defmt feature. Shared I2c impl Clone. Code improvements using .any(). Trusted publisher (lulf)."
+
+[[audits.embassy-executor-macros]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-run"
+delta = "0.7.0 -> 0.8.0"
+notes = "Edition 2024. Added metadata-name feature for task naming. Changed task spawn API to return Result<SpawnToken, SpawnError>. More precise unsafe scope around mem::transmute. Trusted publisher (lulf)."
+
 [[audits.embassy-executor-timer-queue]]
 who = "Felipe Balbi <febalbi@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "0.1.0"
 
+[[audits.embassy-hal-internal]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.0 -> 0.4.0"
+notes = "Edition update to 2024. Added defmt/log features and RingBuffer helper methods (available, is_half_full). Safe additions only. Trusted publisher (lulf)."
+
+[[audits.embassy-sync]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.7.2 -> 0.8.0"
+notes = "Edition 2024. Bug fix: wakers in Signal::reset. Remove Sized bound from MutexGuard::map. Dependency updates (embedded-io-async 0.7.0, heapless 0.9). Implement futures_sink::Sink. Trusted publisher (lulf)."
+
+[[audits.embassy-time]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.5.0 -> 0.5.1"
+notes = "Edition 2024. Added nanosecond conversion methods, 375kHz tick rate. Dependency updates (embassy-executor 0.10.0, embassy-time-driver 0.2.2). Added log feature. Trusted publisher (lulf)."
+
+[[audits.embassy-time-driver]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.1 -> 0.2.2"
+notes = "Simple addition of 375kHz tick rate support. Edition update to 2024 with modern unsafe syntax. No behavior changes, well-documented. Trusted publisher (lulf)."
+
 [[audits.embassy-time-queue-utils]]
 who = "Felipe Balbi <febalbi@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "0.3.0"
+
+[[audits.embedded-io]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.6.1 -> 0.7.1"
+notes = "Add core::error::Error trait bound (MSRV 1.81). defmt 0.3->1.0. Implement ReadReady/WriteReady for slices and VecDeque. Add seek_relative(). Fix method forwardings. Trusted publisher (Dirbaio from Embedded WG)."
+
+[[audits.embedded-io-async]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.6.1 -> 0.7.0"
+notes = "Made Write::flush() required. Update to embedded-io 0.7 with core::Error. defmt 0.3->1.0. Fixed method forwardings. Removed nightly requirement (MSRV 1.81). Trusted publisher (Dirbaio from Embedded WG)."
 
 [[audits.mimxrt600-fcb]]
 who = "Jerry Xie <jerryxie@microsoft.com>"
@@ -48,6 +96,18 @@ who = "Billy Price <williamp@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "0.7.5"
 
+[[audits.once_cell]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-run"
+delta = "1.21.3 -> 1.21.4"
+notes = "Soundness fix for OnceCell::wait with parking_lot feature (re-check after spurious wakeup). Added tests for OnceBool::get_or_try_init, OnceRef, wait_panic. Doc test conditional compilation fixes. Trusted publisher (matklad)."
+
+[[audits.pin-project-lite]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-run"
+delta = "0.2.16 -> 0.2.17"
+notes = "No Rust source changes. Only Cargo.toml lint configuration and changelog updates for release immutability. Trusted publisher (taiki-e)."
+
 [[audits.rand_core]]
 who = "Felipe Balbi <febalbi@microsoft.com>"
 criteria = "safe-to-deploy"
@@ -62,3 +122,57 @@ delta = "1.0.20 -> 1.0.22"
 who = "jerrysxie <jerryxie@microsoft.com>"
 criteria = "safe-to-run"
 delta = "2.1.0 -> 2.1.1"
+
+[[audits.tracing-attributes]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-run"
+delta = "0.1.30 -> 0.1.31"
+notes = "Added support for constant expressions as instrument field names. New FieldName enum. Removed dead code AsyncTraitBlockReplacer. Proc macro only. Trusted publisher (hds from Tokio team)."
+
+[[audits.tracing-core]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-run"
+delta = "0.1.34 -> 0.1.36"
+notes = "Fix record_all panic. Switch to unconditional no_std (removed stdlib.rs shim). Improved code generation at trace points. Extracted sync Mutex wrapper. Trusted publisher (hds from Tokio team)."
+
+[[trusted.aho-corasick]]
+criteria = "safe-to-run"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-03-28"
+end = "2027-04-07"
+
+[[trusted.libc]]
+criteria = "safe-to-run"
+user-id = 55123 # rust-lang-owner
+start = "2019-01-01"
+end = "2027-04-07"
+
+[[trusted.loom]]
+criteria = "safe-to-run"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2020-01-01"
+end = "2027-04-07"
+
+[[trusted.memchr]]
+criteria = "safe-to-run"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-07-07"
+end = "2027-04-07"
+
+[[trusted.regex-syntax]]
+criteria = "safe-to-run"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-03-30"
+end = "2027-04-07"
+
+[[trusted.thread_local]]
+criteria = "safe-to-run"
+user-id = 2915 # Amanieu d'Antras (Amanieu)
+start = "2019-01-01"
+end = "2027-04-07"
+
+[[trusted.windows-result]]
+criteria = "safe-to-run"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2024-01-01"
+end = "2027-04-07"
