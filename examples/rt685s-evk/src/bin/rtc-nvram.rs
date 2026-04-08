@@ -103,19 +103,20 @@ async fn main(spawner: embassy_executor::Spawner) {
     ] = rtc_nvram.storage();
 
     // Unshared ticker example - you can just give the mutable borrow of the storage cell to the task.
-    spawner.must_spawn(unshared_ticker(unshared_ticker_register));
+    spawner.spawn(unshared_ticker(unshared_ticker_register).unwrap());
 
     // Shared ticker example - you need a mutex to protect access to the storage cell.
     static TICKER_MUTEX: StaticCell<CriticalSectionMutex<RefCell<&mut RtcNvramStorage>>> = StaticCell::new();
     let ticker_mutex = TICKER_MUTEX.init(Mutex::new(RefCell::new(shared_ticker_register)));
 
-    spawner.must_spawn(reg_setter(ticker_mutex));
-    spawner.must_spawn(reg_ticker(ticker_mutex));
+    spawner.spawn(reg_setter(ticker_mutex).unwrap());
+    spawner.spawn(reg_ticker(ticker_mutex).unwrap());
 
     // Shared with static function (e.g. interrupt handler) example - you need to put a mutex over a static reference in the global scope so the static function can access it
-    spawner.must_spawn(reg_static_ticker(
-        STATIC_SHARED_TICKER.get_or_init(|| Mutex::new(RefCell::new(static_ticker_register))),
-    ));
+    spawner.spawn(
+        reg_static_ticker(STATIC_SHARED_TICKER.get_or_init(|| Mutex::new(RefCell::new(static_ticker_register))))
+            .unwrap(),
+    );
 
     loop {
         example_static_function();

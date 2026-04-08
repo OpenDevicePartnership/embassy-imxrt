@@ -4,7 +4,7 @@
 extern crate embassy_imxrt_perf_examples;
 
 use core::sync::atomic::{AtomicBool, Ordering};
-use embassy_executor::{Spawner, SpawnerTraceExt};
+use embassy_executor::Spawner;
 use embassy_imxrt::gpio;
 use embassy_time::Timer;
 use panic_probe as _;
@@ -93,8 +93,19 @@ async fn main(spawner: Spawner) {
 
     info!("start multiple tasks example");
 
-    let _ = spawner.spawn_named("data_processing_task\0", data_processing_task());
-    let _ = spawner.spawn_named("communication_task\0", communication_task());
-    let _ = spawner.spawn_named("user_interface_task\0", user_interface_task());
-    let _ = spawner.spawn_named("led_toggle_task\0", led_toggle_task(led));
+    let token = data_processing_task().unwrap();
+    token.metadata().set_name("data_processing_task\0");
+    spawner.spawn(token);
+
+    let token = communication_task().unwrap();
+    token.metadata().set_name("communication_task\0");
+    spawner.spawn(token);
+
+    let token = user_interface_task().unwrap();
+    token.metadata().set_name("user_interface_task\0");
+    spawner.spawn(token);
+
+    let token = led_toggle_task(led).unwrap();
+    token.metadata().set_name("led_toggle_task\0");
+    spawner.spawn(token);
 }

@@ -30,7 +30,7 @@ async fn monitor_task() {
 async fn main(spawner: Spawner) {
     let mut p = embassy_imxrt::init(Default::default());
 
-    spawner.spawn(monitor_task()).unwrap();
+    spawner.spawn(monitor_task().unwrap());
 
     let sfro = ClockConfig::crystal().sfro;
     let mut countdown_timer =

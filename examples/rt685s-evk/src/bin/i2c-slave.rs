@@ -62,5 +62,5 @@ async fn main(spawner: Spawner) {
     info!("i2cs example - I2c::new");
     let i2c = I2cSlave::new_blocking(p.FLEXCOMM2, p.PIO0_18, p.PIO0_17, SLAVE_ADDR.unwrap()).unwrap();
 
-    spawner.must_spawn(slave_service(i2c));
+    spawner.spawn(slave_service(i2c).unwrap());
 }

@@ -98,7 +98,7 @@ async fn main(spawner: Spawner) {
     )
     .unwrap();
     let (mut tx, rx) = uart.split();
-    spawner.must_spawn(reader(rx));
+    spawner.spawn(reader(rx).unwrap());
 
     info!("Writing...");
 

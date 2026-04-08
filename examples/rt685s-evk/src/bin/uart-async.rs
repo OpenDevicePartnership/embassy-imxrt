@@ -65,7 +65,7 @@ async fn main(spawner: Spawner) {
         Default::default(),
     )
     .unwrap();
-    spawner.must_spawn(usart4_task(usart4));
+    spawner.spawn(usart4_task(usart4).unwrap());
 
     let usart2 = Uart::new_async(
         p.FLEXCOMM2,
@@ -77,5 +77,5 @@ async fn main(spawner: Spawner) {
         Default::default(),
     )
     .unwrap();
-    spawner.must_spawn(usart2_task(usart2));
+    spawner.spawn(usart2_task(usart2).unwrap());
 }

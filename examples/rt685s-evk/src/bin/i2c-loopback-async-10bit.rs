@@ -142,6 +142,6 @@ async fn main(spawner: Spawner) {
 
     let master = I2cMaster::new_async(p.FLEXCOMM4, p.PIO0_29, p.PIO0_30, Irqs, Default::default(), p.DMA0_CH9).unwrap();
 
-    spawner.must_spawn(master_service(master));
-    spawner.must_spawn(slave_service(slave));
+    spawner.spawn(master_service(master).unwrap());
+    spawner.spawn(slave_service(slave).unwrap());
 }

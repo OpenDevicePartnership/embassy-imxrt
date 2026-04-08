@@ -73,7 +73,7 @@ async fn main(spawner: Spawner) {
         POLLING_RATE_US,
     )
     .unwrap();
-    spawner.must_spawn(usart4_task(usart4));
+    spawner.spawn(usart4_task(usart4).unwrap());
 
     static mut RX_BUF2: [u8; BUFLEN] = [0; BUFLEN];
     let usart2 = Uart::new_async_with_rtscts_buffer(
@@ -90,5 +90,5 @@ async fn main(spawner: Spawner) {
         POLLING_RATE_US,
     )
     .unwrap();
-    spawner.must_spawn(usart2_task(usart2));
+    spawner.spawn(usart2_task(usart2).unwrap());
 }

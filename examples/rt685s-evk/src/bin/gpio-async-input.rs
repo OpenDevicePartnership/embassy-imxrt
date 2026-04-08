@@ -50,7 +50,7 @@ async fn main(spawner: Spawner) {
 
     let mut ticker = Ticker::every(Duration::from_millis(100));
 
-    spawner.spawn(monitor_task(monitor)).unwrap();
+    spawner.spawn(monitor_task(monitor).unwrap());
 
     loop {
         debug!("1 Output is low");
