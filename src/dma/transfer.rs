@@ -108,7 +108,7 @@ impl<'d> Transfer<'d> {
         buf: &'d mut [u8],
         options: TransferOptions,
     ) -> Self {
-        Self::new_inner_transfer(
+        Self::new_raw_transfer(
             channel,
             Direction::PeripheralToMemory,
             peri_addr as *const u32,
@@ -120,7 +120,7 @@ impl<'d> Transfer<'d> {
 
     /// Writes a memory buffer into a peripheral register using DMA
     pub fn new_write(channel: &'d Channel<'d>, buf: &'d [u8], peri_addr: *mut u8, options: TransferOptions) -> Self {
-        Self::new_inner_transfer(
+        Self::new_raw_transfer(
             channel,
             Direction::MemoryToPeripheral,
             buf as *const [u8] as *const u32,
@@ -137,7 +137,7 @@ impl<'d> Transfer<'d> {
         dst_buf: &'d mut [u8],
         options: TransferOptions,
     ) -> Self {
-        Self::new_inner_transfer(
+        Self::new_raw_transfer(
             channel,
             Direction::MemoryToMemory,
             src_buf as *const [u8] as *const u32,
@@ -148,7 +148,7 @@ impl<'d> Transfer<'d> {
     }
 
     /// Configures the channel and initiates the DMA transfer
-    fn new_inner_transfer(
+    pub fn new_raw_transfer(
         channel: &'d Channel<'d>,
         dir: Direction,
         src_buf: *const u32,
