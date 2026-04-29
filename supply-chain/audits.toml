@@ -53,6 +53,11 @@ who = "Felipe Balbi <febalbi@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "0.3.0"
 
+[[audits.embassy-time-queue-utils]]
+who = "Felipe Balbi <febalbi@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.0 -> 0.3.2"
+
 [[audits.embedded-io]]
 who = "Jerry Xie <jerryxie@microsoft.com>"
 criteria = "safe-to-deploy"
