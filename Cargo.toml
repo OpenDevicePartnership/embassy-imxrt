@@ -100,6 +100,8 @@ critical-section = "1.1"
 chrono = { version = "0.4", default-features = false, optional = true }
 embedded-io = { version = "0.6.1" }
 embedded-io-async = { version = "0.6.1" }
+embedded-io-07 = { package = "embedded-io", version = "0.7.1" }
+embedded-io-async-07 = { package = "embedded-io-async", version = "0.7.0" }
 rand_core = "0.9"
 fixed = "1.23.1"
 

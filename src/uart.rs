@@ -138,6 +138,26 @@ pub enum Error {
     /// TX Busy
     TxBusy,
 }
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Read => write!(f, "Read error"),
+            Self::Overrun => write!(f, "Buffer overflow"),
+            Self::Noise => write!(f, "Noise error"),
+            Self::Framing => write!(f, "Framing error"),
+            Self::Parity => write!(f, "Parity error"),
+            Self::Fail => write!(f, "Failure"),
+            Self::InvalidArgument => write!(f, "Invalid argument"),
+            Self::UnsupportedBaudrate => write!(f, "Uart baud rate cannot be supported with the given clock"),
+            Self::RxFifoEmpty => write!(f, "RX FIFO Empty"),
+            Self::TxFifoFull => write!(f, "TX FIFO Full"),
+            Self::TxBusy => write!(f, "TX Busy"),
+        }
+    }
+}
+impl core::error::Error for Error {}
+
 /// shorthand for -> `Result<T>`
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -1456,6 +1476,100 @@ impl embedded_io_async::Write for Uart<'_, Async> {
 
     async fn flush(&mut self) -> core::result::Result<(), Self::Error> {
         embedded_io_async::Write::flush(&mut self.tx).await
+    }
+}
+
+impl embedded_io_07::Error for Error {
+    fn kind(&self) -> embedded_io_07::ErrorKind {
+        embedded_io_07::ErrorKind::Other
+    }
+}
+
+impl embedded_io_07::ErrorType for UartRx<'_, Blocking> {
+    type Error = Error;
+}
+
+impl embedded_io_07::ErrorType for UartTx<'_, Blocking> {
+    type Error = Error;
+}
+
+impl embedded_io_07::ErrorType for Uart<'_, Blocking> {
+    type Error = Error;
+}
+
+impl embedded_io_07::Read for UartRx<'_, Blocking> {
+    fn read(&mut self, buf: &mut [u8]) -> core::result::Result<usize, Self::Error> {
+        self.blocking_read(buf).map(|_| buf.len())
+    }
+}
+
+impl embedded_io_07::Write for UartTx<'_, Blocking> {
+    fn write(&mut self, buf: &[u8]) -> core::result::Result<usize, Self::Error> {
+        self.blocking_write(buf).map(|_| buf.len())
+    }
+
+    fn flush(&mut self) -> core::result::Result<(), Self::Error> {
+        self.blocking_flush()
+    }
+}
+
+impl embedded_io_07::Read for Uart<'_, Blocking> {
+    fn read(&mut self, buf: &mut [u8]) -> core::result::Result<usize, Self::Error> {
+        embedded_io_07::Read::read(&mut self.rx, buf)
+    }
+}
+
+impl embedded_io_07::Write for Uart<'_, Blocking> {
+    fn write(&mut self, buf: &[u8]) -> core::result::Result<usize, Self::Error> {
+        embedded_io_07::Write::write(&mut self.tx, buf)
+    }
+
+    fn flush(&mut self) -> core::result::Result<(), Self::Error> {
+        embedded_io_07::Write::flush(&mut self.tx)
+    }
+}
+
+impl embedded_io_async_07::ErrorType for UartRx<'_, Async> {
+    type Error = Error;
+}
+
+impl embedded_io_async_07::ErrorType for UartTx<'_, Async> {
+    type Error = Error;
+}
+
+impl embedded_io_async_07::ErrorType for Uart<'_, Async> {
+    type Error = Error;
+}
+
+impl embedded_io_async_07::Read for UartRx<'_, Async> {
+    async fn read(&mut self, buf: &mut [u8]) -> core::result::Result<usize, Self::Error> {
+        self.read(buf).await
+    }
+}
+
+impl embedded_io_async_07::Write for UartTx<'_, Async> {
+    async fn write(&mut self, buf: &[u8]) -> core::result::Result<usize, Self::Error> {
+        self.write(buf).await.map(|_| buf.len())
+    }
+
+    async fn flush(&mut self) -> core::result::Result<(), Self::Error> {
+        self.flush().await
+    }
+}
+
+impl embedded_io_async_07::Read for Uart<'_, Async> {
+    async fn read(&mut self, buf: &mut [u8]) -> core::result::Result<usize, Self::Error> {
+        embedded_io_async_07::Read::read(&mut self.rx, buf).await
+    }
+}
+
+impl embedded_io_async_07::Write for Uart<'_, Async> {
+    async fn write(&mut self, buf: &[u8]) -> core::result::Result<usize, Self::Error> {
+        embedded_io_async_07::Write::write(&mut self.tx, buf).await
+    }
+
+    async fn flush(&mut self) -> core::result::Result<(), Self::Error> {
+        embedded_io_async_07::Write::flush(&mut self.tx).await
     }
 }
 
