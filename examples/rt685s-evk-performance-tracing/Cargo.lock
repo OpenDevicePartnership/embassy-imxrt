@@ -372,7 +372,9 @@ dependencies = [
  "embedded-hal-async",
  "embedded-hal-nb",
  "embedded-io 0.6.1",
+ "embedded-io 0.7.1",
  "embedded-io-async 0.6.1",
+ "embedded-io-async 0.7.0",
  "embedded-mcu-hal",
  "embedded-storage",
  "fixed",
@@ -1096,7 +1098,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "storage_bus"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#6956ebdaf9d3725959dae2c57c2ab6baefae9330"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu?tag=storage_bus_v0.1.0#8580385bf4a035299cacddef8796c17694655a17"
 
 [[package]]
 name = "strsim"
@@ -1131,7 +1133,7 @@ dependencies = [
 [[package]]
 name = "systemview-tracing"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/systemview-tracing#c0fceabd18509d62cd9c0047194838c60a14a2c8"
+source = "git+https://github.com/OpenDevicePartnership/systemview-tracing?tag=v0.1.0#868c344b72227a122271861933ddfa511c5a8735"
 dependencies = [
  "defmt-rtt",
  "rtos-trace 0.1.3",

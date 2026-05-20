@@ -890,7 +890,7 @@ dependencies = [
 [[package]]
 name = "storage_bus"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#6956ebdaf9d3725959dae2c57c2ab6baefae9330"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu?tag=storage_bus_v0.1.0#8580385bf4a035299cacddef8796c17694655a17"
 
 [[package]]
 name = "strsim"
@@ -912,7 +912,7 @@ dependencies = [
 [[package]]
 name = "systemview-tracing"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/systemview-tracing#3f7c639244ad45b621807984bfefafa86fd21043"
+source = "git+https://github.com/OpenDevicePartnership/systemview-tracing?tag=v0.1.0#868c344b72227a122271861933ddfa511c5a8735"
 dependencies = [
  "defmt-rtt",
 ]

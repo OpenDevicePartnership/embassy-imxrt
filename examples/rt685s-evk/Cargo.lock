@@ -748,7 +748,7 @@ dependencies = [
 [[package]]
 name = "keyberon"
 version = "0.2.0"
-source = "git+https://github.com/TeXitoi/keyberon#362c209f729d05505abb1984a0ddb321ec9ebf53"
+source = "git+https://github.com/TeXitoi/keyberon?rev=362c209f729d05505abb1984a0ddb321ec9ebf53#362c209f729d05505abb1984a0ddb321ec9ebf53"
 dependencies = [
  "arraydeque",
  "either",
@@ -761,7 +761,7 @@ dependencies = [
 [[package]]
 name = "keyberon-macros"
 version = "0.1.0"
-source = "git+https://github.com/TeXitoi/keyberon#362c209f729d05505abb1984a0ddb321ec9ebf53"
+source = "git+https://github.com/TeXitoi/keyberon?rev=362c209f729d05505abb1984a0ddb321ec9ebf53#362c209f729d05505abb1984a0ddb321ec9ebf53"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",
@@ -1125,7 +1125,7 @@ dependencies = [
 [[package]]
 name = "storage_bus"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-mcu#6956ebdaf9d3725959dae2c57c2ab6baefae9330"
+source = "git+https://github.com/OpenDevicePartnership/embedded-mcu?tag=storage_bus_v0.1.0#8580385bf4a035299cacddef8796c17694655a17"
 
 [[package]]
 name = "strsim"
