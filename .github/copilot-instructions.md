@@ -1,5 +1,9 @@
 # Copilot Instructions
 
+See [`AGENTS.md`](../AGENTS.md) at the repo root for the full agent operating
+guide (repo layout, chip/feature model, exact CI commands, coding conventions,
+and PR flow). This file covers commit messages and AI attribution only.
+
 ## Commit Messages
 - Subject line: capitalized, 50 characters or less, imperative mood (e.g., "Fix bug" not "Fixed bug")
 - Separate subject from body with a blank line
