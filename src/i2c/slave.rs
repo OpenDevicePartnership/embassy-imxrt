@@ -1382,6 +1382,14 @@ impl I2cSlave<'_, Async> {
             if stat.slvpending().is_pending() {
                 return Poll::Ready(());
             }
+            // DMA drained but the master still expects more bytes.
+            // Without this guard the future sleeps forever because the
+            // hardware does not raise slvpending once DMA is armed and
+            // running dry — SDA just floats and the master clocks 0xFF
+            // until something else aborts the transaction.
+            if !dma_channel.is_active() && stat.slvstate().is_slave_transmit() {
+                return Poll::Ready(());
+            }
 
             Poll::Pending
         })
@@ -1401,6 +1409,13 @@ impl I2cSlave<'_, Async> {
             // Restart (or NACK-then-next-address) — surface as Restart so
             // the next `listen` reports the RepeatedStart edge.
             return Ok(InternalTermination::Restarted(xfer_count));
+        } else if stat.slvstate().is_slave_transmit() {
+            // DMA drained while the master is still clocking — surface
+            // NeedMore so the caller can supply another buffer. The
+            // caller's next `respond_to_read` call re-arms DMA without
+            // dropping the transaction.
+            debug_assert_eq!(xfer_count, buf_len);
+            return Ok(InternalTermination::Continued(xfer_count));
         }
 
         Err(TransferError::WriteFail.into())
