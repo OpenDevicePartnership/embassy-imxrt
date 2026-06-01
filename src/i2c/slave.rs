@@ -31,8 +31,7 @@ use core::task::Poll;
 
 use embassy_hal_internal::Peri;
 use embassy_hal_internal::drop::OnDrop;
-use embedded_mcu_hal::i2c::target as mcu_target;
-use embedded_mcu_hal::i2c::{SevenBitAddress, TenBitAddress};
+use embedded_mcu_hal::i2c::{SevenBitAddress, TenBitAddress, target as mcu_target};
 
 use super::{
     Async, Blocking, Error, Info, Instance, InterruptHandler, Mode, REMEDIATON_NONE, REMEDIATON_SLAVE_NAK, Result,
