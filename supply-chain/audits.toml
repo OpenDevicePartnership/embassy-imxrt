@@ -7,6 +7,12 @@ criteria = "safe-to-deploy"
 version = "1.0.0"
 notes = "defmt-rtt is used for all our logging purposes. Version 1.0.0 merely stabilizes what was already available previously."
 
+[[audits.defmt-rtt]]
+who = "Felipe Balbi <febalbi@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.0 -> 1.1.0"
+notes = "Adds a single public query function in_blocking_mode() that performs a relaxed atomic read of the SEGGER RTT up-channel flags bitfield. No new unsafe blocks, no new dependencies, no behavioural changes to existing APIs."
+
 [[audits.embassy-embedded-hal]]
 who = "Jerry Xie <jerryxie@microsoft.com>"
 criteria = "safe-to-deploy"
@@ -74,6 +80,12 @@ notes = "Made Write::flush() required. Update to embedded-io 0.7 with core::Erro
 who = "Jerry Xie <jerryxie@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "0.2.0"
+
+[[audits.embedded-mcu-hal]]
+who = "Felipe Balbi <febalbi@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.0 -> 0.3.0"
+notes = "Adds two new trait-only modules: i2c::target (blocking + async target-side I2C traits, mirroring the embedded-hal controller-side shape with Request/ReadStatus/WriteStatus/Error/ErrorKind) and smbus::bus (async SMBus host trait with packet-error-checking). Both consist of trait definitions, plain enums, doc comments, and small blanket impl &mut T forwarding blocks. Minor adjustments to existing nvram/time/watchdog/lib.rs modules (no new behaviour). No new unsafe blocks. No new transitive dependencies. I authored the i2c::target module and reviewed the rest of this delta firsthand before publishing 0.3.0."
 
 [[audits.mimxrt600-fcb]]
 who = "Jerry Xie <jerryxie@microsoft.com>"
@@ -145,17 +157,41 @@ criteria = "safe-to-run"
 delta = "0.1.34 -> 0.1.36"
 notes = "Fix record_all panic. Switch to unconditional no_std (removed stdlib.rs shim). Improved code generation at trace points. Extracted sync Mutex wrapper. Trusted publisher (hds from Tokio team)."
 
+[[audits.typenum]]
+who = "Felipe Balbi <febalbi@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "1.20.0 -> 1.20.1"
+notes = "Macro hygiene fix: the recursive expansion of `tarr!` now uses `$crate::tarr![...]` instead of a naked `tarr![...]`, so the caller no longer needs `tarr` in scope. Plus a doc_root URL bump for the new version. No runtime behaviour changes."
+
 [[trusted.aho-corasick]]
 criteria = "safe-to-run"
 user-id = 189 # Andrew Gallant (BurntSushi)
 start = "2019-03-28"
 end = "2027-04-07"
 
+[[trusted.autocfg]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-05-22"
+end = "2027-06-01"
+
+[[trusted.cc]]
+criteria = "safe-to-run"
+user-id = 55123 # rust-lang-owner
+start = "2022-10-29"
+end = "2027-06-01"
+
 [[trusted.libc]]
 criteria = "safe-to-run"
 user-id = 55123 # rust-lang-owner
 start = "2019-01-01"
 end = "2027-04-07"
+
+[[trusted.log]]
+criteria = "safe-to-deploy"
+user-id = 3204 # Ashley Mannix (KodrAus)
+start = "2019-07-10"
+end = "2027-06-01"
 
 [[trusted.loom]]
 criteria = "safe-to-run"
@@ -175,6 +211,24 @@ user-id = 189 # Andrew Gallant (BurntSushi)
 start = "2019-03-30"
 end = "2027-04-07"
 
+[[trusted.syn]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2027-06-01"
+
+[[trusted.thiserror]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-10-09"
+end = "2027-06-01"
+
+[[trusted.thiserror-impl]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-10-09"
+end = "2027-06-01"
+
 [[trusted.thread_local]]
 criteria = "safe-to-run"
 user-id = 2915 # Amanieu d'Antras (Amanieu)
@@ -186,3 +240,15 @@ criteria = "safe-to-run"
 user-id = 64539 # Kenny Kerr (kennykerr)
 start = "2024-01-01"
 end = "2027-04-07"
+
+[[trusted.zerocopy]]
+criteria = "safe-to-deploy"
+user-id = 7178 # Joshua Liebow-Feeser (joshlf)
+start = "2019-02-28"
+end = "2027-06-01"
+
+[[trusted.zerocopy-derive]]
+criteria = "safe-to-deploy"
+user-id = 7178 # Joshua Liebow-Feeser (joshlf)
+start = "2019-02-28"
+end = "2027-06-01"
