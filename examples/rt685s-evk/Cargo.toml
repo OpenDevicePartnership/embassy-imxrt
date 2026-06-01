@@ -51,7 +51,7 @@ embedded-storage-async = { version = "0.4.1" }
 is31fl3743b-driver = { version = "0.1.1", features = [ "is_blocking" ]}
 mimxrt600-fcb = "0.2.2"
 
-embedded-mcu-hal = { version = "0.2.0", features = [
+embedded-mcu-hal = { version = "0.3.0", features = [
     "chrono"
 ] }
 
