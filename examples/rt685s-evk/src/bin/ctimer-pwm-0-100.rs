@@ -2,14 +2,12 @@
 #![no_main]
 
 use defmt::info;
-use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::gpio;
 use embassy_imxrt::pwm::{CentiPercent, MicroSeconds, Pwm};
 use embassy_imxrt::timer::{CTimerPwm, CTimerPwmPeriodChannel};
-use embassy_imxrt_examples as _;
 use embassy_time::{Duration, with_timeout};
-use panic_probe as _;
+use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
