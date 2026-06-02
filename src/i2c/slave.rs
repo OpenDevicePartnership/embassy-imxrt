@@ -963,12 +963,34 @@ impl I2cSlave<'_, Async> {
             } else {
                 return Ok(Response::ReadEarlyStop(xfer_count));
             }
-        } else if stat.slvpending().is_pending() || stat.slvstate().is_slave_address() {
-            // Restart (or NACK-then-next-address) — queue the edge for
-            // any trait caller and report the restart to the inherent
-            // caller.
+        } else if stat.slvstate().is_slave_address() {
+            // The peripheral has latched a new address phase — that is a
+            // genuine repeated START (Sr + ADDR+R/W queued on the wire).
+            // Queue the edge for any trait caller and report the restart
+            // to the inherent caller. Mirrors the blocking flavour.
             self.queue_edge(EdgeKind::RepeatedStart);
             return Ok(Response::Restarted(xfer_count));
+        } else if stat.slvpending().is_pending() {
+            // `slvpending` is asserted but neither `slvdesel` nor a new
+            // address phase fired — this is the "SW intervention needed"
+            // signal the FC peripheral raises when the controller NACKs
+            // our last transmitted byte to end the transaction (the
+            // deselect latch lands one peripheral cycle later) and when
+            // the FC state machine briefly mis-classifies mid-DMA under
+            // stress (the `slv_state -> addressed` race documented on
+            // PR #565 follow-up discussions).
+            //
+            // Treat it as a normal read termination: NAK to settle the
+            // peripheral and report based on `xfer_count`. Do NOT
+            // synthesise a `RepeatedStart` edge here — that would
+            // fabricate a phantom trait-side event with no matching
+            // upstream Sr on the wire.
+            i2c.slvctl().write(|w| w.slvnack().nack());
+            if xfer_count == buf_len {
+                return Ok(Response::ReadComplete(xfer_count));
+            } else {
+                return Ok(Response::ReadEarlyStop(xfer_count));
+            }
         } else if stat.slvstate().is_slave_transmit() {
             // DMA drained while the master is still clocking — caller
             // should supply another buffer to continue.
