@@ -1221,10 +1221,12 @@ impl mcu_target::blocking::I2c<SevenBitAddress> for I2cSlave<'_, Blocking> {
     }
 
     fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
+        self.require_address_kind(false)?;
         Ok(resp_to_read_status(I2cSlave::<Blocking>::respond_to_read(self, buf)?))
     }
 
     fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
+        self.require_address_kind(false)?;
         Ok(resp_to_write_status(I2cSlave::<Blocking>::respond_to_write(self, buf)?))
     }
 }
@@ -1247,10 +1249,12 @@ impl mcu_target::blocking::I2c<TenBitAddress> for I2cSlave<'_, Blocking> {
     }
 
     fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
+        self.require_address_kind(true)?;
         Ok(resp_to_read_status(I2cSlave::<Blocking>::respond_to_read(self, buf)?))
     }
 
     fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
+        self.require_address_kind(true)?;
         Ok(resp_to_write_status(I2cSlave::<Blocking>::respond_to_write(self, buf)?))
     }
 }
@@ -1273,12 +1277,14 @@ impl mcu_target::asynch::I2c<SevenBitAddress> for I2cSlave<'_, Async> {
     }
 
     async fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
+        self.require_address_kind(false)?;
         Ok(resp_to_read_status(
             I2cSlave::<Async>::respond_to_read(self, buf).await?,
         ))
     }
 
     async fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
+        self.require_address_kind(false)?;
         Ok(resp_to_write_status(
             I2cSlave::<Async>::respond_to_write(self, buf).await?,
         ))
@@ -1303,12 +1309,14 @@ impl mcu_target::asynch::I2c<TenBitAddress> for I2cSlave<'_, Async> {
     }
 
     async fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
+        self.require_address_kind(true)?;
         Ok(resp_to_read_status(
             I2cSlave::<Async>::respond_to_read(self, buf).await?,
         ))
     }
 
     async fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
+        self.require_address_kind(true)?;
         Ok(resp_to_write_status(
             I2cSlave::<Async>::respond_to_write(self, buf).await?,
         ))
