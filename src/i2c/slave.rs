@@ -494,14 +494,6 @@ impl I2cSlave<'_, Blocking> {
     /// Blocks until the bus produces an addressed event for this target.
     /// The returned [`Command`] carries the matched [`Address`].
     pub fn listen(&self) -> Result<Command> {
-        self.listen_impl()
-    }
-
-    /// Inherent implementation of [`Self::listen`]. The trait-impl
-    /// wrappers call this directly to avoid `inherent-vs-trait`-method
-    /// ambiguity when both `I2c<SevenBitAddress>` and `I2c<TenBitAddress>`
-    /// impls are in scope.
-    fn listen_impl(&self) -> Result<Command> {
         let i2c = self.info.regs;
         let addr = self.configured_address;
 
@@ -572,11 +564,6 @@ impl I2cSlave<'_, Blocking> {
     /// terminates the transfer (stop, repeated start) or when the buffer
     /// is full.
     pub fn respond_to_write(&self, buf: &mut [u8]) -> Result<Response> {
-        self.respond_to_write_impl(buf)
-    }
-
-    /// Inherent implementation of [`Self::respond_to_write`].
-    fn respond_to_write_impl(&self, buf: &mut [u8]) -> Result<Response> {
         let i2c = self.info.regs;
         let buf_len = buf.len();
         let mut xfer_count: usize = 0;
@@ -633,11 +620,6 @@ impl I2cSlave<'_, Blocking> {
     /// controller terminates the transfer (NACK+stop, repeated start) or
     /// when the buffer is exhausted.
     pub fn respond_to_read(&self, buf: &[u8]) -> Result<Response> {
-        self.respond_to_read_impl(buf)
-    }
-
-    /// Inherent implementation of [`Self::respond_to_read`].
-    fn respond_to_read_impl(&self, buf: &[u8]) -> Result<Response> {
         let i2c = self.info.regs;
         let buf_len = buf.len();
         let mut xfer_count: usize = 0;
@@ -705,15 +687,6 @@ impl I2cSlave<'_, Blocking> {
     /// preserved — the next [`I2cSlave::listen`] will accept a fresh
     /// transaction without re-initialising the driver.
     pub fn recover(&self) -> Result<()> {
-        self.recover_impl()
-    }
-
-    /// Inherent implementation of [`Self::recover`]. The trait-impl
-    /// wrappers call this directly to avoid the
-    /// `inherent-vs-trait`-method ambiguity that arises when both
-    /// `embedded_mcu_hal::i2c::target::blocking::I2c<SevenBitAddress>`
-    /// and `<TenBitAddress>` are in scope.
-    fn recover_impl(&self) -> Result<()> {
         let i2c = self.info.regs;
         critical_section::with(|_| {
             // Drop any latent DMA arming.
@@ -750,11 +723,6 @@ impl I2cSlave<'_, Async> {
     /// event for this target. The [`Command`] carries the matched
     /// [`Address`].
     pub async fn listen(&mut self) -> Result<Command> {
-        self.listen_impl().await
-    }
-
-    /// Inherent implementation of [`Self::listen`].
-    async fn listen_impl(&mut self) -> Result<Command> {
         let i2c = self.info.regs;
         let addr = self.configured_address;
 
@@ -840,11 +808,6 @@ impl I2cSlave<'_, Async> {
     /// controller terminates the transfer (stop, repeated start) or when
     /// the buffer is full.
     pub async fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<Response> {
-        self.respond_to_write_impl(buf).await
-    }
-
-    /// Inherent implementation of [`Self::respond_to_write`].
-    async fn respond_to_write_impl(&mut self, buf: &mut [u8]) -> Result<Response> {
         let i2c = self.info.regs;
         let buf_len = buf.len();
 
@@ -931,11 +894,6 @@ impl I2cSlave<'_, Async> {
     /// when the controller terminates the transfer (NACK+stop, repeated
     /// start) or when the buffer is exhausted.
     pub async fn respond_to_read(&mut self, buf: &[u8]) -> Result<Response> {
-        self.respond_to_read_impl(buf).await
-    }
-
-    /// Inherent implementation of [`Self::respond_to_read`].
-    async fn respond_to_read_impl(&mut self, buf: &[u8]) -> Result<Response> {
         let i2c = self.info.regs;
         let buf_len = buf.len();
 
@@ -1029,15 +987,6 @@ impl I2cSlave<'_, Async> {
     /// and clears any queued edge bookkeeping. The configured address(es)
     /// and `slven` bit are preserved.
     pub async fn recover(&mut self) -> Result<()> {
-        self.recover_impl().await
-    }
-
-    /// Inherent implementation of [`Self::recover`]. The trait-impl
-    /// wrappers call this directly to avoid the
-    /// `inherent-vs-trait`-method ambiguity that arises when both
-    /// `embedded_mcu_hal::i2c::target::asynch::I2c<SevenBitAddress>` and
-    /// `<TenBitAddress>` are in scope.
-    async fn recover_impl(&mut self) -> Result<()> {
         let i2c = self.info.regs;
         if let Some(dma) = self.dma_ch.as_ref()
             && dma.is_active()
@@ -1257,7 +1206,7 @@ fn resp_to_read_status(r: Response) -> mcu_target::ReadStatus {
 
 impl mcu_target::blocking::I2c<SevenBitAddress> for I2cSlave<'_, Blocking> {
     fn recover(&mut self) -> Result<()> {
-        self.recover_impl()
+        I2cSlave::<Blocking>::recover(self)
     }
 
     fn listen(&mut self) -> Result<mcu_target::Request<SevenBitAddress>> {
@@ -1268,15 +1217,15 @@ impl mcu_target::blocking::I2c<SevenBitAddress> for I2cSlave<'_, Blocking> {
             return Ok(req);
         }
 
-        Ok(cmd_to_request_u8(self.listen_impl()?))
+        Ok(cmd_to_request_u8(I2cSlave::<Blocking>::listen(self)?))
     }
 
     fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
-        Ok(resp_to_read_status(self.respond_to_read_impl(buf)?))
+        Ok(resp_to_read_status(I2cSlave::<Blocking>::respond_to_read(self, buf)?))
     }
 
     fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
-        Ok(resp_to_write_status(self.respond_to_write_impl(buf)?))
+        Ok(resp_to_write_status(I2cSlave::<Blocking>::respond_to_write(self, buf)?))
     }
 }
 
@@ -1284,7 +1233,7 @@ impl mcu_target::blocking::I2c<SevenBitAddress> for I2cSlave<'_, Blocking> {
 
 impl mcu_target::blocking::I2c<TenBitAddress> for I2cSlave<'_, Blocking> {
     fn recover(&mut self) -> Result<()> {
-        self.recover_impl()
+        I2cSlave::<Blocking>::recover(self)
     }
 
     fn listen(&mut self) -> Result<mcu_target::Request<TenBitAddress>> {
@@ -1294,15 +1243,15 @@ impl mcu_target::blocking::I2c<TenBitAddress> for I2cSlave<'_, Blocking> {
             return Ok(req);
         }
 
-        Ok(cmd_to_request_u16(self.listen_impl()?))
+        Ok(cmd_to_request_u16(I2cSlave::<Blocking>::listen(self)?))
     }
 
     fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
-        Ok(resp_to_read_status(self.respond_to_read_impl(buf)?))
+        Ok(resp_to_read_status(I2cSlave::<Blocking>::respond_to_read(self, buf)?))
     }
 
     fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
-        Ok(resp_to_write_status(self.respond_to_write_impl(buf)?))
+        Ok(resp_to_write_status(I2cSlave::<Blocking>::respond_to_write(self, buf)?))
     }
 }
 
@@ -1310,7 +1259,7 @@ impl mcu_target::blocking::I2c<TenBitAddress> for I2cSlave<'_, Blocking> {
 
 impl mcu_target::asynch::I2c<SevenBitAddress> for I2cSlave<'_, Async> {
     async fn recover(&mut self) -> Result<()> {
-        self.recover_impl().await
+        I2cSlave::<Async>::recover(self).await
     }
 
     async fn listen(&mut self) -> Result<mcu_target::Request<SevenBitAddress>> {
@@ -1320,15 +1269,19 @@ impl mcu_target::asynch::I2c<SevenBitAddress> for I2cSlave<'_, Async> {
             return Ok(req);
         }
 
-        Ok(cmd_to_request_u8(self.listen_impl().await?))
+        Ok(cmd_to_request_u8(I2cSlave::<Async>::listen(self).await?))
     }
 
     async fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
-        Ok(resp_to_read_status(self.respond_to_read_impl(buf).await?))
+        Ok(resp_to_read_status(
+            I2cSlave::<Async>::respond_to_read(self, buf).await?,
+        ))
     }
 
     async fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
-        Ok(resp_to_write_status(self.respond_to_write_impl(buf).await?))
+        Ok(resp_to_write_status(
+            I2cSlave::<Async>::respond_to_write(self, buf).await?,
+        ))
     }
 }
 
@@ -1336,7 +1289,7 @@ impl mcu_target::asynch::I2c<SevenBitAddress> for I2cSlave<'_, Async> {
 
 impl mcu_target::asynch::I2c<TenBitAddress> for I2cSlave<'_, Async> {
     async fn recover(&mut self) -> Result<()> {
-        self.recover_impl().await
+        I2cSlave::<Async>::recover(self).await
     }
 
     async fn listen(&mut self) -> Result<mcu_target::Request<TenBitAddress>> {
@@ -1346,15 +1299,19 @@ impl mcu_target::asynch::I2c<TenBitAddress> for I2cSlave<'_, Async> {
             return Ok(req);
         }
 
-        Ok(cmd_to_request_u16(self.listen_impl().await?))
+        Ok(cmd_to_request_u16(I2cSlave::<Async>::listen(self).await?))
     }
 
     async fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
-        Ok(resp_to_read_status(self.respond_to_read_impl(buf).await?))
+        Ok(resp_to_read_status(
+            I2cSlave::<Async>::respond_to_read(self, buf).await?,
+        ))
     }
 
     async fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
-        Ok(resp_to_write_status(self.respond_to_write_impl(buf).await?))
+        Ok(resp_to_write_status(
+            I2cSlave::<Async>::respond_to_write(self, buf).await?,
+        ))
     }
 }
 
