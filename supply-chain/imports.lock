@@ -86,6 +86,13 @@ version = "1.2.0"
 aggregated-from = "https://raw.githubusercontent.com/OpenDevicePartnership/mcxa-pac/refs/heads/main/supply-chain/audits.toml"
 
 [[audits.OpenDevicePartnership.audits.defmt]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "0.3.100"
+notes = "Compatibility shim: no_std crate that re-exports defmt 1.x items for 0.3 API compatibility. No unsafe code, no build script, no powerful imports, no logic - pure pub-use re-exports. Assisted-by: copilot-cli:claude-opus-4.6"
+aggregated-from = "https://raw.githubusercontent.com/OpenDevicePartnership/embedded-services/refs/heads/main/supply-chain/audits.toml"
+
+[[audits.OpenDevicePartnership.audits.defmt]]
 who = "Felipe Balbi <felipe.balbi@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "1.0.1"
@@ -109,11 +116,23 @@ criteria = "safe-to-deploy"
 version = "0.5.0"
 aggregated-from = "https://raw.githubusercontent.com/OpenDevicePartnership/tps6699x/refs/heads/main/supply-chain/audits.toml"
 
+[[audits.OpenDevicePartnership.audits.embedded-crc-macros]]
+who = "Matteo Tullo <matteotullo@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "1.0.0"
+aggregated-from = "https://raw.githubusercontent.com/OpenDevicePartnership/embedded-services/refs/heads/main/supply-chain/audits.toml"
+
 [[audits.OpenDevicePartnership.audits.embedded-hal]]
 who = "Felipe Balbi <felipe.balbi@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "0.2.7"
 aggregated-from = "https://raw.githubusercontent.com/OpenDevicePartnership/mcxa-pac/refs/heads/main/supply-chain/audits.toml"
+
+[[audits.OpenDevicePartnership.audits.embedded-mcu-hal]]
+who = "Felipe Balbi <febalbi@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.0 -> 0.3.0"
+aggregated-from = "https://raw.githubusercontent.com/OpenDevicePartnership/embedded-mcu/refs/heads/main/supply-chain/audits.toml"
 
 [[audits.OpenDevicePartnership.audits.itertools]]
 who = "Felipe Balbi <febalbi@microsoft.com>"
@@ -169,6 +188,12 @@ who = "Felipe Balbi <felipe.balbi@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "0.7.0"
 aggregated-from = "https://raw.githubusercontent.com/OpenDevicePartnership/mcxa-pac/refs/heads/main/supply-chain/audits.toml"
+
+[[audits.OpenDevicePartnership.audits.smbus-pec]]
+who = "Matteo Tullo <matteotullo@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "1.0.1"
+aggregated-from = "https://raw.githubusercontent.com/OpenDevicePartnership/embedded-services/refs/heads/main/supply-chain/audits.toml"
 
 [[audits.OpenDevicePartnership.audits.static_cell]]
 who = "Robert Zieba <robertzieba@microsoft.com>"
@@ -417,7 +442,7 @@ aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_p
 who = "Lukasz Anforowicz <lukasza@chromium.org>"
 criteria = "safe-to-deploy"
 delta = "1.14.0 -> 1.15.0"
-notes = 'The delta in `lib.rs` only tweaks doc comments and `#[cfg(feature = "std")]`.'
+notes = "The delta in `lib.rs` only tweaks doc comments and `#[cfg(feature = \"std\")]`."
 aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
 
 [[audits.google.audits.lazy_static]]
@@ -494,8 +519,8 @@ who = "Lukasz Anforowicz <lukasza@chromium.org>"
 criteria = "safe-to-deploy"
 version = "1.0.78"
 notes = """
-Grepped for "crypt", "cipher", "fs", "net" - there were no hits
-(except for a benign "fs" hit in a doc comment)
+Grepped for \"crypt\", \"cipher\", \"fs\", \"net\" - there were no hits
+(except for a benign \"fs\" hit in a doc comment)
 
 Notes from the `unsafe` review can be found in https://crrev.com/c/5385745.
 """
@@ -607,8 +632,8 @@ who = "Lukasz Anforowicz <lukasza@chromium.org>"
 criteria = "safe-to-deploy"
 version = "1.0.35"
 notes = """
-Grepped for "unsafe", "crypt", "cipher", "fs", "net" - there were no hits
-(except for benign "net" hit in tests and "fs" hit in README.md)
+Grepped for \"unsafe\", \"crypt\", \"cipher\", \"fs\", \"net\" - there were no hits
+(except for benign \"net\" hit in tests and \"fs\" hit in README.md)
 """
 aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
 
@@ -685,7 +710,7 @@ and there were no hits except for:
 * Using `unsafe` in a string:
 
     ```
-    src/constfn.rs:            "unsafe" => Qualifiers::Unsafe,
+    src/constfn.rs:            \"unsafe\" => Qualifiers::Unsafe,
     ```
 
 * Using `std::fs` in `build/build.rs` to write `${OUT_DIR}/version.expr`
