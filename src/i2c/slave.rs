@@ -1487,7 +1487,7 @@ impl<M: Mode> mcu_target::ErrorType for I2cSlave<'_, M> {
 
 impl mcu_target::blocking::I2c<SevenBitAddress> for I2cSlave<'_, Blocking> {
     fn recover(&mut self) -> Result<()> {
-        I2cSlave::<Blocking>::recover(self)
+        self.recover()
     }
 
     fn listen(&mut self) -> Result<mcu_target::Request<SevenBitAddress>> {
@@ -1521,7 +1521,7 @@ impl mcu_target::blocking::I2c<SevenBitAddress> for I2cSlave<'_, Blocking> {
 
 impl mcu_target::blocking::I2c<TenBitAddress> for I2cSlave<'_, Blocking> {
     fn recover(&mut self) -> Result<()> {
-        I2cSlave::<Blocking>::recover(self)
+        self.recover()
     }
 
     fn listen(&mut self) -> Result<mcu_target::Request<TenBitAddress>> {
@@ -1554,7 +1554,7 @@ impl mcu_target::blocking::I2c<TenBitAddress> for I2cSlave<'_, Blocking> {
 
 impl mcu_target::asynch::I2c<SevenBitAddress> for I2cSlave<'_, Async> {
     async fn recover(&mut self) -> Result<()> {
-        I2cSlave::<Async>::recover(self).await
+        self.recover().await
     }
 
     async fn listen(&mut self) -> Result<mcu_target::Request<SevenBitAddress>> {
@@ -1587,7 +1587,7 @@ impl mcu_target::asynch::I2c<SevenBitAddress> for I2cSlave<'_, Async> {
 
 impl mcu_target::asynch::I2c<TenBitAddress> for I2cSlave<'_, Async> {
     async fn recover(&mut self) -> Result<()> {
-        I2cSlave::<Async>::recover(self).await
+        self.recover(self).await
     }
 
     async fn listen(&mut self) -> Result<mcu_target::Request<TenBitAddress>> {
