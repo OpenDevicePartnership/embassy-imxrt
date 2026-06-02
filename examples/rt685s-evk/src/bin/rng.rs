@@ -2,11 +2,13 @@
 #![no_main]
 
 use defmt::info;
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::rng::Rng;
 use embassy_imxrt::{bind_interrupts, peripherals, rng};
+use embassy_imxrt_examples as _;
+use panic_probe as _;
 use rand::TryRngCore;
-use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     RNG => rng::InterruptHandler<peripherals::RNG>;

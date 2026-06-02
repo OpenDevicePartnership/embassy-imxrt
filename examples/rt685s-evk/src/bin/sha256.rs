@@ -2,9 +2,11 @@
 #![no_main]
 
 use defmt::{info, trace};
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::hashcrypt::{Hashcrypt, hasher};
-use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
+use embassy_imxrt_examples as _;
+use panic_probe as _;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {

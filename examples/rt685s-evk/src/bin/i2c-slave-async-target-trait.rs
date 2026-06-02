@@ -26,16 +26,18 @@
 #![no_main]
 
 use defmt::info;
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::i2c::slave::{Address, I2cSlave};
 use embassy_imxrt::i2c::{self, Async};
 use embassy_imxrt::{bind_interrupts, peripherals};
+use embassy_imxrt_examples as _;
 // Bring the target trait methods into scope so we go through the trait
 // instead of the inherent API.
 use embedded_mcu_hal::i2c::SevenBitAddress;
 use embedded_mcu_hal::i2c::target::Request;
 use embedded_mcu_hal::i2c::target::asynch::I2c as TargetI2c;
-use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
+use panic_probe as _;
 
 const SLAVE_ADDR: Option<Address> = Address::new(0x20);
 const BUFLEN: usize = 8;
