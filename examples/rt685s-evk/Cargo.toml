@@ -25,9 +25,7 @@ embassy-imxrt = { version = "0.1.0", path = "../../", features = [
     "unstable-pac",
 ] }
 
-embassy-sync = { version = "0.8.0", features = [
-    "defmt",
-] }
+embassy-sync = { version = "0.8.0", features = ["defmt"] }
 embassy-executor = { version = "0.10.0", features = [
     "platform-cortex-m",
     "executor-thread",
@@ -48,14 +46,12 @@ futures = { version = "0.3.30", default-features = false, features = [
 ] }
 embedded-storage = { version = "0.3" }
 embedded-storage-async = { version = "0.4.1" }
-is31fl3743b-driver = { version = "0.1.1", features = [ "is_blocking" ]}
+is31fl3743b-driver = { version = "0.1.1", features = ["is_blocking"] }
 mimxrt600-fcb = "0.2.2"
 
-embedded-mcu-hal = { version = "0.2.0", features = [
-    "chrono"
-] }
+embedded-mcu-hal = { version = "0.3.0", features = ["chrono"] }
 
-chrono = { version = "^0.4", default-features = false}
+chrono = { version = "^0.4", default-features = false }
 rand = { version = "0.9", default-features = false }
-keyberon = { git = "https://github.com/TeXitoi/keyberon", rev = "362c209f729d05505abb1984a0ddb321ec9ebf53"}
+keyberon = { git = "https://github.com/TeXitoi/keyberon", rev = "362c209f729d05505abb1984a0ddb321ec9ebf53" }
 static_cell = { version = "2" }
