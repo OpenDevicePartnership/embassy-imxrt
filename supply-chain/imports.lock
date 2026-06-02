@@ -518,12 +518,12 @@ aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/th
 who = "Lukasz Anforowicz <lukasza@chromium.org>"
 criteria = "safe-to-deploy"
 version = "1.0.78"
-notes = '''
+notes = """
 Grepped for "crypt", "cipher", "fs", "net" - there were no hits
 (except for a benign "fs" hit in a doc comment)
 
 Notes from the `unsafe` review can be found in https://crrev.com/c/5385745.
-'''
+"""
 aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
 
 [[audits.google.audits.proc-macro2]]
@@ -631,10 +631,10 @@ aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_p
 who = "Lukasz Anforowicz <lukasza@chromium.org>"
 criteria = "safe-to-deploy"
 version = "1.0.35"
-notes = '''
+notes = """
 Grepped for "unsafe", "crypt", "cipher", "fs", "net" - there were no hits
 (except for benign "net" hit in tests and "fs" hit in README.md)
-'''
+"""
 aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
 
 [[audits.google.audits.quote]]
