@@ -26,18 +26,16 @@
 #![no_main]
 
 use defmt::info;
-use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::i2c::slave::{Address, I2cSlave};
 use embassy_imxrt::i2c::{self, Async};
 use embassy_imxrt::{bind_interrupts, peripherals};
-use embassy_imxrt_examples as _;
 // Bring the target trait methods into scope so we go through the trait
 // instead of the inherent API.
 use embedded_mcu_hal::i2c::SevenBitAddress;
 use embedded_mcu_hal::i2c::target::Request;
 use embedded_mcu_hal::i2c::target::asynch::I2c as TargetI2c;
-use panic_probe as _;
+use {defmt_rtt as _, embassy_imxrt_examples as _, panic_probe as _};
 
 const SLAVE_ADDR: Option<Address> = Address::new(0x20);
 const BUFLEN: usize = 8;
@@ -70,8 +68,8 @@ async fn slave_service(mut i2c: I2cSlave<'static, Async>) {
         match req {
             Request::Stop(addr) => {
                 // A probe (address-only transaction terminated by STOP)
-                // surfaces here. The inherent API folds this into
-                // `Command::Probe`.
+                // surfaces here. The inherent API reports the same event
+                // as `Command::Probe { addr }`.
                 info!("Stop @ 0x{:02X} (probe)", addr);
             }
             Request::RepeatedStart(prev_addr) => {
@@ -120,7 +118,10 @@ async fn slave_service(mut i2c: I2cSlave<'static, Async>) {
                             break;
                         }
                         Ok(WriteStatus::Restarted(n)) => {
-                            info!("Write restarted after {} bytes — next listen will surface RepeatedStart", n);
+                            info!(
+                                "Write restarted after {} bytes — next listen will surface RepeatedStart",
+                                n
+                            );
                             // Do NOT call recover() here: a Restarted is a
                             // healthy continuation of an in-flight master
                             // transaction (Sr + ADDR+R/W is queued on the
