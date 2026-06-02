@@ -5,6 +5,20 @@
 //! goes through the `embedded_mcu_hal::i2c::target::blocking::I2c` trait
 //! instead of the inherent `I2cSlave` methods.
 //!
+//! ## Race-watching telemetry
+//!
+//! Two `warn!` emissions in this example flag known-suspicious shapes
+//! associated with the `slv_state -> addressed` mid-DMA HW race tracked
+//! on PR #565:
+//!
+//! 1. `WriteStatus::Restarted(0)` — a zero-byte restart should not occur
+//!    on a healthy bus.
+//! 2. `Request::RepeatedStart(_)` arriving when the prior `respond_to_*`
+//!    did **not** report `Restarted(_)`.
+//!
+//! See the async counterpart (`i2c-slave-async-target-trait.rs`) for more
+//! context.
+//!
 //! Tested against the same Raspberry Pi 5 master rig as the existing
 //! `i2c-slave.rs` example
 //! (https://github.com/jerrysxie/pi5-i2c-test).
@@ -12,7 +26,7 @@
 #![no_std]
 #![no_main]
 
-use defmt::info;
+use defmt::{info, warn};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::i2c::Blocking;
@@ -28,6 +42,10 @@ const BUFLEN: usize = 8;
 
 #[embassy_executor::task]
 async fn slave_service(mut i2c: I2cSlave<'static, Blocking>) {
+    // See `i2c-slave-async-target-trait.rs` for an explanation of this
+    // expect_repeated_start flag and the corresponding `warn!` emissions.
+    let mut expect_repeated_start = false;
+
     loop {
         let mut buf: [u8; BUFLEN] = [0xAA; BUFLEN];
 
@@ -39,19 +57,40 @@ async fn slave_service(mut i2c: I2cSlave<'static, Blocking>) {
             Ok(r) => r,
             Err(e) => {
                 info!("listen error: {:?}", defmt::Debug2Format(&e));
+                expect_repeated_start = false;
                 continue;
             }
         };
 
+        let was_expecting_restart = expect_repeated_start;
+        expect_repeated_start = false;
+
         match req {
             Request::Stop(addr) => {
                 info!("Stop @ 0x{:02X} (probe)", addr);
+                if was_expecting_restart {
+                    warn!(
+                        "RACE WATCH: prior respond_to_* reported Restarted but listen() \
+                         returned Stop(0x{:02X}); expected RepeatedStart",
+                        addr
+                    );
+                }
             }
             Request::RepeatedStart(prev_addr) => {
                 info!("RepeatedStart from prev @ 0x{:02X}", prev_addr);
+                if !was_expecting_restart {
+                    warn!(
+                        "RACE WATCH: RepeatedStart(0x{:02X}) without prior Restarted(_) — \
+                         likely a spurious edge from a mid-DMA SlaveAddress mis-classification",
+                        prev_addr
+                    );
+                }
             }
             Request::Read(addr) => {
                 info!("Read @ 0x{:02X}", addr);
+                if was_expecting_restart {
+                    info!("(consumed expected RepeatedStart edge before Read)");
+                }
                 loop {
                     use embedded_mcu_hal::i2c::target::ReadStatus;
                     match TargetI2c::<SevenBitAddress>::respond_to_read(&mut i2c, &buf) {
@@ -79,6 +118,9 @@ async fn slave_service(mut i2c: I2cSlave<'static, Blocking>) {
             }
             Request::Write(addr) => {
                 info!("Write @ 0x{:02X}", addr);
+                if was_expecting_restart {
+                    info!("(consumed expected RepeatedStart edge before Write)");
+                }
                 loop {
                     use embedded_mcu_hal::i2c::target::WriteStatus;
                     match TargetI2c::<SevenBitAddress>::respond_to_write(&mut i2c, &mut buf) {
@@ -88,6 +130,12 @@ async fn slave_service(mut i2c: I2cSlave<'static, Blocking>) {
                         }
                         Ok(WriteStatus::Restarted(n)) => {
                             info!("Write restarted after {} bytes", n);
+                            if n == 0 {
+                                warn!(
+                                    "RACE WATCH: WriteStatus::Restarted(0) — zero-byte restart \
+                                     should not occur on a healthy bus."
+                                );
+                            }
                             // Do NOT call recover() here: a Restarted is a
                             // healthy continuation of an in-flight master
                             // transaction (Sr + ADDR+R/W is queued on the
@@ -97,6 +145,7 @@ async fn slave_service(mut i2c: I2cSlave<'static, Blocking>) {
                             // Reserve recover() for wedged/cancelled
                             // transfers — e.g. after dropping a
                             // respond_to_* future mid-transaction.
+                            expect_repeated_start = true;
                             break;
                         }
                         Ok(WriteStatus::BufferFull(n)) => {
