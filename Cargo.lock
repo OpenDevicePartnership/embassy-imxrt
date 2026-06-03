@@ -182,15 +182,6 @@ version = "0.3.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0963443817029b2024136fc4dd07a5107eb8f977eaf18fcd1fdeb11306b64ad"
 dependencies = [
- "defmt 1.0.1",
-]
-
-[[package]]
-name = "defmt"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0963443817029b2024136fc4dd07a5107eb8f977eaf18fcd1fdeb11306b64ad"
-dependencies = [
  "defmt 1.1.0",
 ]
 
@@ -233,7 +224,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0f73a4a4a91609e977ae3b7bd831ffa292edfd42ad140a3244a61d805b0e05e"
 dependencies = [
  "critical-section",
- "defmt 1.0.1",
+ "defmt 1.1.0",
 ]
 
 [[package]]
@@ -314,7 +305,7 @@ checksum = "95285007a91b619dc9f26ea8f55452aa6c60f7115a4edc05085cd2bd3127cd7a"
 dependencies = [
  "cortex-m",
  "critical-section",
- "defmt 1.0.1",
+ "defmt 1.1.0",
  "num-traits",
 ]
 
@@ -336,7 +327,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "critical-section",
- "defmt 1.0.1",
+ "defmt 1.1.0",
  "document-features",
  "embassy-embedded-hal",
  "embassy-executor",
@@ -378,7 +369,7 @@ checksum = "7bbd85cf5a5ae56bdf26f618364af642d1d0a4e245cdd75cd9aabda382f65a81"
 dependencies = [
  "cfg-if",
  "critical-section",
- "defmt 1.0.1",
+ "defmt 1.1.0",
  "embedded-io-async 0.7.0",
  "futures-core",
  "futures-sink",
@@ -501,7 +492,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0563f27b8ea59eb57e2c5926db6ee311d0a24ab9912adf82b9f418cc9799b0ff"
 dependencies = [
- "defmt 1.0.1",
+ "defmt 1.1.0",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
  "num_enum",
@@ -639,9 +630,9 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "log"
-version = "0.4.30"
+version = "0.4.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "616ec5685824bcc94416c6d4a7a446eea774a31efd7062c8480ba6fd06d7a6e5"
+checksum = "113b30b4cd05f7c06868fdb2854f66a7b9fece9a48425351cd532e810d74024f"
 
 [[package]]
 name = "loom"
@@ -689,7 +680,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "critical-section",
- "defmt 1.0.1",
+ "defmt 1.1.0",
  "vcell",
 ]
 
@@ -702,7 +693,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "critical-section",
- "defmt 1.0.1",
+ "defmt 1.1.0",
  "vcell",
 ]
 
@@ -907,15 +898,6 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 [[package]]
 name = "smbus-pec"
 version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca0763a680cd5d72b28f7bfc8a054c117d8841380a6ad4f72f05bd2a34217d3e"
-dependencies = [
- "embedded-crc-macros",
-]
-
-[[package]]
-name = "stable_deref_trait"
-version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca0763a680cd5d72b28f7bfc8a054c117d8841380a6ad4f72f05bd2a34217d3e"
 dependencies = [
