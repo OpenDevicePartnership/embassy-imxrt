@@ -811,13 +811,53 @@ impl I2cSlave<'_, Async> {
         let i2c = self.info.regs;
         let buf_len = buf.len();
 
-        // Verify that we are ready for write
+        // Re-entry classification.
+        //
+        // Two shapes reach this entry point: the inherent caller has just
+        // returned from `listen()` with `Command::Write` (the
+        // straight-through case), or it is looping back with a fresh
+        // buffer after a prior call returned `Response::WriteContinued`
+        // (the continuation case). In the continuation case the bus state
+        // may have advanced between the previous call returning and this
+        // call being polled — the controller can issue a `STOP` (slvdesel
+        // latches) or a repeated `START` followed by ADDR+R/W (the
+        // peripheral transitions out of `slave_receive` into
+        // `slave_address`, with `slvpending` asserted waiting for SW to
+        // ACK/NACK the new address).
+        //
+        // Both terminators are legitimate end-of-transaction events from
+        // the slave's perspective. Surface them as the same `Response`
+        // variants the post-poll path emits so the caller's outer loop
+        // sees a uniform shape regardless of when the controller
+        // terminated. The blocking flavour already handles this via its
+        // polling loop; the async flavour must check explicitly because
+        // it arms DMA before awaiting and needs the bus to actually be in
+        // `slave_receive` for the DMA to make forward progress.
         let stat = i2c.stat().read();
+        if stat.slvdesel().is_deselected() {
+            // Controller issued STOP — either between calls (continuation
+            // case) or this is a zero-byte write that the caller
+            // dispatched after a `Probe`-shaped match. Clear the latch
+            // before returning so the next `listen()` does not see a
+            // stale deselect.
+            i2c.stat().write(|w| w.slvdesel().deselected());
+            return Ok(Response::Stopped(0));
+        }
+        if stat.slvstate().is_slave_address() {
+            // Controller issued Sr+ADDR between BufferFull continuations.
+            // The new address phase is latched and waiting for SW
+            // ACK/NACK; the next `listen()` will continue_ it and pick
+            // up the new direction. Queue the RepeatedStart edge for any
+            // trait caller and report Restarted so the outer loop loops
+            // back to `listen()` instead of arming a DMA transfer for a
+            // transaction that no longer exists.
+            self.queue_edge(EdgeKind::RepeatedStart);
+            return Ok(Response::Restarted(0));
+        }
         if !stat.slvstate().is_slave_receive() {
-            // 0 byte write
-            if stat.slvdesel().is_deselected() {
-                return Ok(Response::Stopped(0));
-            }
+            // The peripheral is in some other transient state we do not
+            // know how to drain from here. Surface as a read failure so
+            // the caller can recover().
             return Err(TransferError::ReadFail.into());
         }
 
@@ -897,8 +937,43 @@ impl I2cSlave<'_, Async> {
         let i2c = self.info.regs;
         let buf_len = buf.len();
 
+        // Re-entry classification.
+        //
+        // Two shapes reach this entry point: the inherent caller has just
+        // returned from `listen()` with `Command::Read` (the
+        // straight-through case), or it is looping back with a fresh
+        // buffer after a prior call returned `Response::ReadContinued`
+        // (the continuation case). In the continuation case the bus state
+        // may have advanced between the previous call returning and this
+        // call being polled — the controller can NACK+STOP (slvdesel
+        // latches) or issue a repeated `START` followed by ADDR+R/W (the
+        // peripheral transitions out of `slave_transmit` into
+        // `slave_address`, with `slvpending` asserted waiting for SW to
+        // ACK/NACK the new address).
+        //
+        // Surface both terminators with the same `Response` variants the
+        // post-poll path emits so the caller's outer loop sees a uniform
+        // shape regardless of when the controller terminated. Mirrors the
+        // re-entry classification in `respond_to_write`.
+        let stat = i2c.stat().read();
+        if stat.slvdesel().is_deselected() {
+            // Controller NACKed + STOPped. Clear the latch and report as
+            // `ReadEarlyStop(0)` — no bytes from this call's buffer
+            // reached the wire (the buffer is untouched). The caller can
+            // distinguish "buffer fully consumed at termination" from
+            // "buffer not consumed at termination" via the variant.
+            i2c.stat().write(|w| w.slvdesel().deselected());
+            return Ok(Response::ReadEarlyStop(0));
+        }
+        if stat.slvstate().is_slave_address() {
+            // Controller issued Sr+ADDR between ReadContinued
+            // continuations. Queue the RepeatedStart edge and report
+            // Restarted so the outer loop loops back to `listen()`.
+            self.queue_edge(EdgeKind::RepeatedStart);
+            return Ok(Response::Restarted(0));
+        }
         // Verify that we are ready for transmit
-        if !i2c.stat().read().slvstate().is_slave_transmit() {
+        if !stat.slvstate().is_slave_transmit() {
             return Err(TransferError::WriteFail.into());
         }
 
