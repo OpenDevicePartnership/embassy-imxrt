@@ -883,6 +883,35 @@ impl I2cSlave<'_, Async> {
             i2c.slvctl().modify(|_r, w| w.slvdma().disabled());
         });
 
+        // Re-check bus state after arming DMA and installing guards.
+        //
+        // There is a tiny window between the entry guard's `stat` read and
+        // the DMA arm during which the controller can complete the data
+        // phase and issue Sr+ADDR+R/W. Once DMA is armed (SLVDMA bit set),
+        // the FlexComm peripheral suppresses `slvpending` for events it
+        // handles — including the auto-handled new address phase. If we
+        // entered with `slvstate == slave_receive` but the bus then moved
+        // to `slave_address` (or `slave_transmit` after DMA-mode address
+        // auto-ack) before we got here, no further wake source will fire:
+        // DMA stays armed waiting for bytes that never come, slvpending
+        // is suppressed by the active DMA. The future then wedges until
+        // its `with_timeout` outer guard cancels it.
+        //
+        // The fix: re-read stat AFTER arming. If the bus has already
+        // advanced, drop the DMA (handled by `_dma_guard` / `_transfer`
+        // drop) and classify the same way the post-poll path would.
+        let stat = i2c.stat().read();
+        if stat.slvdesel().is_deselected() {
+            i2c.stat().write(|w| w.slvdesel().deselected());
+            nak_guard.defuse();
+            return Ok(Response::Stopped(0));
+        }
+        if stat.slvstate().is_slave_address() {
+            self.queue_edge(EdgeKind::RepeatedStart);
+            nak_guard.defuse();
+            return Ok(Response::Restarted(0));
+        }
+
         poll_fn(|cx| {
             let i2c = self.info.regs;
 
@@ -994,6 +1023,21 @@ impl I2cSlave<'_, Async> {
         let _dma_guard = OnDrop::new(|| {
             i2c.slvctl().modify(|_r, w| w.slvdma().disabled());
         });
+
+        // Re-check bus state after arming DMA. See the equivalent block in
+        // `respond_to_write` for the rationale: the window between entry
+        // guard and DMA arm is just long enough for the controller to
+        // issue Sr+ADDR+R/W or STOP, after which SLVDMA suppression of
+        // `slvpending` would wedge the await.
+        let stat = i2c.stat().read();
+        if stat.slvdesel().is_deselected() {
+            i2c.stat().write(|w| w.slvdesel().deselected());
+            return Ok(Response::ReadEarlyStop(0));
+        }
+        if stat.slvstate().is_slave_address() {
+            self.queue_edge(EdgeKind::RepeatedStart);
+            return Ok(Response::Restarted(0));
+        }
 
         poll_fn(|cx| {
             let i2c = self.info.regs;
