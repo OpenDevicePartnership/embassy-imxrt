@@ -236,9 +236,18 @@ macro_rules! impl_scl {
     ($piom_n:ident, $fn:ident, $fcn:ident) => {
         impl SclPin<crate::peripherals::$fcn> for crate::peripherals::$piom_n {
             fn as_scl(&self) {
-                // UM11147 table 556 pg 550
+                // UM11147 table 556 pg 550.
+                //
+                // Pull-up enabled so internal pull-ups can drive the
+                // line high when neither end is asserting it low. This
+                // is required for board configurations without external
+                // pull-up resistors (e.g. the FC ↔ FC loopback on the
+                // RT685S-EVK, which wire-ands two pins directly). On a
+                // real I2C bus with external pull-ups, the internal
+                // ~40 kΩ-100 kΩ pull-up simply parallels them — a
+                // negligible effect on rise time.
                 self.set_function(crate::iopctl::Function::$fn)
-                    .set_pull(crate::iopctl::Pull::None)
+                    .set_pull(crate::iopctl::Pull::Up)
                     .enable_input_buffer()
                     .set_slew_rate(crate::gpio::SlewRate::Slow)
                     .set_drive_strength(crate::gpio::DriveStrength::Normal)
@@ -253,9 +262,11 @@ macro_rules! impl_sda {
     ($piom_n:ident, $fn:ident, $fcn:ident) => {
         impl SdaPin<crate::peripherals::$fcn> for crate::peripherals::$piom_n {
             fn as_sda(&self) {
-                // UM11147 table 556 pg 550
+                // UM11147 table 556 pg 550.
+                //
+                // See `impl_scl!` for the pull-up rationale.
                 self.set_function(crate::iopctl::Function::$fn)
-                    .set_pull(crate::iopctl::Pull::None)
+                    .set_pull(crate::iopctl::Pull::Up)
                     .enable_input_buffer()
                     .set_slew_rate(crate::gpio::SlewRate::Slow)
                     .set_drive_strength(crate::gpio::DriveStrength::Normal)

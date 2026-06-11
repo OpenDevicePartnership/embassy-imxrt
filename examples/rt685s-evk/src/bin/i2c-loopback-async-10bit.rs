@@ -5,7 +5,7 @@ use defmt::info;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_imxrt::i2c::master::I2cMaster;
-use embassy_imxrt::i2c::slave::{Address, Command, I2cSlave, Response};
+use embassy_imxrt::i2c::slave::{Address, Command, I2cSlave};
 use embassy_imxrt::i2c::{self, Async};
 use embassy_imxrt::{bind_interrupts, peripherals};
 use embassy_imxrt_examples as _;
@@ -45,37 +45,47 @@ async fn slave_service(mut slave: I2cSlave<'static, Async>) {
         let expected_buf: [u8; SLAVE_BUFLEN] = generate_buffer();
 
         match slave.listen().await.unwrap() {
-            Command::Probe => {
-                info!("Probe, nothing to do");
+            Command::Probe { addr } => {
+                info!("Probe @ {:?}, nothing to do", defmt::Debug2Format(&addr));
             }
-            Command::Read => {
-                info!("Read");
+            Command::Read { addr } => {
+                info!("Read @ {:?}", defmt::Debug2Format(&addr));
                 loop {
-                    match slave.respond_to_read(&t_buf).await.unwrap() {
-                        Response::Complete(n) => {
-                            info!("Response complete read with {} bytes", n);
-                            break;
-                        }
-                        Response::Pending(n) => info!("Response to read got {} bytes, more bytes to fill", n),
+                    let resp = slave.respond_to_read(&t_buf).await.unwrap();
+                    if resp.is_terminal() {
+                        info!(
+                            "Response complete read with {} bytes ({:?})",
+                            resp.bytes(),
+                            defmt::Debug2Format(&resp)
+                        );
+                        break;
                     }
+                    info!("Response to read got {} bytes, more bytes to fill", resp.bytes());
                 }
             }
-            Command::Write => {
-                info!("Write");
+            Command::Write { addr } => {
+                info!("Write @ {:?}", defmt::Debug2Format(&addr));
                 loop {
-                    match slave.respond_to_write(&mut r_buf).await.unwrap() {
-                        Response::Complete(n) => {
-                            info!("Response complete write with {} bytes", n);
-                            info!("i2cm write data: {:x}", r_buf[0..n]);
+                    let resp = slave.respond_to_write(&mut r_buf).await.unwrap();
+                    if resp.is_terminal() {
+                        let n = resp.bytes();
+                        info!(
+                            "Response complete write with {} bytes ({:?})",
+                            n,
+                            defmt::Debug2Format(&resp)
+                        );
+                        info!("i2cm write data: {:x}", r_buf[0..n]);
 
-                            // Compare written data with expected data
-                            // Ensures that the second byte of 10 bit address is handled properly
-                            assert!(r_buf[0..n] == expected_buf[0..n]);
-                            break;
-                        }
-                        Response::Pending(n) => info!("Response to write got {} bytes, more bytes pending", n),
+                        // Compare written data with expected data
+                        // Ensures that the second byte of 10 bit address is handled properly
+                        assert!(r_buf[0..n] == expected_buf[0..n]);
+                        break;
                     }
+                    info!("Response to write got {} bytes, more bytes pending", resp.bytes());
                 }
+            }
+            other => {
+                info!("Unhandled command variant: {:?}", defmt::Debug2Format(&other));
             }
         }
     }

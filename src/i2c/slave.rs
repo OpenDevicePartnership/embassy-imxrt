@@ -1,5 +1,51 @@
 //! Implements I2C function support over flexcomm + gpios
+//!
+//! # Inherent API
+//!
+//! The [`I2cSlave`] driver exposes a small inherent API:
+//!
+//! - [`I2cSlave::listen`] — wait for the next [`Command`] from the
+//!   controller. The variant carries the matched [`Address`].
+//! - [`I2cSlave::respond_to_write`] — drain incoming bytes for a Write.
+//! - [`I2cSlave::respond_to_read`] — supply outgoing bytes for a Read.
+//! - [`I2cSlave::recover`] — re-baseline the peripheral after a wedged
+//!   or cancelled transfer.
+//!
+//! Both `respond_to_*` calls return a [`Response`] that describes how the
+//! transaction terminated. The variants distinguish stop, repeated start,
+//! buffer exhaustion, and read-side early-stop, so callers can react
+//! precisely instead of papering over the difference. The convenience
+//! helpers [`Response::bytes`] and [`Response::is_terminal`] handle the
+//! common "I just want the count and whether to loop" case.
+//!
+//! Probes (zero-byte writes — the controller sends `ADDR+W` and
+//! immediately STOPs) surface as [`Command::Probe`] with the matched
+//! address attached; there is no following `respond_to_write` call.
+//!
+//! # Target trait impls
+//!
+//! Besides the inherent API, this driver also implements the
+//! [`embedded_mcu_hal::i2c::target`] traits:
+//!
+//! - [`embedded_mcu_hal::i2c::target::blocking::I2c`] for
+//!   `I2cSlave<'_, Blocking>`
+//! - [`embedded_mcu_hal::i2c::target::asynch::I2c`] for
+//!   `I2cSlave<'_, Async>`
+//!
+//! Both flavours are implemented twice — once for `SevenBitAddress` and
+//! once for `TenBitAddress`. The implementation that matches the address
+//! mode configured at construction time succeeds; the mismatched
+//! implementation returns [`Error::UnsupportedConfiguration`], which maps
+//! to [`ErrorKind::Other`](embedded_mcu_hal::i2c::target::ErrorKind::Other).
+//!
+//! The trait API additionally surfaces a repeated-START as its own
+//! [`Request::RepeatedStart`](embedded_mcu_hal::i2c::target::Request::RepeatedStart)
+//! event on the next `listen` call. The inherent API folds restarts into
+//! the preceding [`Response::Restarted`] instead — the next inherent
+//! `listen` resumes hardware polling and reports the new direction
+//! directly.
 
+use core::cell::Cell;
 use core::future::{Future, poll_fn};
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
@@ -7,10 +53,11 @@ use core::task::Poll;
 
 use embassy_hal_internal::Peri;
 use embassy_hal_internal::drop::OnDrop;
+use embedded_mcu_hal::i2c::{SevenBitAddress, TenBitAddress, target as mcu_target};
 
 use super::{
-    Async, Blocking, Error, Info, Instance, InterruptHandler, Mode, REMEDIATON_SLAVE_NAK, Result, SclPin, SdaPin,
-    SlaveDma, TEN_BIT_PREFIX, TransferError,
+    Async, Blocking, Error, Info, Instance, InterruptHandler, Mode, REMEDIATON_NONE, REMEDIATON_SLAVE_NAK, Result,
+    SclPin, SdaPin, SlaveDma, TEN_BIT_PREFIX, TransferError,
 };
 use crate::flexcomm::FlexcommRef;
 use crate::interrupt::typelevel::Interrupt;
@@ -25,7 +72,7 @@ pub enum AddressError {
 }
 
 /// I2C address type
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Address {
     /// 7-bit address
     SevenBit(u8),
@@ -108,25 +155,139 @@ impl TenBitAddressInfo {
     }
 }
 
-/// Command from master
+/// Command observed by the slave on the I2C bus.
+///
+/// Returned by [`I2cSlave::listen`]. Each variant carries the [`Address`]
+/// that matched on the wire so applications with multiple register files
+/// or address aliases can dispatch on it.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Command {
-    /// I2C probe with no data
-    Probe,
-
-    /// I2C Read
-    Read,
-
-    /// I2C Write
-    Write,
+    /// A probe: the controller sent `ADDR+W` and immediately followed
+    /// with `STOP` (or with the second 10-bit address byte mismatching).
+    /// No `respond_to_*` call is required. The carried [`Address`] is the
+    /// configured address that matched.
+    Probe {
+        /// Address that was matched.
+        addr: Address,
+    },
+    /// Controller is about to read from this target. Service it with
+    /// [`I2cSlave::respond_to_read`].
+    Read {
+        /// Address that was matched.
+        addr: Address,
+    },
+    /// Controller is about to write to this target. Service it with
+    /// [`I2cSlave::respond_to_write`].
+    Write {
+        /// Address that was matched.
+        addr: Address,
+    },
 }
 
-/// Result of response functions
+/// Outcome of a [`I2cSlave::respond_to_read`] or
+/// [`I2cSlave::respond_to_write`] call.
+///
+/// The variants distinguish every observable termination reason so callers
+/// can decide between continuing with a fresh buffer, looping back to
+/// [`I2cSlave::listen`] for the next event, or returning to the
+/// application loop. The convenience helpers [`Response::bytes`] and
+/// [`Response::is_terminal`] cover the "just give me the count and tell
+/// me if we're done" case without forcing every call site to match on all
+/// six variants.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Response {
-    /// I2C transaction complete with this amount of bytes
-    Complete(usize),
+    /// Controller issued `STOP`. The transaction is complete. `n` is the
+    /// number of bytes moved.
+    Stopped(usize),
+    /// Controller issued a repeated `START` (`Sr`). The transaction is
+    /// complete from this `respond_*` call's perspective; the next
+    /// [`I2cSlave::listen`] will report the new direction. `n` is the
+    /// number of bytes moved before the restart.
+    Restarted(usize),
+    /// Write side: the supplied buffer was filled before the controller
+    /// terminated the transfer. Call [`I2cSlave::respond_to_write`] again
+    /// with another buffer to continue draining. `n` equals the buffer
+    /// length.
+    WriteContinued(usize),
+    /// Read side: the supplied buffer was fully consumed but the
+    /// controller is still clocking more bytes. Call
+    /// [`I2cSlave::respond_to_read`] again with another buffer to continue
+    /// supplying data. `n` equals the buffer length.
+    ReadContinued(usize),
+    /// Read side: the supplied buffer was fully consumed at exactly the
+    /// moment the controller NACKed and stopped. `n` equals the buffer
+    /// length.
+    ReadComplete(usize),
+    /// Read side: the controller stopped (or restarted) before the
+    /// supplied buffer was drained. `n` is the number of bytes the
+    /// controller clocked out.
+    ReadEarlyStop(usize),
+}
 
-    /// I2C transaction pending with this amount of bytes completed so far
-    Pending(usize),
+impl Response {
+    /// Number of bytes moved on the wire during the call that produced
+    /// this response.
+    #[must_use]
+    pub const fn bytes(self) -> usize {
+        match self {
+            Self::Stopped(n)
+            | Self::Restarted(n)
+            | Self::WriteContinued(n)
+            | Self::ReadContinued(n)
+            | Self::ReadComplete(n)
+            | Self::ReadEarlyStop(n) => n,
+        }
+    }
+
+    /// Whether the transaction is complete from the slave's perspective.
+    ///
+    /// Returns `true` for [`Stopped`], [`Restarted`], [`ReadComplete`],
+    /// and [`ReadEarlyStop`]; `false` for [`WriteContinued`] and
+    /// [`ReadContinued`], which indicate the caller should supply another
+    /// buffer to continue the in-flight transaction.
+    ///
+    /// [`Stopped`]: Self::Stopped
+    /// [`Restarted`]: Self::Restarted
+    /// [`ReadComplete`]: Self::ReadComplete
+    /// [`ReadEarlyStop`]: Self::ReadEarlyStop
+    /// [`WriteContinued`]: Self::WriteContinued
+    /// [`ReadContinued`]: Self::ReadContinued
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        match self {
+            Self::Stopped(_) | Self::Restarted(_) | Self::ReadComplete(_) | Self::ReadEarlyStop(_) => true,
+            Self::WriteContinued(_) | Self::ReadContinued(_) => false,
+        }
+    }
+}
+
+/// Edge event queued by a previous `respond_to_*` for the next trait-level
+/// `listen` call.
+///
+/// Only used by the target trait impls — the inherent `listen` ignores
+/// this field because it folds the restart edge into the preceding
+/// [`Response::Restarted`] instead.
+#[derive(Copy, Clone, Debug)]
+enum EdgeKind {
+    /// Surface a
+    /// [`Request::RepeatedStart`](mcu_target::Request::RepeatedStart) at
+    /// the next trait `listen`, then resume hardware polling for the next
+    /// addressed event.
+    RepeatedStart,
+}
+
+/// Per-driver pending-edge bookkeeping for the target trait impls.
+///
+/// Tracks the address that matched on the most recent addressed event
+/// (for the trait's `Request<A>` payload) and any restart edge that
+/// should be surfaced before the next hardware poll. The inherent API
+/// never reads this state.
+#[derive(Copy, Clone, Debug, Default)]
+struct PendingEdge {
+    last_addr: Option<Address>,
+    pending: Option<EdgeKind>,
 }
 
 /// use `FCn` as I2C Slave controller
@@ -136,6 +297,18 @@ pub struct I2cSlave<'a, M: Mode> {
     _phantom: PhantomData<M>,
     dma_ch: Option<dma::channel::Channel<'a>>,
     ten_bit_info: Option<TenBitAddressInfo>,
+    /// Address configured at construction time. Carried verbatim on every
+    /// [`Command`] returned by [`I2cSlave::listen`] and used by the
+    /// target trait impls to populate the `A` payload on
+    /// [`Request`](mcu_target::Request) and to enforce the runtime
+    /// address-mode check.
+    configured_address: Address,
+    /// Pending-edge bookkeeping for the target trait impls. Set by
+    /// [`I2cSlave::respond_to_write`] / [`I2cSlave::respond_to_read`]
+    /// when they observe a repeated-START terminator; drained by the
+    /// trait `listen` wrapper. The inherent `listen` does not touch this
+    /// field.
+    pending: Cell<PendingEdge>,
 }
 
 impl<'a, M: Mode> I2cSlave<'a, M> {
@@ -207,7 +380,52 @@ impl<'a, M: Mode> I2cSlave<'a, M> {
             _phantom: PhantomData,
             dma_ch,
             ten_bit_info,
+            configured_address: address,
+            pending: Cell::new(PendingEdge::default()),
         })
+    }
+
+    /// Record the address that just matched on the bus. Set by every
+    /// successful `listen` so subsequent trait-level edge surfacing
+    /// (`RepeatedStart`) can attach the right address.
+    fn note_match(&self, addr: Address) {
+        let mut p = self.pending.get();
+        p.last_addr = Some(addr);
+        self.pending.set(p);
+    }
+
+    /// Queue an edge to be surfaced at the next trait-level `listen`.
+    fn queue_edge(&self, edge: EdgeKind) {
+        let mut p = self.pending.get();
+        p.pending = Some(edge);
+        self.pending.set(p);
+    }
+
+    /// Drain any queued edge, returning the matching
+    /// [`mcu_target::Request`]. Returns `None` if there is no queued edge.
+    fn drain_edge<A>(&self, addr_for: fn(Address) -> A) -> Option<mcu_target::Request<A>>
+    where
+        A: embedded_hal_1::i2c::AddressMode,
+    {
+        let mut p = self.pending.get();
+        let edge = p.pending.take()?;
+        let addr = p.last_addr.unwrap_or(self.configured_address);
+        self.pending.set(p);
+        Some(match edge {
+            EdgeKind::RepeatedStart => mcu_target::Request::RepeatedStart(addr_for(addr)),
+        })
+    }
+
+    /// Address-mode runtime guard. Returns
+    /// `Err(UnsupportedConfiguration)` when the trait impl being driven
+    /// does not match the address type the slave was constructed with.
+    fn require_address_kind(&self, want_ten_bit: bool) -> Result<()> {
+        let is_ten_bit = self.ten_bit_info.is_some();
+        if is_ten_bit == want_ten_bit {
+            Ok(())
+        } else {
+            Err(Error::UnsupportedConfiguration)
+        }
     }
 }
 
@@ -271,9 +489,13 @@ impl<'a> I2cSlave<'a, Async> {
 }
 
 impl I2cSlave<'_, Blocking> {
-    /// Listen for commands from the I2C Master.
+    /// Listen for the next [`Command`] from the I2C controller.
+    ///
+    /// Blocks until the bus produces an addressed event for this target.
+    /// The returned [`Command`] carries the matched [`Address`].
     pub fn listen(&self) -> Result<Command> {
         let i2c = self.info.regs;
+        let addr = self.configured_address;
 
         self.block_until_addressed()?;
 
@@ -288,7 +510,8 @@ impl I2cSlave<'_, Blocking> {
             } else {
                 // If the second byte of the 10 bit address is not received, then nack the address.
                 i2c.slvctl().write(|w| w.slvnack().nack());
-                return Ok(Command::Probe);
+                self.note_match(addr);
+                return Ok(Command::Probe { addr });
             }
 
             // Check slave is still selected, master has not sent a stop
@@ -302,7 +525,8 @@ impl I2cSlave<'_, Blocking> {
                     } else {
                         // If the first byte of the 10 bit address is not received again, then nack the address.
                         i2c.slvctl().write(|w| w.slvnack().nack());
-                        return Ok(Command::Probe);
+                        self.note_match(addr);
+                        return Ok(Command::Probe { addr });
                     }
                     // Check slave is ready for transmit
                     if !i2c.stat().read().slvstate().is_slave_transmit() {
@@ -321,20 +545,27 @@ impl I2cSlave<'_, Blocking> {
         if i2c.stat().read().slvdesel().is_deselected() {
             // Clear the deselected bit
             i2c.stat().write(|w| w.slvdesel().deselected());
-            return Ok(Command::Probe);
+            self.note_match(addr);
+            return Ok(Command::Probe { addr });
         }
 
         let state = i2c.stat().read().slvstate().variant();
+        self.note_match(addr);
         match state {
-            Some(Slvstate::SlaveReceive) => Ok(Command::Write),
-            Some(Slvstate::SlaveTransmit) => Ok(Command::Read),
+            Some(Slvstate::SlaveReceive) => Ok(Command::Write { addr }),
+            Some(Slvstate::SlaveTransmit) => Ok(Command::Read { addr }),
             _ => Err(TransferError::OtherBusError.into()),
         }
     }
 
-    /// Respond to write command from  master
+    /// Drain incoming bytes for a [`Command::Write`].
+    ///
+    /// Fills the supplied buffer in order. Returns when the controller
+    /// terminates the transfer (stop, repeated start) or when the buffer
+    /// is full.
     pub fn respond_to_write(&self, buf: &mut [u8]) -> Result<Response> {
         let i2c = self.info.regs;
+        let buf_len = buf.len();
         let mut xfer_count: usize = 0;
 
         for b in buf {
@@ -365,22 +596,32 @@ impl I2cSlave<'_, Blocking> {
         if stat.slvdesel().is_deselected() {
             // Clear the deselect bit
             i2c.stat().write(|w| w.slvdesel().deselected());
-            return Ok(Response::Complete(xfer_count));
+            return Ok(Response::Stopped(xfer_count));
         } else if stat.slvstate().is_slave_address() {
-            // Handle restart
-            return Ok(Response::Complete(xfer_count));
+            // Handle restart — record the edge for any trait caller; the
+            // inherent `listen` will see the slave-address state directly
+            // on its next call.
+            self.queue_edge(EdgeKind::RepeatedStart);
+            return Ok(Response::Restarted(xfer_count));
         } else if stat.slvstate().is_slave_receive() {
-            // Master still wants to send more data, transaction incomplete
-            return Ok(Response::Pending(xfer_count));
+            // Buffer exhausted; controller is still sending — caller
+            // should supply another buffer to continue draining.
+            debug_assert_eq!(xfer_count, buf_len);
+            return Ok(Response::WriteContinued(xfer_count));
         }
 
         // We should not get here
         Err(TransferError::ReadFail.into())
     }
 
-    /// Respond to read command from  master
+    /// Supply outgoing bytes for a [`Command::Read`].
+    ///
+    /// Sends bytes from the supplied buffer in order. Returns when the
+    /// controller terminates the transfer (NACK+stop, repeated start) or
+    /// when the buffer is exhausted.
     pub fn respond_to_read(&self, buf: &[u8]) -> Result<Response> {
         let i2c = self.info.regs;
+        let buf_len = buf.len();
         let mut xfer_count: usize = 0;
 
         for b in buf {
@@ -413,24 +654,77 @@ impl I2cSlave<'_, Blocking> {
         if stat.slvdesel().is_deselected() {
             // clear the deselect bit
             i2c.stat().write(|w| w.slvdesel().deselected());
-            return Ok(Response::Complete(xfer_count));
+            // Distinguish ReadComplete (buffer exactly exhausted at
+            // NACK+STOP) from ReadEarlyStop (controller stopped with
+            // bytes still in the buffer).
+            if xfer_count == buf_len {
+                return Ok(Response::ReadComplete(xfer_count));
+            } else {
+                return Ok(Response::ReadEarlyStop(xfer_count));
+            }
         } else if stat.slvstate().is_slave_address() {
-            // Handle restart after read
-            return Ok(Response::Complete(xfer_count));
+            // Handle restart after read — queue the edge for any trait
+            // caller and report the restart to the inherent caller.
+            self.queue_edge(EdgeKind::RepeatedStart);
+            return Ok(Response::Restarted(xfer_count));
         } else if stat.slvstate().is_slave_transmit() {
-            // Master is still expecting data, transaction incomplete
-            return Ok(Response::Pending(xfer_count));
+            // Buffer exhausted but master still expects bytes — caller
+            // should supply another buffer to continue.
+            debug_assert_eq!(xfer_count, buf_len);
+            return Ok(Response::ReadContinued(xfer_count));
         }
 
         // We should not get here
         Err(TransferError::WriteFail.into())
     }
+
+    /// Bring the slave back to a known-clean state after a wedged
+    /// transfer or an internally cancelled transaction.
+    ///
+    /// Disables DMA arming, NAKs any pending byte, clears the deselect
+    /// latch, drops any pending remediation flag, and clears the queued
+    /// edge bookkeeping. The configured address(es) and `slven` bit are
+    /// preserved — the next [`I2cSlave::listen`] will accept a fresh
+    /// transaction without re-initialising the driver.
+    pub fn recover(&self) -> Result<()> {
+        let i2c = self.info.regs;
+        critical_section::with(|_| {
+            // Drop any latent DMA arming.
+            i2c.slvctl().modify(|_r, w| w.slvdma().disabled());
+            // Disable interrupts we may have left enabled.
+            i2c.intenclr()
+                .write(|w| w.slvpendingclr().set_bit().slvdeselclr().set_bit());
+
+            // NAK an in-flight pending byte if any; this is harmless when
+            // we are not in the pending state.
+            if i2c.stat().read().slvpending().is_pending() {
+                i2c.slvctl().write(|w| w.slvnack().set_bit());
+            }
+
+            // Clear the deselect latch if set.
+            if i2c.stat().read().slvdesel().is_deselected() {
+                i2c.stat().write(|w| w.slvdesel().deselected());
+            }
+
+            // Drop any pending remediation.
+            self.info.remediation.store(REMEDIATON_NONE, Ordering::Release);
+        });
+
+        // Drop our software bookkeeping.
+        self.pending.set(PendingEdge::default());
+        Ok(())
+    }
 }
 
 impl I2cSlave<'_, Async> {
-    /// Listen for commands from the I2C Master asynchronously
+    /// Listen for the next [`Command`] from the I2C controller, asynchronously.
+    ///
+    /// The returned future resolves when the bus produces an addressed
+    /// event for this target. The [`Command`] carries the matched
+    /// [`Address`].
     pub async fn listen(&mut self) -> Result<Command> {
         let i2c = self.info.regs;
+        let addr = self.configured_address;
 
         // Disable DMA
         i2c.slvctl().write(|w| w.slvdma().disabled());
@@ -460,7 +754,8 @@ impl I2cSlave<'_, Async> {
             } else {
                 // If the second byte of the 10 bit address is not received, then nack the address.
                 i2c.slvctl().write(|w| w.slvnack().nack());
-                return Ok(Command::Probe);
+                self.note_match(addr);
+                return Ok(Command::Probe { addr });
             }
 
             // Check slave is still selected, master has not sent a stop
@@ -474,7 +769,8 @@ impl I2cSlave<'_, Async> {
                     } else {
                         // If the first byte of the 10 bit address is not received again, then nack the address.
                         i2c.slvctl().write(|w| w.slvnack().nack());
-                        return Ok(Command::Probe);
+                        self.note_match(addr);
+                        return Ok(Command::Probe { addr });
                     }
                     // Check slave is ready for transmit
                     if !i2c.stat().read().slvstate().is_slave_transmit() {
@@ -493,29 +789,75 @@ impl I2cSlave<'_, Async> {
         if i2c.stat().read().slvdesel().is_deselected() {
             // Clear the deselected bit
             i2c.stat().write(|w| w.slvdesel().deselected());
-            return Ok(Command::Probe);
+            self.note_match(addr);
+            return Ok(Command::Probe { addr });
         }
 
         let state = i2c.stat().read().slvstate().variant();
+        self.note_match(addr);
         match state {
-            Some(Slvstate::SlaveReceive) => Ok(Command::Write),
-            Some(Slvstate::SlaveTransmit) => Ok(Command::Read),
+            Some(Slvstate::SlaveReceive) => Ok(Command::Write { addr }),
+            Some(Slvstate::SlaveTransmit) => Ok(Command::Read { addr }),
             _ => Err(TransferError::OtherBusError.into()),
         }
     }
 
-    /// Respond to write command from master
+    /// Drain incoming bytes for a [`Command::Write`], asynchronously.
+    ///
+    /// DMA-driven. Fills the supplied buffer in order. Returns when the
+    /// controller terminates the transfer (stop, repeated start) or when
+    /// the buffer is full.
     pub async fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<Response> {
         let i2c = self.info.regs;
         let buf_len = buf.len();
 
-        // Verify that we are ready for write
+        // Re-entry classification.
+        //
+        // Two shapes reach this entry point: the inherent caller has just
+        // returned from `listen()` with `Command::Write` (the
+        // straight-through case), or it is looping back with a fresh
+        // buffer after a prior call returned `Response::WriteContinued`
+        // (the continuation case). In the continuation case the bus state
+        // may have advanced between the previous call returning and this
+        // call being polled — the controller can issue a `STOP` (slvdesel
+        // latches) or a repeated `START` followed by ADDR+R/W (the
+        // peripheral transitions out of `slave_receive` into
+        // `slave_address`, with `slvpending` asserted waiting for SW to
+        // ACK/NACK the new address).
+        //
+        // Both terminators are legitimate end-of-transaction events from
+        // the slave's perspective. Surface them as the same `Response`
+        // variants the post-poll path emits so the caller's outer loop
+        // sees a uniform shape regardless of when the controller
+        // terminated. The blocking flavour already handles this via its
+        // polling loop; the async flavour must check explicitly because
+        // it arms DMA before awaiting and needs the bus to actually be in
+        // `slave_receive` for the DMA to make forward progress.
         let stat = i2c.stat().read();
+        if stat.slvdesel().is_deselected() {
+            // Controller issued STOP — either between calls (continuation
+            // case) or this is a zero-byte write that the caller
+            // dispatched after a `Probe`-shaped match. Clear the latch
+            // before returning so the next `listen()` does not see a
+            // stale deselect.
+            i2c.stat().write(|w| w.slvdesel().deselected());
+            return Ok(Response::Stopped(0));
+        }
+        if stat.slvstate().is_slave_address() {
+            // Controller issued Sr+ADDR between BufferFull continuations.
+            // The new address phase is latched and waiting for SW
+            // ACK/NACK; the next `listen()` will continue_ it and pick
+            // up the new direction. Queue the RepeatedStart edge for any
+            // trait caller and report Restarted so the outer loop loops
+            // back to `listen()` instead of arming a DMA transfer for a
+            // transaction that no longer exists.
+            self.queue_edge(EdgeKind::RepeatedStart);
+            return Ok(Response::Restarted(0));
+        }
         if !stat.slvstate().is_slave_receive() {
-            // 0 byte write
-            if stat.slvdesel().is_deselected() {
-                return Ok(Response::Complete(0));
-            }
+            // The peripheral is in some other transient state we do not
+            // know how to drain from here. Surface as a read failure so
+            // the caller can recover().
             return Err(TransferError::ReadFail.into());
         }
 
@@ -540,6 +882,35 @@ impl I2cSlave<'_, Async> {
         let _dma_guard = OnDrop::new(|| {
             i2c.slvctl().modify(|_r, w| w.slvdma().disabled());
         });
+
+        // Re-check bus state after arming DMA and installing guards.
+        //
+        // There is a tiny window between the entry guard's `stat` read and
+        // the DMA arm during which the controller can complete the data
+        // phase and issue Sr+ADDR+R/W. Once DMA is armed (SLVDMA bit set),
+        // the FlexComm peripheral suppresses `slvpending` for events it
+        // handles — including the auto-handled new address phase. If we
+        // entered with `slvstate == slave_receive` but the bus then moved
+        // to `slave_address` (or `slave_transmit` after DMA-mode address
+        // auto-ack) before we got here, no further wake source will fire:
+        // DMA stays armed waiting for bytes that never come, slvpending
+        // is suppressed by the active DMA. The future then wedges until
+        // its `with_timeout` outer guard cancels it.
+        //
+        // The fix: re-read stat AFTER arming. If the bus has already
+        // advanced, drop the DMA (handled by `_dma_guard` / `_transfer`
+        // drop) and classify the same way the post-poll path would.
+        let stat = i2c.stat().read();
+        if stat.slvdesel().is_deselected() {
+            i2c.stat().write(|w| w.slvdesel().deselected());
+            nak_guard.defuse();
+            return Ok(Response::Stopped(0));
+        }
+        if stat.slvstate().is_slave_address() {
+            self.queue_edge(EdgeKind::RepeatedStart);
+            nak_guard.defuse();
+            return Ok(Response::Restarted(0));
+        }
 
         poll_fn(|cx| {
             let i2c = self.info.regs;
@@ -569,33 +940,69 @@ impl I2cSlave<'_, Async> {
         nak_guard.defuse();
         let xfer_count = self.abort_dma(buf_len)?;
         let stat = i2c.stat().read();
-        // We got a stop from master, either way this transaction is
-        // completed
         if stat.slvdesel().is_deselected() {
             // Clear the deselected bit
             i2c.stat().write(|w| w.slvdesel().deselected());
-
-            return Ok(Response::Complete(xfer_count));
+            return Ok(Response::Stopped(xfer_count));
         } else if stat.slvstate().is_slave_address() {
-            // We are addressed again, so this must be a restart
-            return Ok(Response::Complete(xfer_count));
+            // Restart — queue the edge for any trait caller.
+            self.queue_edge(EdgeKind::RepeatedStart);
+            return Ok(Response::Restarted(xfer_count));
         } else if stat.slvstate().is_slave_receive() {
-            // That was a partial transaction, the master wants to send more
-            // data
-            return Ok(Response::Pending(xfer_count));
+            // Buffer was filled before the controller terminated; caller
+            // should supply another buffer to continue.
+            return Ok(Response::WriteContinued(xfer_count));
         }
 
         Err(TransferError::ReadFail.into())
     }
 
-    /// Respond to read command from master
-    /// User must provide enough data to complete the transaction or else
-    ///    we will get stuck in this function
+    /// Supply outgoing bytes for a [`Command::Read`], asynchronously.
+    ///
+    /// DMA-driven. Sends bytes from the supplied buffer in order. Returns
+    /// when the controller terminates the transfer (NACK+stop, repeated
+    /// start) or when the buffer is exhausted.
     pub async fn respond_to_read(&mut self, buf: &[u8]) -> Result<Response> {
         let i2c = self.info.regs;
+        let buf_len = buf.len();
 
+        // Re-entry classification.
+        //
+        // Two shapes reach this entry point: the inherent caller has just
+        // returned from `listen()` with `Command::Read` (the
+        // straight-through case), or it is looping back with a fresh
+        // buffer after a prior call returned `Response::ReadContinued`
+        // (the continuation case). In the continuation case the bus state
+        // may have advanced between the previous call returning and this
+        // call being polled — the controller can NACK+STOP (slvdesel
+        // latches) or issue a repeated `START` followed by ADDR+R/W (the
+        // peripheral transitions out of `slave_transmit` into
+        // `slave_address`, with `slvpending` asserted waiting for SW to
+        // ACK/NACK the new address).
+        //
+        // Surface both terminators with the same `Response` variants the
+        // post-poll path emits so the caller's outer loop sees a uniform
+        // shape regardless of when the controller terminated. Mirrors the
+        // re-entry classification in `respond_to_write`.
+        let stat = i2c.stat().read();
+        if stat.slvdesel().is_deselected() {
+            // Controller NACKed + STOPped. Clear the latch and report as
+            // `ReadEarlyStop(0)` — no bytes from this call's buffer
+            // reached the wire (the buffer is untouched). The caller can
+            // distinguish "buffer fully consumed at termination" from
+            // "buffer not consumed at termination" via the variant.
+            i2c.stat().write(|w| w.slvdesel().deselected());
+            return Ok(Response::ReadEarlyStop(0));
+        }
+        if stat.slvstate().is_slave_address() {
+            // Controller issued Sr+ADDR between ReadContinued
+            // continuations. Queue the RepeatedStart edge and report
+            // Restarted so the outer loop loops back to `listen()`.
+            self.queue_edge(EdgeKind::RepeatedStart);
+            return Ok(Response::Restarted(0));
+        }
         // Verify that we are ready for transmit
-        if !i2c.stat().read().slvstate().is_slave_transmit() {
+        if !stat.slvstate().is_slave_transmit() {
             return Err(TransferError::WriteFail.into());
         }
 
@@ -617,6 +1024,21 @@ impl I2cSlave<'_, Async> {
             i2c.slvctl().modify(|_r, w| w.slvdma().disabled());
         });
 
+        // Re-check bus state after arming DMA. See the equivalent block in
+        // `respond_to_write` for the rationale: the window between entry
+        // guard and DMA arm is just long enough for the controller to
+        // issue Sr+ADDR+R/W or STOP, after which SLVDMA suppression of
+        // `slvpending` would wedge the await.
+        let stat = i2c.stat().read();
+        if stat.slvdesel().is_deselected() {
+            i2c.stat().write(|w| w.slvdesel().deselected());
+            return Ok(Response::ReadEarlyStop(0));
+        }
+        if stat.slvstate().is_slave_address() {
+            self.queue_edge(EdgeKind::RepeatedStart);
+            return Ok(Response::Restarted(0));
+        }
+
         poll_fn(|cx| {
             let i2c = self.info.regs;
 
@@ -632,31 +1054,103 @@ impl I2cSlave<'_, Async> {
             if stat.slvpending().is_pending() {
                 return Poll::Ready(());
             }
+            // DMA drained but the master still expects more bytes.
+            // Without this guard the future sleeps forever because the
+            // hardware does not raise slvpending once DMA is armed and
+            // running dry — SDA just floats and the master clocks 0xFF
+            // until something else aborts the transaction.
+            if !dma_channel.is_active() && stat.slvstate().is_slave_transmit() {
+                return Poll::Ready(());
+            }
 
             Poll::Pending
         })
         .await;
 
         // Complete DMA transaction and get transfer count
-        let xfer_count = self.abort_dma(buf.len())?;
+        let xfer_count = self.abort_dma(buf_len)?;
         let stat = i2c.stat().read();
 
-        // we got a nack or a stop from master, either way this transaction is
-        // completed
         if stat.slvdesel().is_deselected() {
             // clear the deselect bit
             i2c.stat().write(|w| w.slvdesel().deselected());
-            return Ok(Response::Complete(xfer_count));
-        } else if stat.slvpending().is_pending() || stat.slvstate().is_slave_address() {
-            // Handle restart after read as well as the cases where
-            // slave deselected is not set in response to a master nack
-            // then the next transaction starts the slave state goes into
-            // pending + addressed.
-            return Ok(Response::Complete(xfer_count));
+            // Distinguish ReadComplete (buffer exactly exhausted) from
+            // ReadEarlyStop (controller stopped with bytes still in the
+            // buffer).
+            if xfer_count == buf_len {
+                return Ok(Response::ReadComplete(xfer_count));
+            } else {
+                return Ok(Response::ReadEarlyStop(xfer_count));
+            }
+        } else if stat.slvstate().is_slave_address() {
+            // The peripheral has latched a new address phase — that is a
+            // genuine repeated START (Sr + ADDR+R/W queued on the wire).
+            // Queue the edge for any trait caller and report the restart
+            // to the inherent caller. Mirrors the blocking flavour.
+            self.queue_edge(EdgeKind::RepeatedStart);
+            return Ok(Response::Restarted(xfer_count));
+        } else if stat.slvpending().is_pending() {
+            // `slvpending` is asserted but neither `slvdesel` nor a new
+            // address phase fired — this is the "SW intervention needed"
+            // signal the FC peripheral raises when the controller NACKs
+            // our last transmitted byte to end the transaction (the
+            // deselect latch lands one peripheral cycle later) and when
+            // the FC state machine briefly mis-classifies mid-DMA under
+            // stress (the `slv_state -> addressed` race documented on
+            // PR #565 follow-up discussions).
+            //
+            // Treat it as a normal read termination: NAK to settle the
+            // peripheral and report based on `xfer_count`. Do NOT
+            // synthesise a `RepeatedStart` edge here — that would
+            // fabricate a phantom trait-side event with no matching
+            // upstream Sr on the wire.
+            i2c.slvctl().write(|w| w.slvnack().nack());
+            if xfer_count == buf_len {
+                return Ok(Response::ReadComplete(xfer_count));
+            } else {
+                return Ok(Response::ReadEarlyStop(xfer_count));
+            }
+        } else if stat.slvstate().is_slave_transmit() {
+            // DMA drained while the master is still clocking — caller
+            // should supply another buffer to continue.
+            debug_assert_eq!(xfer_count, buf_len);
+            return Ok(Response::ReadContinued(xfer_count));
         }
 
-        // We should not get here
         Err(TransferError::WriteFail.into())
+    }
+
+    /// Bring the slave back to a known-clean state after a wedged or
+    /// cancelled transfer.
+    ///
+    /// Aborts any in-flight DMA, NAKs any pending byte, disables DMA
+    /// arming, clears the deselect latch, drops any pending remediation,
+    /// and clears any queued edge bookkeeping. The configured address(es)
+    /// and `slven` bit are preserved.
+    pub async fn recover(&mut self) -> Result<()> {
+        let i2c = self.info.regs;
+        if let Some(dma) = self.dma_ch.as_ref()
+            && dma.is_active()
+        {
+            dma.abort();
+        }
+
+        critical_section::with(|_| {
+            i2c.slvctl().modify(|_r, w| w.slvdma().disabled());
+            i2c.intenclr()
+                .write(|w| w.slvpendingclr().set_bit().slvdeselclr().set_bit());
+
+            if i2c.stat().read().slvpending().is_pending() {
+                i2c.slvctl().write(|w| w.slvnack().set_bit());
+            }
+            if i2c.stat().read().slvdesel().is_deselected() {
+                i2c.stat().write(|w| w.slvdesel().deselected());
+            }
+            self.info.remediation.store(REMEDIATON_NONE, Ordering::Release);
+        });
+
+        self.pending.set(PendingEdge::default());
+        Ok(())
     }
 
     fn poll_sw_action(&self) -> impl Future<Output = ()> + use<'_> {
@@ -737,5 +1231,312 @@ impl Drop for NakGuard {
                 self.info.remediation.fetch_or(REMEDIATON_SLAVE_NAK, Ordering::AcqRel);
             }
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// embedded-mcu-hal::i2c::target trait impls
+// ---------------------------------------------------------------------------
+//
+// The traits layer on top of the inherent API: each trait method calls
+// the inherent method and maps the result into the corresponding trait
+// shape. The address-mode generic is handled by writing two separate
+// trait impl blocks per flavour (one for `SevenBitAddress`, one for
+// `TenBitAddress`); at runtime the impl checks the address type
+// configured at construction time and returns `ErrorKind::Other` from
+// `listen` if the wrong impl was invoked.
+//
+// The single piece of state that exists *only* for the trait is the
+// `pending: Cell<PendingEdge>` field on `I2cSlave`: it carries a
+// `RepeatedStart` edge from a previous `respond_to_*` to the next trait
+// `listen` call, so the trait surfaces `Request::RepeatedStart` as its
+// own event rather than folding it into the preceding response. The
+// inherent API never reads this field.
+
+impl mcu_target::Error for Error {
+    fn kind(&self) -> mcu_target::ErrorKind {
+        match *self {
+            Self::UnsupportedConfiguration => mcu_target::ErrorKind::Other,
+            Self::Transfer(e) => match e {
+                TransferError::Timeout => mcu_target::ErrorKind::Other,
+                TransferError::ReadFail | TransferError::WriteFail => {
+                    mcu_target::ErrorKind::NoAcknowledge(mcu_target::NoAcknowledgeSource::Data)
+                }
+                TransferError::AddressNack => {
+                    mcu_target::ErrorKind::NoAcknowledge(mcu_target::NoAcknowledgeSource::Address)
+                }
+                TransferError::ArbitrationLoss => mcu_target::ErrorKind::ArbitrationLoss,
+                TransferError::StartStopError | TransferError::OtherBusError => mcu_target::ErrorKind::Bus,
+            },
+        }
+    }
+}
+
+impl<M: Mode> mcu_target::ErrorType for I2cSlave<'_, M> {
+    type Error = Error;
+}
+
+/// Map the address from a [`Command`] to the trait-side `u8` payload
+/// (used by the `SevenBitAddress` impls). Returns `0` for the
+/// impossible-here `TenBit` case — the address-mode guard in the impl
+/// rejects mismatched callers before we ever reach this mapping.
+fn cmd_addr_u8(addr: Address) -> u8 {
+    match addr {
+        Address::SevenBit(a) => a,
+        Address::TenBit(_) => 0,
+    }
+}
+
+/// Map the address from a [`Command`] to the trait-side `u16` payload
+/// (used by the `TenBitAddress` impls). 7-bit addresses widen losslessly.
+fn cmd_addr_u16(addr: Address) -> u16 {
+    match addr {
+        Address::SevenBit(a) => a as u16,
+        Address::TenBit(a) => a,
+    }
+}
+
+/// Map a [`Command`] to a [`mcu_target::Request<u8>`].
+fn cmd_to_request_u8(cmd: Command) -> mcu_target::Request<u8> {
+    match cmd {
+        Command::Probe { addr } => mcu_target::Request::Stop(cmd_addr_u8(addr)),
+        Command::Read { addr } => mcu_target::Request::Read(cmd_addr_u8(addr)),
+        Command::Write { addr } => mcu_target::Request::Write(cmd_addr_u8(addr)),
+    }
+}
+
+/// Map a [`Command`] to a [`mcu_target::Request<u16>`].
+fn cmd_to_request_u16(cmd: Command) -> mcu_target::Request<u16> {
+    match cmd {
+        Command::Probe { addr } => mcu_target::Request::Stop(cmd_addr_u16(addr)),
+        Command::Read { addr } => mcu_target::Request::Read(cmd_addr_u16(addr)),
+        Command::Write { addr } => mcu_target::Request::Write(cmd_addr_u16(addr)),
+    }
+}
+
+/// Map a [`Response`] returned by `respond_to_write` to the trait-side
+/// [`mcu_target::WriteStatus`].
+fn resp_to_write_status(r: Response) -> mcu_target::WriteStatus {
+    match r {
+        Response::Stopped(n) => mcu_target::WriteStatus::Stopped(n),
+        Response::Restarted(n) => mcu_target::WriteStatus::Restarted(n),
+        Response::WriteContinued(n) => mcu_target::WriteStatus::BufferFull(n),
+        // Read-only terminators should never come out of respond_to_write;
+        // fall back to Stopped to keep the trait surface total.
+        Response::ReadContinued(n) | Response::ReadComplete(n) | Response::ReadEarlyStop(n) => {
+            mcu_target::WriteStatus::Stopped(n)
+        }
+    }
+}
+
+/// Map a [`Response`] returned by `respond_to_read` to the trait-side
+/// [`mcu_target::ReadStatus`].
+fn resp_to_read_status(r: Response) -> mcu_target::ReadStatus {
+    match r {
+        Response::ReadComplete(n) => mcu_target::ReadStatus::Complete(n),
+        Response::ReadContinued(n) => mcu_target::ReadStatus::NeedMore(n),
+        Response::ReadEarlyStop(n) | Response::Restarted(n) | Response::Stopped(n) => {
+            mcu_target::ReadStatus::EarlyStop(n)
+        }
+        // Write-only terminator — should never come out of respond_to_read.
+        Response::WriteContinued(n) => mcu_target::ReadStatus::EarlyStop(n),
+    }
+}
+
+// ----- Blocking I2c<SevenBitAddress> impl ------------------------------------
+
+impl mcu_target::blocking::I2c<SevenBitAddress> for I2cSlave<'_, Blocking> {
+    fn recover(&mut self) -> Result<()> {
+        I2cSlave::<Blocking>::recover(self)
+    }
+
+    fn listen(&mut self) -> Result<mcu_target::Request<SevenBitAddress>> {
+        self.require_address_kind(false)?;
+
+        // Drain any queued edge first.
+        if let Some(req) = self.drain_edge::<SevenBitAddress>(cmd_addr_u8) {
+            return Ok(req);
+        }
+
+        Ok(cmd_to_request_u8(I2cSlave::<Blocking>::listen(self)?))
+    }
+
+    fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
+        self.require_address_kind(false)?;
+        Ok(resp_to_read_status(I2cSlave::<Blocking>::respond_to_read(self, buf)?))
+    }
+
+    fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
+        self.require_address_kind(false)?;
+        Ok(resp_to_write_status(I2cSlave::<Blocking>::respond_to_write(self, buf)?))
+    }
+}
+
+// ----- Blocking I2c<TenBitAddress> impl --------------------------------------
+
+impl mcu_target::blocking::I2c<TenBitAddress> for I2cSlave<'_, Blocking> {
+    fn recover(&mut self) -> Result<()> {
+        I2cSlave::<Blocking>::recover(self)
+    }
+
+    fn listen(&mut self) -> Result<mcu_target::Request<TenBitAddress>> {
+        self.require_address_kind(true)?;
+
+        if let Some(req) = self.drain_edge::<TenBitAddress>(cmd_addr_u16) {
+            return Ok(req);
+        }
+
+        Ok(cmd_to_request_u16(I2cSlave::<Blocking>::listen(self)?))
+    }
+
+    fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
+        self.require_address_kind(true)?;
+        Ok(resp_to_read_status(I2cSlave::<Blocking>::respond_to_read(self, buf)?))
+    }
+
+    fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
+        self.require_address_kind(true)?;
+        Ok(resp_to_write_status(I2cSlave::<Blocking>::respond_to_write(self, buf)?))
+    }
+}
+
+// ----- Async I2c<SevenBitAddress> impl ---------------------------------------
+
+impl mcu_target::asynch::I2c<SevenBitAddress> for I2cSlave<'_, Async> {
+    async fn recover(&mut self) -> Result<()> {
+        I2cSlave::<Async>::recover(self).await
+    }
+
+    async fn listen(&mut self) -> Result<mcu_target::Request<SevenBitAddress>> {
+        self.require_address_kind(false)?;
+
+        if let Some(req) = self.drain_edge::<SevenBitAddress>(cmd_addr_u8) {
+            return Ok(req);
+        }
+
+        Ok(cmd_to_request_u8(I2cSlave::<Async>::listen(self).await?))
+    }
+
+    async fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
+        self.require_address_kind(false)?;
+        Ok(resp_to_read_status(
+            I2cSlave::<Async>::respond_to_read(self, buf).await?,
+        ))
+    }
+
+    async fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
+        self.require_address_kind(false)?;
+        Ok(resp_to_write_status(
+            I2cSlave::<Async>::respond_to_write(self, buf).await?,
+        ))
+    }
+}
+
+// ----- Async I2c<TenBitAddress> impl -----------------------------------------
+
+impl mcu_target::asynch::I2c<TenBitAddress> for I2cSlave<'_, Async> {
+    async fn recover(&mut self) -> Result<()> {
+        I2cSlave::<Async>::recover(self).await
+    }
+
+    async fn listen(&mut self) -> Result<mcu_target::Request<TenBitAddress>> {
+        self.require_address_kind(true)?;
+
+        if let Some(req) = self.drain_edge::<TenBitAddress>(cmd_addr_u16) {
+            return Ok(req);
+        }
+
+        Ok(cmd_to_request_u16(I2cSlave::<Async>::listen(self).await?))
+    }
+
+    async fn respond_to_read(&mut self, buf: &[u8]) -> Result<mcu_target::ReadStatus> {
+        self.require_address_kind(true)?;
+        Ok(resp_to_read_status(
+            I2cSlave::<Async>::respond_to_read(self, buf).await?,
+        ))
+    }
+
+    async fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<mcu_target::WriteStatus> {
+        self.require_address_kind(true)?;
+        Ok(resp_to_write_status(
+            I2cSlave::<Async>::respond_to_write(self, buf).await?,
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use embedded_mcu_hal::i2c::target::{ErrorKind, NoAcknowledgeSource};
+
+    use super::*;
+
+    #[test]
+    fn error_kind_mapping_covers_every_transfer_variant() {
+        // Every TransferError variant must map to a deterministic ErrorKind.
+        let cases = [
+            (TransferError::Timeout, ErrorKind::Other),
+            (
+                TransferError::ReadFail,
+                ErrorKind::NoAcknowledge(NoAcknowledgeSource::Data),
+            ),
+            (
+                TransferError::WriteFail,
+                ErrorKind::NoAcknowledge(NoAcknowledgeSource::Data),
+            ),
+            (
+                TransferError::AddressNack,
+                ErrorKind::NoAcknowledge(NoAcknowledgeSource::Address),
+            ),
+            (TransferError::ArbitrationLoss, ErrorKind::ArbitrationLoss),
+            (TransferError::StartStopError, ErrorKind::Bus),
+            (TransferError::OtherBusError, ErrorKind::Bus),
+        ];
+
+        for (transfer, expected) in cases {
+            let err = Error::Transfer(transfer);
+            assert_eq!(<Error as embedded_mcu_hal::i2c::target::Error>::kind(&err), expected);
+        }
+    }
+
+    #[test]
+    fn error_kind_mapping_unsupported_configuration_is_other() {
+        let err = Error::UnsupportedConfiguration;
+        assert_eq!(
+            <Error as embedded_mcu_hal::i2c::target::Error>::kind(&err),
+            ErrorKind::Other,
+        );
+    }
+
+    #[test]
+    fn response_bytes_returns_payload_for_every_variant() {
+        assert_eq!(Response::Stopped(3).bytes(), 3);
+        assert_eq!(Response::Restarted(5).bytes(), 5);
+        assert_eq!(Response::WriteContinued(8).bytes(), 8);
+        assert_eq!(Response::ReadContinued(8).bytes(), 8);
+        assert_eq!(Response::ReadComplete(7).bytes(), 7);
+        assert_eq!(Response::ReadEarlyStop(2).bytes(), 2);
+    }
+
+    #[test]
+    fn response_is_terminal_distinguishes_continuation_from_completion() {
+        assert!(Response::Stopped(0).is_terminal());
+        assert!(Response::Restarted(0).is_terminal());
+        assert!(Response::ReadComplete(0).is_terminal());
+        assert!(Response::ReadEarlyStop(0).is_terminal());
+        assert!(!Response::WriteContinued(0).is_terminal());
+        assert!(!Response::ReadContinued(0).is_terminal());
+    }
+
+    #[test]
+    fn cmd_addr_widens_seven_bit_losslessly() {
+        let addr = Address::SevenBit(0x42);
+        assert_eq!(cmd_addr_u8(addr), 0x42);
+        assert_eq!(cmd_addr_u16(addr), 0x42);
+    }
+
+    #[test]
+    fn cmd_addr_u16_passes_through_ten_bit() {
+        let addr = Address::TenBit(0x1AB);
+        assert_eq!(cmd_addr_u16(addr), 0x1AB);
     }
 }
