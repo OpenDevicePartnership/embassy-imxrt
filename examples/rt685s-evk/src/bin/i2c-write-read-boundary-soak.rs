@@ -385,12 +385,7 @@ async fn slave_service(mut slave: I2cSlave<'static, Async>) {
 
         // listen() with timeout — wedge on the listen side panics.
         breadcrumb(0x10, slv_iter);
-        let req = match with_timeout(
-            PER_TRANSFER_TIMEOUT,
-            TargetI2c::<SevenBitAddress>::listen(&mut slave),
-        )
-        .await
-        {
+        let req = match with_timeout(PER_TRANSFER_TIMEOUT, TargetI2c::<SevenBitAddress>::listen(&mut slave)).await {
             Err(_) => wedge_panic!("WEDGE: slave.listen() timed out at slv_iter={}", slv_iter),
             Ok(Err(e)) => wedge_panic!(
                 "slave.listen() err at slv_iter={}: {:?}",
@@ -641,10 +636,7 @@ async fn master_service(mut master: I2cMaster<'static, Async>) {
         }
 
         if iter % REPORT_EVERY == 0 {
-            info!(
-                "[master] iter={} k={} m={} write_len={}",
-                iter, k, read_len, write_len
-            );
+            info!("[master] iter={} k={} m={} write_len={}", iter, k, read_len, write_len);
         }
         iter = iter.wrapping_add(1);
     }
@@ -668,15 +660,7 @@ async fn main(spawner: Spawner) {
         PER_TRANSFER_TIMEOUT.as_millis()
     );
 
-    let slave = I2cSlave::new_async(
-        p.FLEXCOMM2,
-        p.PIO0_18,
-        p.PIO0_17,
-        Irqs,
-        SLAVE_ADDR.unwrap(),
-        p.DMA0_CH4,
-    )
-    .unwrap();
+    let slave = I2cSlave::new_async(p.FLEXCOMM2, p.PIO0_18, p.PIO0_17, Irqs, SLAVE_ADDR.unwrap(), p.DMA0_CH4).unwrap();
 
     let cfg = i2c::master::Config {
         speed: i2c::master::Speed::Fast,
