@@ -863,16 +863,31 @@ impl I2cSlave<'_, Async> {
 
         let dma_channel = self.dma_ch.as_ref().ok_or(Error::UnsupportedConfiguration)?;
 
-        // Enable DMA
+        let options = dma::transfer::TransferOptions::default();
+        // Configure + enable + trigger the DMA channel BEFORE enabling
+        // SLVDMA on the peripheral.
+        //
+        // Per UM11147 §24.7.7.1 / §24.7.7.2 (matching the master path's
+        // sequencing in `i2c::master`): the DMA channel must be programmed
+        // first and only then may the peripheral's SLVDMA bit be set.
+        // Enabling SLVDMA first lets the SLV peripheral assert a DMA
+        // request line to a not-yet-configured channel — the request can
+        // be missed entirely. In practice this manifests as the slave
+        // arming DMA on a pending data-byte event, never servicing it,
+        // and stretching SCL indefinitely while the master times out.
+        //
+        // Keep a reference to Transfer so it does not get dropped (drop
+        // would abort the DMA transfer).
+        let _transfer = dma_channel.read_from_peripheral(i2c.slvdat().as_ptr() as *mut u8, buf, options);
+
+        // Enable DMA on the SLV peripheral. The channel is now armed and
+        // listening, so any pending or fresh slvpending event will be
+        // serviced by DMA.
         i2c.slvctl().write(|w| w.slvdma().enabled());
 
         // Enable interrupt
         i2c.intenset()
             .write(|w| w.slvpendingen().enabled().slvdeselen().enabled());
-
-        let options = dma::transfer::TransferOptions::default();
-        // Keep a reference to Transfer so it does not get dropped and aborted the DMA transfer
-        let _transfer = dma_channel.read_from_peripheral(i2c.slvdat().as_ptr() as *mut u8, buf, options);
 
         // Hold guard to make sure that we send a NAK on cancellation
         // Since drop order is reverse, this comes BEFORE the dma guard,
@@ -1006,18 +1021,21 @@ impl I2cSlave<'_, Async> {
             return Err(TransferError::WriteFail.into());
         }
 
-        // Enable DMA
+        let dma_channel = self.dma_ch.as_ref().ok_or(Error::UnsupportedConfiguration)?;
+
+        let options = dma::transfer::TransferOptions::default();
+        // Configure + enable + trigger the DMA channel BEFORE enabling
+        // SLVDMA on the peripheral. See the equivalent block in
+        // `respond_to_write` for the UM11147 §24.7.7.1 / §24.7.7.2
+        // rationale.
+        let _transfer = dma_channel.write_to_peripheral(buf, i2c.slvdat().as_ptr() as *mut u8, options);
+
+        // Enable DMA on the SLV peripheral.
         i2c.slvctl().write(|w| w.slvdma().enabled());
 
         // Enable interrupts
         i2c.intenset()
             .write(|w| w.slvpendingen().enabled().slvdeselen().enabled());
-
-        let options = dma::transfer::TransferOptions::default();
-        let dma_channel = self.dma_ch.as_ref().ok_or(Error::UnsupportedConfiguration)?;
-
-        // Keep a reference to Transfer so it does not get dropped and aborted the DMA transfer
-        let _transfer = dma_channel.write_to_peripheral(buf, i2c.slvdat().as_ptr() as *mut u8, options);
 
         // Hold guard to disable on cancellation or completion
         let _dma_guard = OnDrop::new(|| {
