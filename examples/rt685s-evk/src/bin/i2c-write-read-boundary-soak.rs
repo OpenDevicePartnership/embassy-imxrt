@@ -207,7 +207,7 @@ use embassy_imxrt::i2c::slave::{Address, I2cSlave};
 use embassy_imxrt::i2c::{self, Async};
 use embassy_imxrt::{bind_interrupts, peripherals};
 use embassy_imxrt_examples as _;
-use embassy_time::{Duration, with_timeout};
+use embassy_time::{Duration, Instant, Timer, with_timeout};
 use embedded_hal_async::i2c::I2c;
 use embedded_mcu_hal::i2c::SevenBitAddress;
 use embedded_mcu_hal::i2c::target::asynch::I2c as TargetI2c;
@@ -263,6 +263,184 @@ static BREADCRUMB_RING: [AtomicU32; BREADCRUMB_RING_LEN] = {
     [Z; BREADCRUMB_RING_LEN]
 };
 
+// ---------------------------------------------------------------------------
+// Hardware-state watchdog
+// ---------------------------------------------------------------------------
+//
+// The slave `respond_to_write` future installs `_dma_guard` /
+// `nak_guard` drop guards that, on `with_timeout` cancellation, clear
+// SLVDMA and NAK the pending byte. By the time we observe `Err(_)` from
+// `with_timeout` in `slave_service`, those guards have already run and
+// the I2C peripheral state no longer reflects the wedge.
+//
+// Instead, this task runs independently and samples FC2 + DMA channel 4
+// state every WEDGE_WATCH_PERIOD into `HW_SNAPSHOT`. On a wedge_panic,
+// `dump_breadcrumbs()` prints the most recent snapshot, which captures
+// the in-wedge state ~50 ms before the timeout fired.
+//
+// Raw absolute addresses are used to avoid PAC borrow conflicts with the
+// I2cSlave that owns the peripheral. The addresses are stable per the
+// MIMXRT633S memory map:
+//   FC2 (I2C2)       base = 0x4010_8000
+//   STAT             @ 0x4010_8804
+//   INTENSET         @ 0x4010_8808
+//   SLVCTL           @ 0x4010_8840
+//   DMA0             base = 0x4010_4000
+//   ACTIVE0          @ 0x4010_4030  (bit N = ch N active)
+//   BUSY0            @ 0x4010_4038
+//   Channel 4 base   @ 0x4010_4440  (CFG/CTLSTAT/XFERCFG at +0/+4/+8)
+//   XFERCFG ch4      @ 0x4010_4448
+
+const HW_FC2_STAT: usize     = 0x4010_8804;
+const HW_FC2_INTENSET: usize = 0x4010_8808;
+const HW_FC2_SLVCTL: usize   = 0x4010_8840;
+const HW_DMA_ACTIVE0: usize  = 0x4010_4030;
+const HW_DMA_BUSY0: usize    = 0x4010_4038;
+const HW_DMA_CH4_XFERCFG: usize = 0x4010_4448;
+
+const WEDGE_WATCH_PERIOD: Duration = Duration::from_millis(25);
+
+/// Snapshot layout — keep in sync with `dump_hw_snapshot()`.
+///
+/// Generation counter brackets the writes for tear-detection. Writers
+/// bump `gen_start`, write words, then `gen_end := gen_start`. Reader
+/// retries until `gen_start == gen_end`.
+#[repr(C)]
+struct HwSnapshot {
+    gen_start: AtomicU32,
+    gen_end: AtomicU32,
+    /// Monotonic micros at the time of the sample. 0 = never sampled.
+    ts_us: AtomicU32,
+    fc2_stat: AtomicU32,
+    fc2_intenset: AtomicU32,
+    fc2_slvctl: AtomicU32,
+    dma_active0: AtomicU32,
+    dma_busy0: AtomicU32,
+    dma_ch4_xfercfg: AtomicU32,
+}
+
+static HW_SNAPSHOT: HwSnapshot = HwSnapshot {
+    gen_start: AtomicU32::new(0),
+    gen_end: AtomicU32::new(0),
+    ts_us: AtomicU32::new(0),
+    fc2_stat: AtomicU32::new(0),
+    fc2_intenset: AtomicU32::new(0),
+    fc2_slvctl: AtomicU32::new(0),
+    dma_active0: AtomicU32::new(0),
+    dma_busy0: AtomicU32::new(0),
+    dma_ch4_xfercfg: AtomicU32::new(0),
+};
+
+/// Sample the hardware once and publish to `HW_SNAPSHOT`. Volatile
+/// reads on raw addresses — safe because we never write through these
+/// pointers, the addresses are guaranteed valid for the lifetime of the
+/// program, and 32-bit aligned reads of MMIO registers are atomic on
+/// Cortex-M33.
+#[inline(always)]
+fn sample_hw() {
+    // SAFETY: see function doc.
+    let stat = unsafe { core::ptr::read_volatile(HW_FC2_STAT as *const u32) };
+    let intenset = unsafe { core::ptr::read_volatile(HW_FC2_INTENSET as *const u32) };
+    let slvctl = unsafe { core::ptr::read_volatile(HW_FC2_SLVCTL as *const u32) };
+    let active0 = unsafe { core::ptr::read_volatile(HW_DMA_ACTIVE0 as *const u32) };
+    let busy0 = unsafe { core::ptr::read_volatile(HW_DMA_BUSY0 as *const u32) };
+    let xfercfg = unsafe { core::ptr::read_volatile(HW_DMA_CH4_XFERCFG as *const u32) };
+
+    let ts = (Instant::now().as_micros() & 0xFFFF_FFFF) as u32;
+    let g = HW_SNAPSHOT.gen_start.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+    HW_SNAPSHOT.ts_us.store(ts, Ordering::Relaxed);
+    HW_SNAPSHOT.fc2_stat.store(stat, Ordering::Relaxed);
+    HW_SNAPSHOT.fc2_intenset.store(intenset, Ordering::Relaxed);
+    HW_SNAPSHOT.fc2_slvctl.store(slvctl, Ordering::Relaxed);
+    HW_SNAPSHOT.dma_active0.store(active0, Ordering::Relaxed);
+    HW_SNAPSHOT.dma_busy0.store(busy0, Ordering::Relaxed);
+    HW_SNAPSHOT.dma_ch4_xfercfg.store(xfercfg, Ordering::Relaxed);
+    HW_SNAPSHOT.gen_end.store(g, Ordering::Release);
+}
+
+/// Dump the latest hardware snapshot. Tear-protected via the
+/// gen_start/gen_end counters; falls back to a "torn" message if the
+/// reader caught a snapshot mid-update (unlikely outside of races).
+fn dump_hw_snapshot() {
+    for _ in 0..4 {
+        let g_end = HW_SNAPSHOT.gen_end.load(Ordering::Acquire);
+        let ts = HW_SNAPSHOT.ts_us.load(Ordering::Relaxed);
+        let stat = HW_SNAPSHOT.fc2_stat.load(Ordering::Relaxed);
+        let intenset = HW_SNAPSHOT.fc2_intenset.load(Ordering::Relaxed);
+        let slvctl = HW_SNAPSHOT.fc2_slvctl.load(Ordering::Relaxed);
+        let active0 = HW_SNAPSHOT.dma_active0.load(Ordering::Relaxed);
+        let busy0 = HW_SNAPSHOT.dma_busy0.load(Ordering::Relaxed);
+        let xfercfg = HW_SNAPSHOT.dma_ch4_xfercfg.load(Ordering::Relaxed);
+        let g_start = HW_SNAPSHOT.gen_start.load(Ordering::Acquire);
+        if g_start == g_end {
+            if ts == 0 {
+                error!("---- HW snapshot: never sampled ----");
+            } else {
+                // Decode the bits we care about for STAT.
+                let stat_slvpending = (stat >> 8) & 1;
+                let stat_slvstate = (stat >> 9) & 3;
+                let stat_slvnotstr = (stat >> 11) & 1;
+                let stat_slvsel = (stat >> 14) & 1;
+                let stat_slvdesel = (stat >> 15) & 1;
+                // SLVCTL bit 3 = SLVDMA.
+                let slvctl_slvdma = (slvctl >> 3) & 1;
+                // INTENSET bit 8 = slvpendingen, bit 15 = slvdeselen.
+                let int_slvpend = (intenset >> 8) & 1;
+                let int_slvdes = (intenset >> 15) & 1;
+                // DMA ch4 active/busy.
+                let ch4_active = (active0 >> 4) & 1;
+                let ch4_busy = (busy0 >> 4) & 1;
+                // XFERCFG.XFERCOUNT = bits 16..26.
+                let xfer_count = (xfercfg >> 16) & 0x3FF;
+                let xfer_en = xfercfg & 1;
+
+                error!(
+                    "---- HW snapshot (ts_us={}, gen={}) ----",
+                    ts, g_end
+                );
+                error!(
+                    "  FC2.STAT=0x{:08X}  slvpending={} slvstate={} slvnotstr={} slvsel={} slvdesel={}",
+                    stat, stat_slvpending, stat_slvstate, stat_slvnotstr, stat_slvsel, stat_slvdesel
+                );
+                error!(
+                    "  FC2.SLVCTL=0x{:08X}  slvdma={}",
+                    slvctl, slvctl_slvdma
+                );
+                error!(
+                    "  FC2.INTENSET=0x{:08X}  slvpendingen={} slvdeselen={}",
+                    intenset, int_slvpend, int_slvdes
+                );
+                error!(
+                    "  DMA.ACTIVE0=0x{:08X}  ch4_active={}",
+                    active0, ch4_active
+                );
+                error!(
+                    "  DMA.BUSY0=0x{:08X}  ch4_busy={}",
+                    busy0, ch4_busy
+                );
+                error!(
+                    "  DMA.CH4.XFERCFG=0x{:08X}  xfercount={} xfer_en={}",
+                    xfercfg, xfer_count, xfer_en
+                );
+                error!("---- end HW snapshot ----");
+            }
+            return;
+        }
+        // Torn read; retry.
+    }
+    error!("---- HW snapshot: torn after 4 attempts ----");
+}
+
+/// Watchdog task: sample HW every `WEDGE_WATCH_PERIOD` so the snapshot
+/// is at most one period behind reality at any wedge_panic site.
+#[embassy_executor::task]
+async fn wedge_watch() {
+    loop {
+        sample_hw();
+        Timer::after(WEDGE_WATCH_PERIOD).await;
+    }
+}
+
 #[inline(always)]
 fn breadcrumb(site: u8, iter: u32) {
     let packed = ((site as u32) << 24) | (iter & 0x00FF_FFFF);
@@ -294,6 +472,7 @@ fn dump_breadcrumbs() {
 /// transitions before the chip halts.
 macro_rules! wedge_panic {
     ($($arg:tt)*) => {{
+        $crate::dump_hw_snapshot();
         $crate::dump_breadcrumbs();
         defmt::panic!($($arg)*);
     }};
@@ -383,16 +562,19 @@ async fn slave_service(mut slave: I2cSlave<'static, Async>) {
             *e = (j as u8).wrapping_add(key);
         }
 
-        // listen() with timeout — wedge on the listen side panics.
+        // listen() WITHOUT timeout for the mole bring-up: Mole is the
+        // external controller and may sit idle for long stretches
+        // between probes. The intra-transaction respond_to_* awaits
+        // below still carry PER_TRANSFER_TIMEOUT so a mid-transaction
+        // wedge is still caught.
         breadcrumb(0x10, slv_iter);
-        let req = match with_timeout(PER_TRANSFER_TIMEOUT, TargetI2c::<SevenBitAddress>::listen(&mut slave)).await {
-            Err(_) => wedge_panic!("WEDGE: slave.listen() timed out at slv_iter={}", slv_iter),
-            Ok(Err(e)) => wedge_panic!(
+        let req = match TargetI2c::<SevenBitAddress>::listen(&mut slave).await {
+            Err(e) => wedge_panic!(
                 "slave.listen() err at slv_iter={}: {:?}",
                 slv_iter,
                 defmt::Debug2Format(&e)
             ),
-            Ok(Ok(r)) => r,
+            Ok(r) => r,
         };
         breadcrumb(0x11, slv_iter);
 
@@ -559,9 +741,17 @@ async fn slave_service(mut slave: I2cSlave<'static, Async>) {
 }
 
 // ---------------------------------------------------------------------------
-// Master service
+// Master service (DISABLED for mole bring-up)
+//
+// The master leg is replaced by the external Mole running
+// `imxrt-boundary-repro.moleasm`. Leaving the task body in source as
+// reference only; main no longer spawns it and FC4 is no longer
+// initialised. The file will emit dead-code warnings for the master-
+// only imports (I2cMaster, DutyCycle, embedded_hal_async::i2c::I2c)
+// and the unused MASTER_MAX_* constants; that is expected.
 // ---------------------------------------------------------------------------
 
+/*
 #[embassy_executor::task]
 async fn master_service(mut master: I2cMaster<'static, Async>) {
     let mut w_buf = [0u8; MASTER_MAX_WRITE];
@@ -641,6 +831,7 @@ async fn master_service(mut master: I2cMaster<'static, Async>) {
         iter = iter.wrapping_add(1);
     }
 }
+*/
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -662,13 +853,20 @@ async fn main(spawner: Spawner) {
 
     let slave = I2cSlave::new_async(p.FLEXCOMM2, p.PIO0_18, p.PIO0_17, Irqs, SLAVE_ADDR.unwrap(), p.DMA0_CH4).unwrap();
 
-    let cfg = i2c::master::Config {
-        speed: i2c::master::Speed::Fast,
-        duty_cycle: DutyCycle::new(50).unwrap(),
-        ..Default::default()
-    };
-    let master = I2cMaster::new_async(p.FLEXCOMM4, p.PIO0_29, p.PIO0_30, Irqs, cfg, p.DMA0_CH9).unwrap();
+    // FC4 master is replaced by an external Mole running
+    // `imxrt-boundary-repro.moleasm`. The cfg / I2cMaster::new_async /
+    // spawn lines stay in source as commented-out reference; their pins
+    // (PIO0_29 / PIO0_30) and DMA channel (DMA0_CH9) are now free for
+    // the loopback wires that go to the Mole instead of FC4.
+    //
+    // let cfg = i2c::master::Config {
+    //     speed: i2c::master::Speed::Fast,
+    //     duty_cycle: DutyCycle::new(50).unwrap(),
+    //     ..Default::default()
+    // };
+    // let master = I2cMaster::new_async(p.FLEXCOMM4, p.PIO0_29, p.PIO0_30, Irqs, cfg, p.DMA0_CH9).unwrap();
 
     spawner.spawn(slave_service(slave).unwrap());
-    spawner.spawn(master_service(master).unwrap());
+    spawner.spawn(wedge_watch().unwrap());
+    // spawner.spawn(master_service(master).unwrap());
 }
