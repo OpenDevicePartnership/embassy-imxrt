@@ -191,12 +191,7 @@ async fn slave_service(mut slave: I2cSlave<'static, Async>) {
         // hammering the slave at thousands of transactions/sec, so a
         // listen() that does not return within the timeout window
         // indicates a real wedge worth investigating.
-        let req = match with_timeout(
-            PER_LISTEN_TIMEOUT,
-            TargetI2c::<SevenBitAddress>::listen(&mut slave),
-        )
-        .await
-        {
+        let req = match with_timeout(PER_LISTEN_TIMEOUT, TargetI2c::<SevenBitAddress>::listen(&mut slave)).await {
             Err(_) => defmt::panic!("WEDGE: slave.listen() at slv_iter={}", slv_iter),
             Ok(Err(e)) => defmt::panic!(
                 "slave.listen() err at slv_iter={}: {:?}",
