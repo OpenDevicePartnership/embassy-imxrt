@@ -308,7 +308,7 @@ async fn slave_service(mut slave: I2cSlave<'static, Async>) {
 
         slv_iter = slv_iter.wrapping_add(1);
 
-        if slv_iter % REPORT_EVERY == 0 {
+        if slv_iter.is_multiple_of(REPORT_EVERY) {
             info!(
                 "[slave] iter={} cont={} restZ={} restN={} stopZ={} stopN={} readC={} readNM={} readES={} rstart={} probe={}",
                 slv_iter,
@@ -385,16 +385,16 @@ async fn master_service(mut master: I2cMaster<'static, Async>) {
                 // `j` (mod 256) regardless of which slave iteration
                 // produced the data.
                 let base = r_buf[0];
-                for j in 1..read_len {
+                for (j, &got) in r_buf.iter().enumerate().take(read_len).skip(1) {
                     let expect = base.wrapping_add(j as u8);
-                    if r_buf[j] != expect {
+                    if got != expect {
                         defmt::panic!(
                             "READ MISMATCH at iter={}, k={}, m={}, j={}: got 0x{:02X}, expected 0x{:02X} (base=0x{:02X})",
                             iter,
                             k,
                             read_len,
                             j,
-                            r_buf[j],
+                            got,
                             expect,
                             base
                         );
@@ -403,7 +403,7 @@ async fn master_service(mut master: I2cMaster<'static, Async>) {
             }
         }
 
-        if iter % REPORT_EVERY == 0 {
+        if iter.is_multiple_of(REPORT_EVERY) {
             info!("[master] iter={} k={} m={} write_len={}", iter, k, read_len, write_len);
         }
         iter = iter.wrapping_add(1);
