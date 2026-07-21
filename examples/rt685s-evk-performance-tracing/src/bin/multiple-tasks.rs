@@ -4,6 +4,7 @@
 extern crate embassy_imxrt_perf_examples;
 
 use core::sync::atomic::{AtomicBool, Ordering};
+
 use embassy_executor::Spawner;
 use embassy_imxrt::gpio;
 use embassy_time::Timer;
